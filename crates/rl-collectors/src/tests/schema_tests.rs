@@ -25,7 +25,10 @@ fn rust_compatible_schema() -> Value {
     let mut schema = json(SCHEMA);
     let pattern = &mut schema["properties"]["payload"]["properties"]["saveName"]["pattern"];
     let original = pattern.as_str().expect("saveName pattern").to_owned();
-    assert!(original.contains(r"\p{Cs}"), "saveName pattern changed: {original}");
+    assert!(
+        original.contains(r"\p{Cs}"),
+        "saveName pattern changed: {original}"
+    );
     *pattern = Value::String(original.replace(r"\p{Cs}", ""));
     schema
 }
