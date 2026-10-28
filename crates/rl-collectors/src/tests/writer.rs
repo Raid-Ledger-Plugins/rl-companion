@@ -35,7 +35,10 @@ pub(crate) fn write_lspk(files: &[FileSpec<'_>]) -> Vec<u8> {
 }
 
 /// Like [`write_lspk`]; `tamper` edits the uncompressed file table first.
-pub(crate) fn write_lspk_with(files: &[FileSpec<'_>], tamper: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+pub(crate) fn write_lspk_with(
+    files: &[FileSpec<'_>],
+    tamper: impl FnOnce(&mut Vec<u8>),
+) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_LEN];
     let mut table = Vec::with_capacity(files.len() * ENTRY_LEN);
     for file in files {

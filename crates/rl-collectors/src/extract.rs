@@ -24,7 +24,9 @@ pub fn extract_save_info(package: &Package<'_>) -> Result<serde_json::Value, Ext
         .find(SAVE_INFO_NAME)
         .ok_or(ExtractError::MissingSaveInfo)?;
     let bytes = package.read_entry_limited(entry, SAVE_INFO_MAX_BYTES)?;
-    let json = bytes.strip_prefix(UTF8_BOM.as_slice()).unwrap_or(bytes.as_slice());
+    let json = bytes
+        .strip_prefix(UTF8_BOM.as_slice())
+        .unwrap_or(bytes.as_slice());
     Ok(serde_json::from_slice(json)?)
 }
 

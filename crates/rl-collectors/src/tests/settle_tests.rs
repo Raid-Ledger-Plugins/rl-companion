@@ -1,8 +1,17 @@
 use crate::{FileSample, SettleWatcher, is_settled};
 
-const A: FileSample = FileSample { size: 1000, mtime_ms: 10 };
-const B: FileSample = FileSample { size: 2000, mtime_ms: 20 };
-const EMPTY: FileSample = FileSample { size: 0, mtime_ms: 30 };
+const A: FileSample = FileSample {
+    size: 1000,
+    mtime_ms: 10,
+};
+const B: FileSample = FileSample {
+    size: 2000,
+    mtime_ms: 20,
+};
+const EMPTY: FileSample = FileSample {
+    size: 0,
+    mtime_ms: 30,
+};
 
 rl_test! {
     fn is_settled_needs_identical_non_empty_tail_samples() {

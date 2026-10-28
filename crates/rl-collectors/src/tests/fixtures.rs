@@ -28,14 +28,18 @@ pub(crate) static CASES: [GoldenCase; 4] = [
         saveinfo: include_str!(
             "../../../../contracts/bg3-save/v1/fixtures/saveinfo/act2-party-4p-summon.saveinfo.json"
         ),
-        golden: include_str!("../../../../contracts/bg3-save/v1/fixtures/act2-party-4p-summon.json"),
+        golden: include_str!(
+            "../../../../contracts/bg3-save/v1/fixtures/act2-party-4p-summon.json"
+        ),
     },
     GoldenCase {
         name: "act1-solo-no-thumbnail",
         saveinfo: include_str!(
             "../../../../contracts/bg3-save/v1/fixtures/saveinfo/act1-solo-no-thumbnail.saveinfo.json"
         ),
-        golden: include_str!("../../../../contracts/bg3-save/v1/fixtures/act1-solo-no-thumbnail.json"),
+        golden: include_str!(
+            "../../../../contracts/bg3-save/v1/fixtures/act1-solo-no-thumbnail.json"
+        ),
     },
     GoldenCase {
         name: "ruleset-null",
@@ -96,12 +100,31 @@ pub(crate) fn synthetic_save(saveinfo: &str, webp: Option<&[u8]>) -> Vec<u8> {
     let meta_lsf: &[u8] = b"LSOF synthetic meta placeholder LSOF synthetic meta placeholder";
     let level = vec![0x5A_u8; 300];
     let mut files = vec![
-        FileSpec { name: "SaveInfo.json", data: &info, method: Method::ZstdRaw },
-        FileSpec { name: "meta.lsf", data: meta_lsf, method: Method::Lz4 },
-        FileSpec { name: "LevelCache/WLD_Main_A.lsf", data: &level, method: Method::Stored },
+        FileSpec {
+            name: "SaveInfo.json",
+            data: &info,
+            method: Method::ZstdRaw,
+        },
+        FileSpec {
+            name: "meta.lsf",
+            data: meta_lsf,
+            method: Method::Lz4,
+        },
+        FileSpec {
+            name: "LevelCache/WLD_Main_A.lsf",
+            data: &level,
+            method: Method::Stored,
+        },
     ];
     if let Some(webp) = webp {
-        files.insert(1, FileSpec { name: "QuickSave_1.WebP", data: webp, method: Method::ZstdRaw });
+        files.insert(
+            1,
+            FileSpec {
+                name: "QuickSave_1.WebP",
+                data: webp,
+                method: Method::ZstdRaw,
+            },
+        );
     }
     write_lspk(&files)
 }

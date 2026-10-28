@@ -211,8 +211,7 @@ fn decode(entry: &Entry, raw: &[u8], expected: usize) -> Result<Vec<u8>, LspkErr
 /// Decode one zstd frame, reading at most `expected + 1` bytes so a lying
 /// frame cannot balloon memory; the caller compares the length.
 fn zstd_decode(raw: &[u8], expected: usize) -> Result<Vec<u8>, String> {
-    let decoder =
-        ruzstd::decoding::StreamingDecoder::new(raw).map_err(|e| format!("{e:?}"))?;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(raw).map_err(|e| format!("{e:?}"))?;
     let mut out = Vec::with_capacity(expected);
     decoder
         .take(expected as u64 + 1)
@@ -256,7 +255,12 @@ fn parse_entry(raw: &[u8]) -> Entry {
 }
 
 /// Bounds-checked `bytes[start..start + len]`.
-fn slice<'a>(bytes: &'a [u8], start: u64, len: u64, what: &'static str) -> Result<&'a [u8], LspkError> {
+fn slice<'a>(
+    bytes: &'a [u8],
+    start: u64,
+    len: u64,
+    what: &'static str,
+) -> Result<&'a [u8], LspkError> {
     let total = bytes.len() as u64;
     match start.checked_add(len) {
         // start <= end <= total, and total fits in usize.
