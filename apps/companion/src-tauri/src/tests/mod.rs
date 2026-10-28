@@ -12,7 +12,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 pub const DEVICE_CODE: &str = "dc_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-pub const TOKEN: &str = "rlcd_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_xyz";
+pub const TOKEN: &str = "rlcd_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AB-_xyz";
 pub const POLL: &str = "/api/companion/v1/devices/link/poll";
 pub const START: &str = "/api/companion/v1/devices/link";
 pub const SELF_CHECK: &str = "/api/companion/v1/device";

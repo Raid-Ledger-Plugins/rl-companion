@@ -27,7 +27,10 @@ pub struct PollPlan {
 /// Terminal result of a link attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOutcome {
-    Linked { token: DeviceToken, device: LinkedDevice },
+    Linked {
+        token: DeviceToken,
+        device: LinkedDevice,
+    },
     Denied,
     Expired,
     InvalidGrant,

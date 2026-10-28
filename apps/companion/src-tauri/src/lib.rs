@@ -24,7 +24,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
-            let shared = state::Shared::new(config_dir.join(state::CONFIG_FILE), Box::new(token::KeyringStore));
+            let shared = state::Shared::new(
+                config_dir.join(state::CONFIG_FILE),
+                Box::new(token::KeyringStore),
+            );
             app.manage(shared);
             tray::build(app.handle())?;
             Ok(())

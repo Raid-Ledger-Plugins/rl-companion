@@ -74,26 +74,46 @@ pub fn get_status(state: State<'_, Shared>) -> Result<StatusDto, String> {
 pub async fn check_link(app: AppHandle, state: State<'_, Shared>) -> Result<CheckDto, String> {
     let Some(token) = state.token().map_err(s)? else {
         tray::set_status(&app, "Not linked");
-        return Ok(CheckDto { state: "unlinked", device_name: None, message: None });
+        return Ok(CheckDto {
+            state: "unlinked",
+            device_name: None,
+            message: None,
+        });
     };
     let client = LinkClient::new(&state.config().server_url).map_err(s)?;
     let dto = match client.self_check(&token).await {
         Ok(SelfCheck::Valid { name, .. }) => {
             tray::set_status(&app, &format!("Linked as {name}"));
-            CheckDto { state: "linked", device_name: Some(name), message: None }
+            CheckDto {
+                state: "linked",
+                device_name: Some(name),
+                message: None,
+            }
         }
         Ok(SelfCheck::Unauthorized) => {
             state.clear_token().map_err(s)?;
             tray::set_status(&app, "Re-link this device");
-            CheckDto { state: "revoked", device_name: None, message: None }
+            CheckDto {
+                state: "revoked",
+                device_name: None,
+                message: None,
+            }
         }
-        Err(e) => CheckDto { state: "unreachable", device_name: None, message: Some(e.to_string()) },
+        Err(e) => CheckDto {
+            state: "unreachable",
+            device_name: None,
+            message: Some(e.to_string()),
+        },
     };
     Ok(dto)
 }
 
 #[tauri::command]
-pub fn set_server_url(app: AppHandle, state: State<'_, Shared>, url: String) -> Result<String, String> {
+pub fn set_server_url(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    url: String,
+) -> Result<String, String> {
     let url = normalise_server_url(&url)?;
     state.set_link_task(None);
     let cfg = state.update_config(|c| c.server_url = url).map_err(s)?;
@@ -105,7 +125,9 @@ pub fn set_server_url(app: AppHandle, state: State<'_, Shared>, url: String) -> 
 #[tauri::command]
 pub fn set_device_name(state: State<'_, Shared>, name: String) -> Result<String, String> {
     let name = sanitise_device_name(&name).ok_or("Enter a device name")?;
-    state.update_config(|c| c.device_name = Some(name.clone())).map_err(s)?;
+    state
+        .update_config(|c| c.device_name = Some(name.clone()))
+        .map_err(s)?;
     Ok(name)
 }
 
@@ -144,19 +166,36 @@ pub async fn start_link(app: AppHandle, state: State<'_, Shared>) -> Result<Link
 }
 
 fn finish_link(app: &AppHandle, origin: &str, outcome: LinkOutcome) {
-    let event = |state, message: Option<String>| LinkEventDto { state, message, device_name: None };
+    let event = |state, message: Option<String>| LinkEventDto {
+        state,
+        message,
+        device_name: None,
+    };
     let payload = match outcome {
-        LinkOutcome::Linked { token, device } => match app.state::<Shared>().save_token(origin, &token) {
-            Ok(()) => LinkEventDto { state: "linked", message: None, device_name: Some(device.name) },
-            Err(e) => event("failed", Some(e.to_string())),
-        },
+        LinkOutcome::Linked { token, device } => {
+            match app.state::<Shared>().save_token(origin, &token) {
+                Ok(()) => LinkEventDto {
+                    state: "linked",
+                    message: None,
+                    device_name: Some(device.name),
+                },
+                Err(e) => event("failed", Some(e.to_string())),
+            }
+        }
         LinkOutcome::Denied => event("denied", None),
         LinkOutcome::Expired => event("expired", None),
         LinkOutcome::InvalidGrant => event("invalid", None),
         LinkOutcome::DeviceLimit => event("device_limit", None),
         LinkOutcome::Failed(e) => event("failed", Some(e.to_string())),
     };
-    tray::set_status(app, if payload.state == "linked" { "Linked" } else { "Not linked" });
+    tray::set_status(
+        app,
+        if payload.state == "linked" {
+            "Linked"
+        } else {
+            "Not linked"
+        },
+    );
     let _ = app.emit(LINK_EVENT, payload);
 }
 
@@ -168,13 +207,19 @@ pub fn cancel_link(app: AppHandle, state: State<'_, Shared>) {
 
 /// Open the approval page — only a URL on the configured server's origin.
 #[tauri::command]
-pub fn open_verification(app: AppHandle, state: State<'_, Shared>, url: String) -> Result<(), String> {
+pub fn open_verification(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    url: String,
+) -> Result<(), String> {
     let origin = state.config().server_url;
     let parsed = url::Url::parse(&url).map_err(s)?;
     if parsed.origin().ascii_serialization() != origin {
         return Err("Refusing to open a link to another site".into());
     }
-    app.opener().open_url(parsed.as_str(), None::<&str>).map_err(s)
+    app.opener()
+        .open_url(parsed.as_str(), None::<&str>)
+        .map_err(s)
 }
 
 /// Forget the local token (the device stays listed on the web until removed there).

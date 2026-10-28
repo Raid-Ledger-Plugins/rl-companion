@@ -52,7 +52,11 @@ fn on_menu(app: &AppHandle, id: &str) {
         ID_PAUSE => {
             let paused = app.state::<Shared>().toggle_paused();
             if let Some(items) = app.try_state::<TrayItems>() {
-                let _ = items.pause.set_text(if paused { "Resume uploads" } else { "Pause uploads" });
+                let _ = items.pause.set_text(if paused {
+                    "Resume uploads"
+                } else {
+                    "Pause uploads"
+                });
             }
         }
         ID_OPEN => show_window(app),

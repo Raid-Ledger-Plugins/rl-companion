@@ -66,20 +66,30 @@ pub struct LinkedDevice {
 pub enum PollStep {
     Pending,
     /// `interval` is the server's new interval, if it sent one.
-    SlowDown { interval: Option<u64> },
-    Success { token: DeviceToken, device: LinkedDevice },
+    SlowDown {
+        interval: Option<u64>,
+    },
+    Success {
+        token: DeviceToken,
+        device: LinkedDevice,
+    },
     Denied,
     Expired,
     InvalidGrant,
     /// 409 `device_limit`: the approver already has 10 live devices.
     DeviceLimit,
-    RateLimited { retry_after: Option<u64> },
+    RateLimited {
+        retry_after: Option<u64>,
+    },
 }
 
 /// `GET /companion/v1/device` result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelfCheck {
-    Valid { device_id: i64, name: String },
+    Valid {
+        device_id: i64,
+        name: String,
+    },
     /// 401 — revoked, unknown, or owner blocked. Re-link.
     Unauthorized,
 }
@@ -97,7 +107,9 @@ pub enum LinkError {
 }
 
 fn fmt_code(code: &Option<String>) -> String {
-    code.as_deref().map(|c| format!(" ({c})")).unwrap_or_default()
+    code.as_deref()
+        .map(|c| format!(" ({c})"))
+        .unwrap_or_default()
 }
 
 impl LinkError {
@@ -138,7 +150,11 @@ struct DeviceSelfBody {
 }
 
 /// Classify a poll response. Pure, so the mapping is unit-testable.
-pub fn classify_poll(status: u16, body: &str, retry_after: Option<u64>) -> Result<PollStep, LinkError> {
+pub fn classify_poll(
+    status: u16,
+    body: &str,
+    retry_after: Option<u64>,
+) -> Result<PollStep, LinkError> {
     match status {
         200 => {
             let ok: PollSuccessBody = serde_json::from_str(body)
@@ -148,18 +164,26 @@ pub fn classify_poll(status: u16, body: &str, retry_after: Option<u64>) -> Resul
             }
             let token = DeviceToken::parse(&ok.token)
                 .ok_or_else(|| LinkError::Protocol("malformed device token".into()))?;
-            Ok(PollStep::Success { token, device: ok.device })
+            Ok(PollStep::Success {
+                token,
+                device: ok.device,
+            })
         }
         400 => {
-            let err: PollErrorBody = serde_json::from_str(body)
-                .map_err(|_| LinkError::Http { status, code: None })?;
+            let err: PollErrorBody =
+                serde_json::from_str(body).map_err(|_| LinkError::Http { status, code: None })?;
             match err.error.as_str() {
                 "authorization_pending" => Ok(PollStep::Pending),
-                "slow_down" => Ok(PollStep::SlowDown { interval: err.interval }),
+                "slow_down" => Ok(PollStep::SlowDown {
+                    interval: err.interval,
+                }),
                 "access_denied" => Ok(PollStep::Denied),
                 "expired_token" => Ok(PollStep::Expired),
                 "invalid_grant" => Ok(PollStep::InvalidGrant),
-                other => Err(LinkError::Http { status, code: Some(other.to_owned()) }),
+                other => Err(LinkError::Http {
+                    status,
+                    code: Some(other.to_owned()),
+                }),
             }
         }
         429 => Ok(PollStep::RateLimited { retry_after }),
@@ -174,7 +198,9 @@ pub fn classify_poll(status: u16, body: &str, retry_after: Option<u64>) -> Resul
 }
 
 fn error_code(body: &str) -> Option<String> {
-    serde_json::from_str::<CodedErrorBody>(body).ok().and_then(|b| b.code)
+    serde_json::from_str::<CodedErrorBody>(body)
+        .ok()
+        .and_then(|b| b.code)
 }
 
 /// Client bound to one Raid Ledger origin.
@@ -193,7 +219,9 @@ impl LinkClient {
             let path = format!("{}/", base.path());
             base.set_path(&path);
         }
-        let api_base = base.join(API_PREFIX).map_err(|e| LinkError::BadUrl(e.to_string()))?;
+        let api_base = base
+            .join(API_PREFIX)
+            .map_err(|e| LinkError::BadUrl(e.to_string()))?;
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .user_agent(concat!("rl-companion/", env!("CARGO_PKG_VERSION")))
@@ -203,7 +231,9 @@ impl LinkClient {
     }
 
     fn url(&self, path: &str) -> Result<url::Url, LinkError> {
-        self.api_base.join(path).map_err(|e| LinkError::BadUrl(e.to_string()))
+        self.api_base
+            .join(path)
+            .map_err(|e| LinkError::BadUrl(e.to_string()))
     }
 
     /// `POST /companion/v1/devices/link`.
@@ -218,9 +248,13 @@ impl LinkClient {
         let status = res.status().as_u16();
         let body = res.text().await.map_err(net)?;
         if status != 200 {
-            return Err(LinkError::Http { status, code: error_code(&body) });
+            return Err(LinkError::Http {
+                status,
+                code: error_code(&body),
+            });
         }
-        serde_json::from_str(&body).map_err(|_| LinkError::Protocol("malformed start response".into()))
+        serde_json::from_str(&body)
+            .map_err(|_| LinkError::Protocol("malformed start response".into()))
     }
 
     /// `POST /companion/v1/devices/link/poll`, classified.
@@ -253,10 +287,16 @@ impl LinkClient {
             200 => {
                 let me: DeviceSelfBody = serde_json::from_str(&body)
                     .map_err(|_| LinkError::Protocol("malformed device self-check".into()))?;
-                Ok(SelfCheck::Valid { device_id: me.device_id, name: me.name })
+                Ok(SelfCheck::Valid {
+                    device_id: me.device_id,
+                    name: me.name,
+                })
             }
             401 => Ok(SelfCheck::Unauthorized),
-            _ => Err(LinkError::Http { status, code: error_code(&body) }),
+            _ => Err(LinkError::Http {
+                status,
+                code: error_code(&body),
+            }),
         }
     }
 }

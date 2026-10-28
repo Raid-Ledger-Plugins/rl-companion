@@ -68,14 +68,17 @@ pub struct KeyringStore;
 
 impl KeyringStore {
     fn entry(origin: &str) -> Result<keyring::Entry, TokenError> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, origin).map_err(|e| TokenError::Keychain(e.to_string()))
+        keyring::Entry::new(KEYCHAIN_SERVICE, origin)
+            .map_err(|e| TokenError::Keychain(e.to_string()))
     }
 }
 
 impl TokenStore for KeyringStore {
     fn load(&self, origin: &str) -> Result<Option<DeviceToken>, TokenError> {
         match Self::entry(origin)?.get_password() {
-            Ok(raw) => DeviceToken::parse(&raw).map(Some).ok_or(TokenError::Malformed),
+            Ok(raw) => DeviceToken::parse(&raw)
+                .map(Some)
+                .ok_or(TokenError::Malformed),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(TokenError::Keychain(e.to_string())),
         }
@@ -108,13 +111,16 @@ impl MemoryStore {
 impl TokenStore for MemoryStore {
     fn load(&self, origin: &str) -> Result<Option<DeviceToken>, TokenError> {
         match self.map().get(origin) {
-            Some(raw) => DeviceToken::parse(raw).map(Some).ok_or(TokenError::Malformed),
+            Some(raw) => DeviceToken::parse(raw)
+                .map(Some)
+                .ok_or(TokenError::Malformed),
             None => Ok(None),
         }
     }
 
     fn save(&self, origin: &str, token: &DeviceToken) -> Result<(), TokenError> {
-        self.map().insert(origin.to_owned(), token.expose().to_owned());
+        self.map()
+            .insert(origin.to_owned(), token.expose().to_owned());
         Ok(())
     }
 
