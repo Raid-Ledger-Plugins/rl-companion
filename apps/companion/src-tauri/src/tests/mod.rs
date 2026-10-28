@@ -1,8 +1,11 @@
 //! Unit tests. HTTP behaviour runs against a `wiremock` server.
 
+mod collector_tests;
 mod config_tests;
 mod link_tests;
 mod poll_tests;
+mod upload_tests;
+mod watch_tests;
 
 use crate::link::LinkClient;
 use serde_json::{json, Value};
@@ -78,4 +81,12 @@ impl Clock {
     pub fn waits(&self) -> Vec<u64> {
         self.0.lock().expect("clock lock").clone()
     }
+}
+
+/// A fresh, empty temp folder unique to this test process + name.
+pub fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rlc-test-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
 }

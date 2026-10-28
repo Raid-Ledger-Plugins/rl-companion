@@ -27,11 +27,14 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["time", "sync"] }
+tokio = { version = "1", features = ["time", "sync", "macros"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 url = "2"
 gethostname = "0.5"
 thiserror = "2"
+rl-collectors = { path = "../../../crates/rl-collectors" }
+notify = "8"
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }

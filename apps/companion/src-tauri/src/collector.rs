@@ -1,0 +1,107 @@
+//! Pieces every game collector shares (ROK-1961 lane C-3): the [`Collector`]
+//! trait, one pending upload, the envelope, and the persisted dedupe state.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// File in the app data dir holding [`SentState`].
+pub const SENT_STATE_FILE: &str = "sent-state.json";
+
+/// The envelope's `appVersion` (`MAJOR.MINOR.PATCH`).
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Companion envelope version (envelope/v1).
+pub const ENVELOPE_VERSION: u32 = 1;
+
+/// One message ready to send, plus what to record once the server settled it.
+#[derive(Debug, Clone)]
+pub struct PendingUpload {
+    /// Contract name — the last segment of the ingest URL.
+    pub contract: &'static str,
+    /// Dedupe scope (one SavedVariables file) and the item inside it (a GUID).
+    pub scope: String,
+    pub item: String,
+    pub sha256: String,
+    /// Short label for the window. Local only, never sent.
+    pub label: String,
+    /// The full message (envelope + payload).
+    pub body: Value,
+}
+
+/// What one scan found.
+#[derive(Debug, Default)]
+pub struct Scan {
+    /// Messages whose content differs from the last settled upload.
+    pub pending: Vec<PendingUpload>,
+    /// Local-only notes (skipped entries, unreadable files) for the log.
+    pub notes: Vec<String>,
+    /// How many source files were read.
+    pub files: usize,
+}
+
+/// A game collector: where to watch, which changes matter, and how to turn
+/// the files into messages.
+pub trait Collector: Send + Sync {
+    /// Stable id, e.g. `"wow-ledgerlink"`.
+    fn id(&self) -> &'static str;
+    /// Folders to watch recursively. May be empty (nothing installed yet).
+    fn watch_roots(&self) -> Vec<PathBuf>;
+    /// Whether a changed path should trigger a settle-then-scan.
+    fn is_relevant(&self, path: &Path) -> bool;
+    /// Read the files and return every message that is new versus `sent`.
+    fn scan(&self, sent: &SentState) -> Scan;
+}
+
+/// `scope → item → sha256` of the last upload the server settled (accepted,
+/// or rejected terminally). Survives restarts, so an unchanged export is never
+/// re-sent and the user's import budget is kept.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentState(pub BTreeMap<String, BTreeMap<String, String>>);
+
+impl SentState {
+    /// Missing or unreadable file → empty state (first run).
+    pub fn load(path: &Path) -> Self {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write via a temp file + rename, so a crash never leaves half a file.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
+    }
+
+    /// The `item → sha256` map for one scope (empty if never seen).
+    pub fn scope(&self, scope: &str) -> BTreeMap<String, String> {
+        self.0.get(scope).cloned().unwrap_or_default()
+    }
+
+    pub fn record(&mut self, scope: &str, item: &str, sha256: &str) {
+        self.0
+            .entry(scope.to_owned())
+            .or_default()
+            .insert(item.to_owned(), sha256.to_owned());
+    }
+}
+
+/// Wrap a payload in the companion envelope (envelope/v1 §2).
+pub fn envelope(contract: &str, contract_version: u32, captured_at: &str, payload: Value) -> Value {
+    json!({
+        "envelopeVersion": ENVELOPE_VERSION,
+        "contract": contract,
+        "contractVersion": contract_version,
+        "capturedAt": captured_at,
+        "appVersion": APP_VERSION,
+        "collectorVersion": rl_collectors::COLLECTOR_VERSION,
+        "payload": payload,
+    })
+}

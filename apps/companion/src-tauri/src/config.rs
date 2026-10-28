@@ -19,6 +19,9 @@ pub struct AppConfig {
     /// WoW install folder (the one holding `_classic_era_`/`_retail_`); the
     /// window's folder picker (C-3) changes it.
     pub wow_dir: String,
+    /// LedgerLink uploads (ROK-1964). Opt-in: off until the user turns it on
+    /// in the window, which is the first-upload confirmation.
+    pub ledgerlink_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -27,6 +30,7 @@ impl Default for AppConfig {
             server_url: DEFAULT_SERVER_URL.to_owned(),
             device_name: None,
             wow_dir: default_wow_dir().to_owned(),
+            ledgerlink_enabled: false,
         }
     }
 }
