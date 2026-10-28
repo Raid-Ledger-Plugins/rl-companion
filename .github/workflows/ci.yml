@@ -53,7 +53,7 @@ jobs:
           cache-dependency-path: apps/companion/package-lock.json
       - name: Build companion front-end
         working-directory: apps/companion
-        run: npm ci && npm run build
+        run: npm ci && npm run build && npm test
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test
         if: ${{ !cancelled() }}

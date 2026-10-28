@@ -36,3 +36,8 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 .code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 28px; letter-spacing: 3px; }
 .muted { color: var(--muted); font-size: 13px; }
 .error { color: var(--danger); font-size: 13px; }
+.toggle { display: flex; gap: 8px; align-items: center; color: var(--text); }
+.results, .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.log { max-height: 160px; overflow-y: auto; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.results .bad { color: var(--danger); }
+.path { word-break: break-all; }

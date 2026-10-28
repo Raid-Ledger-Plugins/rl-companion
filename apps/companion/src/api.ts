@@ -48,3 +48,33 @@ export const LINK_MESSAGES: Record<LinkEvent["state"], string> = {
   device_limit: "You already have 10 linked devices. Remove one from your Devices list, then try again.",
   failed: "Linking failed.",
 };
+
+export interface CharResult {
+  label: string;
+  result: string;
+  ok: boolean;
+  at: string;
+}
+
+export interface LogLine {
+  at: string;
+  text: string;
+}
+
+export interface CollectorStatus {
+  enabled: boolean;
+  wowDir: string;
+  status: string;
+  results: CharResult[];
+  log: LogLine[];
+}
+
+export const getCollectorStatus = () => invoke<CollectorStatus>("get_collector_status");
+export const setWowDir = (dir: string) => invoke<CollectorStatus>("set_wow_dir", { dir });
+export const pickWowDir = () => invoke<CollectorStatus | null>("pick_wow_dir");
+export const setLedgerlinkEnabled = (enabled: boolean) =>
+  invoke<CollectorStatus>("set_ledgerlink_enabled", { enabled });
+export const uploadNow = () => invoke<void>("upload_now");
+
+export const onCollectorStatus = (cb: (s: CollectorStatus) => void): Promise<UnlistenFn> =>
+  listen<CollectorStatus>("collector-status", (event) => cb(event.payload));

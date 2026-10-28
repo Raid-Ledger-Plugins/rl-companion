@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
+import { Collector } from "./components/Collector";
 
 type Link = { phase: "idle" } | { phase: "waiting"; start: api.LinkStart };
 
@@ -39,6 +40,12 @@ export default function App() {
       if (check.state === "unreachable") setNotice(`Could not reach the server: ${check.message ?? ""}`);
       await refresh();
     });
+    const unlistenCollector = api.onCollectorStatus((c) => {
+      if (c.status === "Re-link this device") {
+        setNotice("The server no longer accepts this device. Re-link this device.");
+        void refresh();
+      }
+    });
     const unlisten = api.onLinkEvent((e) => {
       setLink({ phase: "idle" });
       setNotice(e.state === "linked" ? `Linked as ${e.deviceName ?? "this device"}.` : api.LINK_MESSAGES[e.state]);
@@ -47,6 +54,7 @@ export default function App() {
     });
     return () => {
       void unlisten.then((fn) => fn());
+      void unlistenCollector.then((fn) => fn());
     };
   }, [refresh, run]);
 
@@ -101,6 +109,8 @@ export default function App() {
           </>
         )}
       </section>
+
+      <Collector onError={setError} />
 
       <section>
         <h2>Server</h2>
