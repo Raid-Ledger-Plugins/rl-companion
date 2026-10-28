@@ -57,7 +57,9 @@ pub enum UploadOutcome {
 pub enum Attempt {
     Done(UploadOutcome),
     /// Retryable now, after the backoff.
-    Retry { reason: String },
+    Retry {
+        reason: String,
+    },
 }
 
 /// Wait before retry number `failures` (0-based): 2, 4, 8, 16, 32, then 60 s.
