@@ -73,7 +73,14 @@ pub fn start_watcher(
     };
     let mut watcher = match notify::recommended_watcher(handler) {
         Ok(w) => w,
-        Err(e) => return (None, vec![format!("File watching unavailable ({e}); rescanning every few minutes")]),
+        Err(e) => {
+            return (
+                None,
+                vec![format!(
+                    "File watching unavailable ({e}); rescanning every few minutes"
+                )],
+            )
+        }
     };
     let mut notes = Vec::new();
     for root in roots {

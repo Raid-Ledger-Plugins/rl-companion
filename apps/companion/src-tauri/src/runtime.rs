@@ -64,14 +64,31 @@ pub struct Effect {
 pub fn effect(outcome: &UploadOutcome) -> Effect {
     let (record, stop, ok, text) = match outcome {
         UploadOutcome::Accepted => (true, false, true, "Uploaded".to_owned()),
-        UploadOutcome::Rejected { status, code, issue } => {
-            let detail = issue.as_deref().map(|i| format!(" ({i})")).unwrap_or_default();
-            (true, false, false, format!("Rejected {status}: {code}{detail}"))
+        UploadOutcome::Rejected {
+            status,
+            code,
+            issue,
+        } => {
+            let detail = issue
+                .as_deref()
+                .map(|i| format!(" ({i})"))
+                .unwrap_or_default();
+            (
+                true,
+                false,
+                false,
+                format!("Rejected {status}: {code}{detail}"),
+            )
         }
         UploadOutcome::Unauthorized => (false, true, false, "Re-link this device".to_owned()),
         UploadOutcome::GaveUp { reason } => (false, false, false, format!("Will retry: {reason}")),
     };
-    Effect { record, stop, ok, text }
+    Effect {
+        record,
+        stop,
+        ok,
+        text,
+    }
 }
 
 struct Inner {
@@ -117,7 +134,10 @@ impl Runtime {
 
     pub fn log(&self, text: impl Into<String>) {
         let mut inner = self.lock();
-        inner.log.push_front(LogLine { at: now(), text: text.into() });
+        inner.log.push_front(LogLine {
+            at: now(),
+            text: text.into(),
+        });
         inner.log.truncate(LOG_LINES);
     }
 
@@ -131,12 +151,22 @@ impl Runtime {
         let at = now();
         inner.results.insert(
             pending.item.clone(),
-            CharResult { label: pending.label.clone(), result: fx.text.clone(), ok: fx.ok, at },
+            CharResult {
+                label: pending.label.clone(),
+                result: fx.text.clone(),
+                ok: fx.ok,
+                at,
+            },
         );
         if fx.record {
-            inner.sent.record(&pending.scope, &pending.item, &pending.sha256);
+            inner
+                .sent
+                .record(&pending.scope, &pending.item, &pending.sha256);
             if let Err(e) = inner.sent.save(&self.sent_path) {
-                inner.log.push_front(LogLine { at: now(), text: format!("Could not save upload state ({e})") });
+                inner.log.push_front(LogLine {
+                    at: now(),
+                    text: format!("Could not save upload state ({e})"),
+                });
             }
         }
     }
@@ -185,7 +215,8 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     loop {
         let dir = app.state::<Shared>().config().wow_dir;
         if watched.as_deref() != Some(dir.as_str()) {
-            let (w, notes) = start_watcher(&LedgerLinkCollector::new(&dir).watch_roots(), tx.clone());
+            let (w, notes) =
+                start_watcher(&LedgerLinkCollector::new(&dir).watch_roots(), tx.clone());
             notes.into_iter().for_each(|n| rt.log(n));
             _watcher = w;
             watched = Some(dir);
@@ -223,7 +254,11 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         return publish(app, rt, "Up to date");
     }
     if !cfg.ledgerlink_enabled {
-        return publish(app, rt, &format!("{waiting} export(s) waiting — turn on LedgerLink uploads"));
+        return publish(
+            app,
+            rt,
+            &format!("{waiting} export(s) waiting — turn on LedgerLink uploads"),
+        );
     }
     if app.state::<Shared>().is_paused() {
         return publish(app, rt, &format!("Paused — {waiting} export(s) waiting"));
@@ -240,7 +275,9 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
     let mut sent = 0usize;
     for pending in &scan.pending {
-        let outcome = uploader.send(&token, pending.contract, &pending.body, tokio::time::sleep).await;
+        let outcome = uploader
+            .send(&token, pending.contract, &pending.body, tokio::time::sleep)
+            .await;
         let fx = effect(&outcome);
         rt.log(format!("{}: {}", pending.label, fx.text));
         rt.finish(pending, &fx);

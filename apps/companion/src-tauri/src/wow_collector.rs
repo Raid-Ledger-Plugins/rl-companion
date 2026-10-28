@@ -70,25 +70,49 @@ impl LedgerLinkCollector {
         let path = Path::new(&cand.path);
         let meta = match fs::metadata(path) {
             Ok(m) => m,
-            Err(e) => return scan.notes.push(format!("{}: cannot read LedgerLink.lua ({e})", cand.account)),
+            Err(e) => {
+                return scan.notes.push(format!(
+                    "{}: cannot read LedgerLink.lua ({e})",
+                    cand.account
+                ))
+            }
         };
         if meta.len() > MAX_SV_BYTES as u64 {
-            return scan.notes.push(format!("{}: LedgerLink.lua is over 16 MiB; skipped", cand.account));
+            return scan.notes.push(format!(
+                "{}: LedgerLink.lua is over 16 MiB; skipped",
+                cand.account
+            ));
         }
         let outbox = match fs::read(path).map(|b| parse_ledgerlink_outbox(&b)) {
             Ok(Ok(o)) => o,
-            Ok(Err(e)) => return scan.notes.push(format!("{}: LedgerLink.lua not readable yet ({e})", cand.account)),
-            Err(e) => return scan.notes.push(format!("{}: cannot read LedgerLink.lua ({e})", cand.account)),
+            Ok(Err(e)) => {
+                return scan.notes.push(format!(
+                    "{}: LedgerLink.lua not readable yet ({e})",
+                    cand.account
+                ))
+            }
+            Err(e) => {
+                return scan.notes.push(format!(
+                    "{}: cannot read LedgerLink.lua ({e})",
+                    cand.account
+                ))
+            }
         };
         scan.files += 1;
         for s in &outbox.skipped {
-            scan.notes.push(format!("{}: skipped outbox entry {} ({:?})", cand.account, s.key, s.reason));
+            scan.notes.push(format!(
+                "{}: skipped outbox entry {} ({:?})",
+                cand.account, s.key, s.reason
+            ));
         }
         let captured_at = captured_at(meta.modified().ok());
         let previous = sent.scope(&cand.path);
         for entry in changed_entries(&outbox.entries, &previous) {
             if entry.text.len() > EXPORT_MAX {
-                scan.notes.push(format!("{}: export for {} is over the upload cap; paste it instead", cand.account, entry.guid));
+                scan.notes.push(format!(
+                    "{}: export for {} is over the upload cap; paste it instead",
+                    cand.account, entry.guid
+                ));
                 continue;
             }
             scan.pending.push(PendingUpload {
@@ -134,7 +158,12 @@ pub fn is_ledgerlink_file(path: &Path) -> bool {
 
 /// One `wow-ledgerlink/v1` message: the export text verbatim (contract §2).
 pub fn message(export_string: &str, captured_at: &str) -> serde_json::Value {
-    envelope(CONTRACT, CONTRACT_VERSION, captured_at, json!({ "exportString": export_string }))
+    envelope(
+        CONTRACT,
+        CONTRACT_VERSION,
+        captured_at,
+        json!({ "exportString": export_string }),
+    )
 }
 
 /// `capturedAt` = the file's mtime (spec §5), never in the future (the
@@ -142,22 +171,39 @@ pub fn message(export_string: &str, captured_at: &str) -> serde_json::Value {
 pub fn captured_at(mtime: Option<SystemTime>) -> String {
     let now = SystemTime::now();
     let t = mtime.filter(|m| *m <= now).unwrap_or(now);
-    let secs = t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = t
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     rfc3339_utc_from_unix_seconds(i64::try_from(secs).unwrap_or(0))
 }
 
 fn label(entry: &OutboxEntry) -> String {
-    format!("{} ({})", entry.guid, entry.section.as_deref().unwrap_or("export"))
+    format!(
+        "{} ({})",
+        entry.guid,
+        entry.section.as_deref().unwrap_or("export")
+    )
 }
 
 fn read_dirs(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir)
-        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 fn read_files(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir)
-        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect()
+        })
         .unwrap_or_default()
 }

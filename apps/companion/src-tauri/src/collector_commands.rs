@@ -12,7 +12,12 @@ pub fn get_collector_status(app: AppHandle, rt: State<'_, Arc<Runtime>>) -> Coll
     status(&app, &rt)
 }
 
-fn save_dir(app: &AppHandle, state: &Shared, rt: &Runtime, dir: &str) -> Result<CollectorStatusDto, String> {
+fn save_dir(
+    app: &AppHandle,
+    state: &Shared,
+    rt: &Runtime,
+    dir: &str,
+) -> Result<CollectorStatusDto, String> {
     let dir = dir.trim();
     if dir.is_empty() {
         return Err("Choose the World of Warcraft folder".into());
@@ -45,7 +50,10 @@ pub async fn pick_wow_dir(
     app.dialog().file().pick_folder(move |picked| {
         let _ = tx.send(picked);
     });
-    let Some(picked) = rx.await.map_err(|_| "The folder picker closed unexpectedly".to_string())? else {
+    let Some(picked) = rx
+        .await
+        .map_err(|_| "The folder picker closed unexpectedly".to_string())?
+    else {
         return Ok(None);
     };
     let path = picked.into_path().map_err(|e| e.to_string())?;
@@ -62,7 +70,11 @@ pub fn set_ledgerlink_enabled(
     state
         .update_config(|c| c.ledgerlink_enabled = enabled)
         .map_err(|e| format!("Could not save settings: {e}"))?;
-    rt.log(if enabled { "LedgerLink uploads turned on" } else { "LedgerLink uploads turned off" });
+    rt.log(if enabled {
+        "LedgerLink uploads turned on"
+    } else {
+        "LedgerLink uploads turned off"
+    });
     rt.kick();
     Ok(status(&app, &rt))
 }

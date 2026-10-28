@@ -163,7 +163,12 @@ impl Uploader {
     }
 
     /// One POST, classified.
-    pub async fn attempt(&self, token: &DeviceToken, contract: &str, body: &serde_json::Value) -> Attempt {
+    pub async fn attempt(
+        &self,
+        token: &DeviceToken,
+        contract: &str,
+        body: &serde_json::Value,
+    ) -> Attempt {
         let url = match self.url(contract) {
             Ok(u) => u,
             Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),

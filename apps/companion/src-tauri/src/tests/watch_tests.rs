@@ -12,7 +12,10 @@ fn settle_set_reports_a_written_file_once_after_stable_samples() {
     set.touch(file.clone());
     set.touch(file.clone()); // a second event for the same path is one entry
     assert!(set.tick().is_empty(), "first sample only arms the watcher");
-    assert!(set.tick().is_empty(), "two equal samples are not yet settled");
+    assert!(
+        set.tick().is_empty(),
+        "two equal samples are not yet settled"
+    );
     assert_eq!(set.tick(), vec![file.clone()], "third equal sample settles");
     assert!(set.is_empty(), "a settled path is forgotten");
     assert!(set.tick().is_empty(), "and never reported twice");
@@ -50,8 +53,16 @@ fn missing_files_never_settle() {
 
 #[test]
 fn only_ledgerlink_lua_is_relevant() {
-    assert!(is_ledgerlink_file(Path::new("x/SavedVariables/LedgerLink.lua")));
-    assert!(is_ledgerlink_file(Path::new("x/SavedVariables/ledgerlink.LUA")));
-    assert!(!is_ledgerlink_file(Path::new("x/SavedVariables/LedgerLink.lua.bak")));
-    assert!(!is_ledgerlink_file(Path::new("x/SavedVariables/Details.lua")));
+    assert!(is_ledgerlink_file(Path::new(
+        "x/SavedVariables/LedgerLink.lua"
+    )));
+    assert!(is_ledgerlink_file(Path::new(
+        "x/SavedVariables/ledgerlink.LUA"
+    )));
+    assert!(!is_ledgerlink_file(Path::new(
+        "x/SavedVariables/LedgerLink.lua.bak"
+    )));
+    assert!(!is_ledgerlink_file(Path::new(
+        "x/SavedVariables/Details.lua"
+    )));
 }
