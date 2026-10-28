@@ -1,7 +1,8 @@
 //! LedgerLink SavedVariables collector (ROK-1964 §5).
 //!
 //! The LedgerLink addon stores its latest export run per character in
-//! `LedgerLinkDB.outbox[guid] = { exportedAt, section, text }`; the WoW
+//! `LedgerLinkDB.outbox[guid] = { exportedAt, section, text, at, source }`
+//! (ledger-link PR #35); the WoW
 //! client writes that to `WTF/Account/<ACCOUNT>/SavedVariables/LedgerLink.lua`
 //! on logout, `/reload` and clean exit. [`parse_ledgerlink_outbox`] reads the
 //! entries out of that file's bytes, [`changed_entries`] picks the ones whose
@@ -43,6 +44,10 @@ pub struct OutboxEntry {
     pub section: Option<String>,
     /// The page tokens exactly as the copy window shows them.
     pub text: String,
+    /// `at`: when the addon stored the entry (unix seconds), when present.
+    pub stored_at: Option<i64>,
+    /// `source`: `"export"` (a click) or `"logout"` (auto-export), when present.
+    pub source: Option<String>,
     /// Lower-case hex SHA-256 of `text`, for dedupe.
     pub sha256: String,
 }
@@ -145,18 +150,20 @@ fn read_entry(key: &LuaKey, value: &LuaValue) -> Result<OutboxEntry, SkippedEntr
         return Err(skip(SkipReason::MissingText));
     };
     validate_export_text(text).map_err(skip)?;
-    let exported_at = match value.get("exportedAt") {
+    let seconds = |field: &str| match value.get(field) {
         Some(LuaValue::Num(n)) => whole_seconds(*n),
         _ => None,
     };
-    let section = match value.get("section") {
+    let string = |field: &str| match value.get(field) {
         Some(LuaValue::Str(s)) => Some(s.clone()),
         _ => None,
     };
     Ok(OutboxEntry {
         guid: guid.clone(),
-        exported_at,
-        section,
+        exported_at: seconds("exportedAt"),
+        section: string("section"),
+        stored_at: seconds("at"),
+        source: string("source"),
         text: text.clone(),
         sha256: sha256_hex(text.as_bytes()),
     })

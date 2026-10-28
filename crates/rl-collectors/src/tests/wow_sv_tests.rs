@@ -201,3 +201,34 @@ rl_test! {
         assert_eq!(changed, [G2, G3]);
     }
 }
+
+const ADDON_PR35: &[u8] = include_bytes!("../../tests/fixtures/wow_sv/addon-pr35-shape.lua");
+
+rl_test! {
+    fn reads_the_ledger_link_pr35_outbox_shape() {
+        let outbox = parse_ledgerlink_outbox(ADDON_PR35).expect("PR #35 shape parses");
+        assert!(outbox.skipped.is_empty(), "skipped: {:?}", outbox.skipped);
+        let [logout, click] = outbox.entries.as_slice() else {
+            panic!("expected two entries, got {:?}", outbox.entries);
+        };
+        assert_eq!(logout.guid, G1);
+        assert_eq!(logout.source.as_deref(), Some("logout"));
+        assert_eq!(logout.section.as_deref(), Some("char"));
+        assert_eq!(logout.exported_at, Some(1_790_003_599));
+        assert_eq!(logout.stored_at, Some(1_790_003_600));
+        assert_eq!(click.guid, G3);
+        assert_eq!(click.source.as_deref(), Some("export"));
+        assert_eq!(click.section.as_deref(), Some("all"));
+        assert_eq!(click.text.lines().count(), 5);
+        let multi = parse_ledgerlink_outbox(MULTI).expect("multi-entry parses");
+        let same_text: Vec<bool> = [G1, G3]
+            .iter()
+            .map(|g| {
+                let a = outbox.entries.iter().find(|e| e.guid == *g).map(|e| &e.sha256);
+                let b = multi.entries.iter().find(|e| e.guid == *g).map(|e| &e.sha256);
+                a.is_some() && a == b
+            })
+            .collect();
+        assert_eq!(same_text, [true, true], "sha256 is over the decoded text");
+    }
+}
