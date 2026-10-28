@@ -25,9 +25,7 @@ pub fn is_flavor_folder(name: &str) -> bool {
     name.len() > 2
         && name.starts_with('_')
         && name.ends_with('_')
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 fn separator(root: &str) -> char {

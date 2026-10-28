@@ -21,8 +21,7 @@ use crate::extract::sha256_hex;
 use lua::{LuaKey, LuaValue, parse_assignments};
 
 pub use paths::{
-    LEDGERLINK_SV_FILE, SvCandidate, is_flavor_folder, ledgerlink_sv_candidates,
-    ledgerlink_sv_path,
+    LEDGERLINK_SV_FILE, SvCandidate, is_flavor_folder, ledgerlink_sv_candidates, ledgerlink_sv_path,
 };
 
 /// The account-wide SavedVariables table the addon declares.
@@ -125,7 +124,9 @@ pub fn parse_ledgerlink_outbox(bytes: &[u8]) -> Result<Outbox, WowSvError> {
     // Stable sort after a reverse: the last duplicate key wins, as in Lua.
     outbox.entries.reverse();
     outbox.entries.sort_by(|a, b| a.guid.cmp(&b.guid));
-    outbox.entries.dedup_by(|later, earlier| later.guid == earlier.guid);
+    outbox
+        .entries
+        .dedup_by(|later, earlier| later.guid == earlier.guid);
     Ok(outbox)
 }
 

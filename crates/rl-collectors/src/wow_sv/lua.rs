@@ -342,7 +342,10 @@ impl Parser<'_> {
                 buf.push(b'\n');
             }
             b'z' => {
-                while matches!(self.peek(), Some(b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)) {
+                while matches!(
+                    self.peek(),
+                    Some(b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)
+                ) {
                     self.pos += 1;
                 }
             }
@@ -382,8 +385,8 @@ impl Parser<'_> {
             self.pos += 1;
         }
         while let Some(b) = self.peek() {
-            let exp_sign =
-                (b == b'+' || b == b'-') && matches!(
+            let exp_sign = (b == b'+' || b == b'-')
+                && matches!(
                     self.pos.checked_sub(1).and_then(|i| self.s.get(i)),
                     Some(b'e' | b'E')
                 );
