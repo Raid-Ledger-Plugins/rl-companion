@@ -244,7 +244,8 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
 
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let cfg = app.state::<Shared>().config();
-    let scan = LedgerLinkCollector::new(&cfg.wow_dir).scan(&rt.sent());
+    let collector = LedgerLinkCollector::new(&cfg.wow_dir);
+    let scan = collector.scan(&cfg.server_url, &rt.sent());
     scan.notes.iter().for_each(|n| rt.log(n.clone()));
     let waiting = scan.pending.len();
     if scan.files == 0 {

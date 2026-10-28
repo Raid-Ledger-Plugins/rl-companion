@@ -9,6 +9,9 @@ use wiremock::matchers::header;
 const MULTI: &str =
     include_str!("../../../../../crates/rl-collectors/tests/fixtures/wow_sv/multi-entry.lua");
 
+const PROD: &str = "https://raid.example.net";
+const SLOT: &str = "https://slot-1.example.net";
+
 fn outbox_len(text: &str) -> usize {
     rl_collectors::parse_ledgerlink_outbox(text.as_bytes())
         .expect("fixture parses")
@@ -44,7 +47,7 @@ fn dedupe_survives_a_restart_and_a_changed_export_is_resent() {
         vec![root.join("_classic_era_").join("WTF")]
     );
 
-    let first = collector.scan(&SentState::load(&state_file));
+    let first = collector.scan(PROD, &SentState::load(&state_file));
     let n = outbox_len(MULTI);
     assert!(n > 0, "fixture has outbox entries");
     assert_eq!(first.files, 1, "the .bak and other addons are ignored");
@@ -59,7 +62,7 @@ fn dedupe_survives_a_restart_and_a_changed_export_is_resent() {
     // "Restart": a fresh collector and state read back from disk.
     let reloaded = SentState::load(&state_file);
     assert_eq!(reloaded, sent);
-    let again = LedgerLinkCollector::new(&root).scan(&reloaded);
+    let again = LedgerLinkCollector::new(&root).scan(PROD, &reloaded);
     assert!(
         again.pending.is_empty(),
         "unchanged exports are not resent: {:?}",
@@ -70,15 +73,41 @@ fn dedupe_survives_a_restart_and_a_changed_export_is_resent() {
     let changed = MULTI.replacen("!RL1!char!eJ", "!RL1!char!eK", 1);
     assert_ne!(changed, MULTI, "fixture edit applied");
     std::fs::write(&file, &changed).expect("rewrite");
-    let third = LedgerLinkCollector::new(&root).scan(&reloaded);
+    let third = LedgerLinkCollector::new(&root).scan(PROD, &reloaded);
     assert_eq!(third.pending.len(), 1, "only the changed entry is pending");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Review MAJOR 1: an export a test server settled must still go to prod, and
+/// switching back to the test server keeps its history.
+#[test]
+fn sent_state_is_kept_per_server_origin() {
+    let root = temp_dir("origin");
+    install(&root, "12345678#1", MULTI);
+    let collector = LedgerLinkCollector::new(&root);
+    let on_slot = collector.scan(SLOT, &SentState::default());
+    assert!(!on_slot.pending.is_empty(), "fixture has outbox entries");
+    let mut sent = SentState::default();
+    for p in &on_slot.pending {
+        assert!(p.scope.starts_with(SLOT), "{}", p.scope);
+        sent.record(&p.scope, &p.item, &p.sha256);
+    }
+    assert!(
+        collector.scan(SLOT, &sent).pending.is_empty(),
+        "the test server already settled every export"
+    );
+    assert_eq!(
+        collector.scan(PROD, &sent).pending.len(),
+        on_slot.pending.len(),
+        "prod has settled nothing yet, so every export is sent there"
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
 fn missing_wow_folder_scans_to_nothing() {
     let collector = LedgerLinkCollector::new(temp_dir("nowow").join("absent"));
-    let scan = collector.scan(&SentState::default());
+    let scan = collector.scan(PROD, &SentState::default());
     assert_eq!((scan.files, scan.pending.len()), (0, 0));
     assert!(collector.watch_roots().is_empty());
 }
@@ -103,7 +132,8 @@ fn captured_at_is_iso_utc_and_never_in_the_future() {
 async fn uploads_a_scanned_export_to_the_mock_ingest() {
     let root = temp_dir("ingest");
     install(&root, "ACCOUNT#1", MULTI);
-    let scan = LedgerLinkCollector::new(&root).scan(&SentState::default());
+    let collector = LedgerLinkCollector::new(&root);
+    let scan = collector.scan(PROD, &SentState::default());
     let pending = scan.pending.first().expect("one pending upload").clone();
 
     let server = MockServer::start().await;

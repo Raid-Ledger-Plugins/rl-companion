@@ -20,7 +20,8 @@ pub const ENVELOPE_VERSION: u32 = 1;
 pub struct PendingUpload {
     /// Contract name — the last segment of the ingest URL.
     pub contract: &'static str,
-    /// Dedupe scope (one SavedVariables file) and the item inside it (a GUID).
+    /// Dedupe scope ([`scope_key`]: server origin + one SavedVariables file)
+    /// and the item inside it (a GUID).
     pub scope: String,
     pub item: String,
     pub sha256: String,
@@ -50,8 +51,16 @@ pub trait Collector: Send + Sync {
     fn watch_roots(&self) -> Vec<PathBuf>;
     /// Whether a changed path should trigger a settle-then-scan.
     fn is_relevant(&self, path: &Path) -> bool;
-    /// Read the files and return every message that is new versus `sent`.
-    fn scan(&self, sent: &SentState) -> Scan;
+    /// Read the files and return every message that is new versus what
+    /// `origin` (the configured server) already settled in `sent`.
+    fn scan(&self, origin: &str, sent: &SentState) -> Scan;
+}
+
+/// The dedupe scope for one source file on one server: `{origin}|{path}`.
+/// Keyed by origin so an export a test server settled is still sent to prod,
+/// and switching back to a server keeps its history.
+pub fn scope_key(origin: &str, path: &str) -> String {
+    format!("{origin}|{path}")
 }
 
 /// `scope → item → sha256` of the last upload the server settled (accepted,

@@ -2,7 +2,7 @@
 //! `LedgerLink.lua` under the WoW folder and turns each changed outbox entry
 //! into one `wow-ledgerlink/v1` message.
 
-use crate::collector::{envelope, Collector, PendingUpload, Scan, SentState};
+use crate::collector::{envelope, scope_key, Collector, PendingUpload, Scan, SentState};
 use rl_collectors::{
     changed_entries, is_flavor_folder, ledgerlink_sv_candidates, parse_ledgerlink_outbox,
     rfc3339_utc_from_unix_seconds, OutboxEntry, SvCandidate, LEDGERLINK_SV_FILE, MAX_SV_BYTES,
@@ -66,7 +66,7 @@ impl LedgerLinkCollector {
         ledgerlink_sv_candidates(&root, listing.iter().map(String::as_str))
     }
 
-    fn scan_file(&self, cand: &SvCandidate, sent: &SentState, scan: &mut Scan) {
+    fn scan_file(&self, cand: &SvCandidate, origin: &str, sent: &SentState, scan: &mut Scan) {
         let path = Path::new(&cand.path);
         let meta = match fs::metadata(path) {
             Ok(m) => m,
@@ -106,7 +106,8 @@ impl LedgerLinkCollector {
             ));
         }
         let captured_at = captured_at(meta.modified().ok());
-        let previous = sent.scope(&cand.path);
+        let scope = scope_key(origin, &cand.path);
+        let previous = sent.scope(&scope);
         for entry in changed_entries(&outbox.entries, &previous) {
             if entry.text.len() > EXPORT_MAX {
                 scan.notes.push(format!(
@@ -117,7 +118,7 @@ impl LedgerLinkCollector {
             }
             scan.pending.push(PendingUpload {
                 contract: CONTRACT,
-                scope: cand.path.clone(),
+                scope: scope.clone(),
                 item: entry.guid.clone(),
                 sha256: entry.sha256.clone(),
                 label: label(entry),
@@ -140,10 +141,10 @@ impl Collector for LedgerLinkCollector {
         is_ledgerlink_file(path)
     }
 
-    fn scan(&self, sent: &SentState) -> Scan {
+    fn scan(&self, origin: &str, sent: &SentState) -> Scan {
         let mut scan = Scan::default();
         for cand in self.candidates() {
-            self.scan_file(&cand, sent, &mut scan);
+            self.scan_file(&cand, origin, sent, &mut scan);
         }
         scan
     }
