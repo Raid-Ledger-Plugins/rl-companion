@@ -1,0 +1,79 @@
+//! App-wide state managed by Tauri (`app.state::<Shared>()`).
+
+use crate::config::AppConfig;
+use crate::token::{DeviceToken, TokenError, TokenStore};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
+use tauri::async_runtime::JoinHandle;
+
+pub const CONFIG_FILE: &str = "config.json";
+
+pub struct Shared {
+    config_path: PathBuf,
+    config: Mutex<AppConfig>,
+    tokens: Box<dyn TokenStore>,
+    link_task: Mutex<Option<JoinHandle<()>>>,
+    /// Tray Pause/Resume. C-3's uploader must check this before sending.
+    paused: AtomicBool,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+impl Shared {
+    pub fn new(config_path: PathBuf, tokens: Box<dyn TokenStore>) -> Self {
+        let config = AppConfig::load(&config_path);
+        Self {
+            config_path,
+            config: Mutex::new(config),
+            tokens,
+            link_task: Mutex::new(None),
+            paused: AtomicBool::new(false),
+        }
+    }
+
+    /// A snapshot; never hold it across an `.await`.
+    pub fn config(&self) -> AppConfig {
+        lock(&self.config).clone()
+    }
+
+    /// Apply `f` to the config and persist it.
+    pub fn update_config(&self, f: impl FnOnce(&mut AppConfig)) -> std::io::Result<AppConfig> {
+        let mut cfg = lock(&self.config);
+        f(&mut cfg);
+        cfg.save(&self.config_path)?;
+        Ok(cfg.clone())
+    }
+
+    /// Token for the CURRENT server origin.
+    pub fn token(&self) -> Result<Option<DeviceToken>, TokenError> {
+        self.tokens.load(&self.config().server_url)
+    }
+
+    pub fn save_token(&self, origin: &str, token: &DeviceToken) -> Result<(), TokenError> {
+        self.tokens.save(origin, token)
+    }
+
+    /// Forget the token for the current origin (401 or user "Unlink").
+    pub fn clear_token(&self) -> Result<(), TokenError> {
+        self.tokens.clear(&self.config().server_url)
+    }
+
+    /// Replace (and abort) any running link poll.
+    pub fn set_link_task(&self, task: Option<JoinHandle<()>>) {
+        if let Some(old) = std::mem::replace(&mut *lock(&self.link_task), task) {
+            old.abort();
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    /// Flip pause; returns the new value.
+    pub fn toggle_paused(&self) -> bool {
+        !self.paused.fetch_xor(true, Ordering::Relaxed)
+    }
+}

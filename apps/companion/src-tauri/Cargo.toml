@@ -1,0 +1,38 @@
+[package]
+name = "rl-companion"
+version = "0.1.0"
+description = "Raid Ledger Companion desktop app"
+# Tauri's macros are exercised against edition 2021 by upstream; the app stays
+# there while the library crates use the workspace's 2024.
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "rl_companion_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rl-companion"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["time", "sync"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+url = "2"
+gethostname = "0.5"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+wiremock = "0.6"
