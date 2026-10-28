@@ -1,0 +1,27 @@
+[package]
+name = "rl-collectors"
+version = "0.1.0"
+description = "Raid Ledger Companion collectors: BG3 LSPK v18 (.lsv) reader, SaveInfo.json + WebP extract, bg3-save/v1 normaliser, settle-watcher."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Pure-Rust dependencies only, so the crate builds for wasm32-unknown-unknown.
+[dependencies]
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
+ruzstd = { version = "0.8", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = { version = "0.10", default-features = false }
+thiserror = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+jsonschema = { version = "0.30", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

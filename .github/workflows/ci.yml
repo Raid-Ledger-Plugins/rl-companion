@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+      # On failure, publish the exact fix so it can be applied with `git apply`.
+      - name: Produce fmt.patch
+        if: failure()
+        run: cargo fmt --all && git diff > fmt.patch
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fmt-patch
+          path: fmt.patch
+
+  native:
+    name: clippy + test (native)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: cargo test
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+
+  wasm:
+    name: build + test (wasm32)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: cargo build -p rl-collectors --target wasm32-unknown-unknown --release
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.1
+      - run: wasm-pack test --node crates/rl-collectors
