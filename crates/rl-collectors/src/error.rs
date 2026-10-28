@@ -119,3 +119,42 @@ pub enum NormaliseError {
     #[error("party member {0} has an empty Classes list; the save must be skipped")]
     EmptyClasses(usize),
 }
+
+/// Failure parsing a WoW SavedVariables file (`LedgerLink.lua`).
+///
+/// Offsets are byte offsets into the input.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum WowSvError {
+    /// The input is larger than the parser accepts.
+    #[error("SavedVariables file is {size} bytes, over the {limit}-byte limit")]
+    TooLarge { size: u64, limit: u64 },
+    /// The input ends inside a statement, table, string or comment.
+    #[error("SavedVariables truncated: input ends inside {what} at byte {offset}")]
+    Truncated { what: &'static str, offset: usize },
+    /// A byte that is not part of the supported Lua subset.
+    #[error("unexpected {found} at byte {offset} while reading {what}")]
+    Unexpected {
+        what: &'static str,
+        found: String,
+        offset: usize,
+    },
+    /// A backslash escape the parser does not accept.
+    #[error("invalid escape sequence in a string at byte {offset}")]
+    BadEscape { offset: usize },
+    /// A numeric literal that is not a finite decimal number.
+    #[error("invalid number {text:?} at byte {offset}")]
+    BadNumber { text: String, offset: usize },
+    /// A table key that is `nil`, a table or NaN.
+    #[error("invalid table key at byte {offset}")]
+    BadKey { offset: usize },
+    /// Tables nested deeper than the parser accepts.
+    #[error("tables nested deeper than {limit} levels at byte {offset}")]
+    TooDeep { limit: usize, offset: usize },
+    /// `LedgerLinkDB` or `LedgerLinkDB.outbox` exists but is not a table.
+    #[error("{what} is a {found}, not a table")]
+    NotATable {
+        what: &'static str,
+        found: &'static str,
+    },
+}

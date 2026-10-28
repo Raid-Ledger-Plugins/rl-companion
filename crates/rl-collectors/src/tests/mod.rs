@@ -23,3 +23,6 @@ mod robustness_tests;
 mod schema_tests;
 mod settle_tests;
 mod writer;
+mod wow_sv_paths_tests;
+mod wow_sv_robustness_tests;
+mod wow_sv_tests;
