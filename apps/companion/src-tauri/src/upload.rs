@@ -1,6 +1,9 @@
 //! Uploader: `POST {server}/api/companion/v1/messages/:contract` with the
-//! device bearer token. Retries 5xx/408/network with exponential backoff,
-//! honours `Retry-After` on 429, never retries another 4xx (envelope/v1 §3).
+//! device bearer token. Retries 5xx/408/network with exponential backoff.
+//! A 429 stops the batch until `Retry-After` has passed. Only the server's own
+//! content rejections ([`TERMINAL_CODES`]) are final; every other 4xx (a route
+//! the server does not serve yet, a proxy page, a redirect) is tried again on
+//! a later scan (envelope/v1 §3-4).
 
 use crate::config::API_PREFIX;
 use crate::token::DeviceToken;
@@ -16,12 +19,21 @@ pub const DEFAULT_RETRY_AFTER_SECS: u64 = 60;
 pub const MAX_RETRY_AFTER_SECS: u64 = 600;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The companion error codes that reject the message itself (envelope/v1 §4):
+/// resending the same content can never succeed, so it is recorded as sent.
+pub const TERMINAL_CODES: [&str; 4] = [
+    "invalid_envelope",
+    "invalid_payload",
+    "payload_too_large",
+    "captured_at_in_future",
+];
+
 /// How one message ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UploadOutcome {
     /// 2xx — applied, unchanged or stale all ack 202 (CONTRACT §2.1).
     Accepted,
-    /// Terminal 4xx: never resend this content. `issue` is the first
+    /// A [`TERMINAL_CODES`] 4xx: never resend this content. `issue` is the first
     /// `issues[].code` (e.g. `BAD_HEADER`, `RULESET_REQUIRED`).
     Rejected {
         status: u16,
@@ -30,7 +42,13 @@ pub enum UploadOutcome {
     },
     /// 401: the token is gone or revoked — re-link the device.
     Unauthorized,
-    /// Out of attempts (5xx / network / 429). Try again on the next scan.
+    /// 429: send nothing (this batch included) until `wait` has passed.
+    RateLimited { wait: Duration },
+    /// A 4xx that is not about this message: the server does not serve the
+    /// contract yet (404), the version is retired (409), or a proxy answered.
+    /// Nothing is recorded; the batch stops and the next scan tries again.
+    Deferred { reason: String },
+    /// Out of attempts (5xx / 408 / network). Try again on the next scan.
     GaveUp { reason: String },
 }
 
@@ -38,11 +56,8 @@ pub enum UploadOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attempt {
     Done(UploadOutcome),
-    /// Retryable; `wait` overrides the backoff (429 `Retry-After`).
-    Retry {
-        wait: Option<Duration>,
-        reason: String,
-    },
+    /// Retryable now, after the backoff.
+    Retry { reason: String },
 }
 
 /// Wait before retry number `failures` (0-based): 2, 4, 8, 16, 32, then 60 s.
@@ -80,32 +95,49 @@ pub fn classify(status: u16, retry_after: Option<&str>, body: &[u8]) -> Attempt 
     match status {
         200..=299 => Attempt::Done(UploadOutcome::Accepted),
         401 => Attempt::Done(UploadOutcome::Unauthorized),
-        429 => Attempt::Retry {
-            wait: Some(parse_retry_after(retry_after)),
-            reason: "rate limited by the server".into(),
-        },
+        429 => Attempt::Done(UploadOutcome::RateLimited {
+            wait: parse_retry_after(retry_after),
+        }),
         408 | 500..=599 => Attempt::Retry {
-            wait: None,
             reason: format!("server error {status}"),
         },
-        _ => {
-            let parsed: ErrorBody = serde_json::from_slice(body).unwrap_or_default();
-            let code = if parsed.code.is_empty() {
-                format!("http_{status}")
-            } else {
-                parsed.code
-            };
-            let issue = parsed
-                .issues
-                .into_iter()
-                .map(|i| i.code)
-                .find(|c| !c.is_empty());
-            Attempt::Done(UploadOutcome::Rejected {
-                status,
-                code,
-                issue,
-            })
+        _ => Attempt::Done(other_status(status, body)),
+    }
+}
+
+/// A non-2xx that is neither 401, 408, 429 nor 5xx (including a 3xx, as
+/// redirects are not followed): terminal only for a [`TERMINAL_CODES`] body.
+fn other_status(status: u16, body: &[u8]) -> UploadOutcome {
+    let Ok(parsed) = serde_json::from_slice::<ErrorBody>(body) else {
+        return UploadOutcome::Deferred {
+            reason: format!("unexpected answer {status} from the server"),
+        };
+    };
+    if !TERMINAL_CODES.contains(&parsed.code.as_str()) {
+        return UploadOutcome::Deferred {
+            reason: deferred_reason(status, &parsed.code),
+        };
+    }
+    let issue = parsed
+        .issues
+        .into_iter()
+        .map(|i| i.code)
+        .find(|c| !c.is_empty());
+    UploadOutcome::Rejected {
+        status,
+        code: parsed.code,
+        issue,
+    }
+}
+
+fn deferred_reason(status: u16, code: &str) -> String {
+    match code {
+        "unknown_contract" | "unknown_contract_version" => {
+            "the server does not take this upload yet".to_owned()
         }
+        "retired_contract_version" => "this app is out of date; update the Companion".to_owned(),
+        "" => format!("unexpected answer {status} from the server"),
+        other => format!("server answered {status} ({other})"),
     }
 }
 
@@ -122,10 +154,10 @@ where
     for n in 0..MAX_ATTEMPTS {
         match attempt().await {
             Attempt::Done(outcome) => return outcome,
-            Attempt::Retry { wait, reason } => {
+            Attempt::Retry { reason } => {
                 last = reason;
                 if n + 1 < MAX_ATTEMPTS {
-                    sleep(wait.unwrap_or_else(|| backoff(n))).await;
+                    sleep(backoff(n)).await;
                 }
             }
         }
@@ -150,8 +182,11 @@ impl Uploader {
             .join(API_PREFIX)
             .and_then(|u| u.join("companion/v1/messages/"))
             .map_err(|e| format!("Bad server URL: {e}"))?;
+        // No redirects: a 3xx would turn the POST into a GET. It is reported
+        // as a deferred answer instead (review MINOR 7).
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("HTTP client: {e}"))?;
         Ok(Self { base, http })
@@ -182,7 +217,6 @@ impl Uploader {
             .await;
         match sent {
             Err(e) => Attempt::Retry {
-                wait: None,
                 reason: network_reason(&e).into(),
             },
             Ok(res) => {

@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
@@ -53,17 +53,32 @@ pub struct CollectorStatusDto {
 pub struct Effect {
     /// Record the sha so this content is never resent.
     pub record: bool,
-    /// Stop the batch (401).
+    /// Stop the batch (401, 429, or a 4xx that is not about the message).
     pub stop: bool,
+    /// Clear the device token (401).
+    pub relink: bool,
+    /// Send nothing before this has passed (429 `Retry-After`).
+    pub hold: Option<Duration>,
     pub ok: bool,
     pub text: String,
 }
 
-/// Accepted and terminal rejects are recorded; retryable failures and 401
-/// are not, so the next scan tries them again.
+fn settle(record: bool, stop: bool, ok: bool, text: String) -> Effect {
+    Effect {
+        record,
+        stop,
+        relink: false,
+        hold: None,
+        ok,
+        text,
+    }
+}
+
+/// Only accepted uploads and the server's content rejections are recorded;
+/// everything else is tried again on a later scan.
 pub fn effect(outcome: &UploadOutcome) -> Effect {
-    let (record, stop, ok, text) = match outcome {
-        UploadOutcome::Accepted => (true, false, true, "Uploaded".to_owned()),
+    match outcome {
+        UploadOutcome::Accepted => settle(true, false, true, "Uploaded".to_owned()),
         UploadOutcome::Rejected {
             status,
             code,
@@ -73,21 +88,26 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
                 .as_deref()
                 .map(|i| format!(" ({i})"))
                 .unwrap_or_default();
-            (
-                true,
-                false,
-                false,
-                format!("Rejected {status}: {code}{detail}"),
-            )
+            let text = format!("Rejected {status}: {code}{detail}");
+            settle(true, false, false, text)
         }
-        UploadOutcome::Unauthorized => (false, true, false, "Re-link this device".to_owned()),
-        UploadOutcome::GaveUp { reason } => (false, false, false, format!("Will retry: {reason}")),
-    };
-    Effect {
-        record,
-        stop,
-        ok,
-        text,
+        UploadOutcome::Unauthorized => Effect {
+            relink: true,
+            ..settle(false, true, false, "Re-link this device".to_owned())
+        },
+        UploadOutcome::RateLimited { wait } => {
+            let text = format!("Rate limited; will retry in {}s", wait.as_secs());
+            Effect {
+                hold: Some(*wait),
+                ..settle(false, true, false, text)
+            }
+        }
+        UploadOutcome::Deferred { reason } => {
+            settle(false, true, false, format!("Will retry: {reason}"))
+        }
+        UploadOutcome::GaveUp { reason } => {
+            settle(false, false, false, format!("Will retry: {reason}"))
+        }
     }
 }
 
@@ -96,6 +116,8 @@ struct Inner {
     results: BTreeMap<String, CharResult>,
     log: VecDeque<LogLine>,
     sent: SentState,
+    /// No uploads before this (a 429's `Retry-After`).
+    hold_until: Option<Instant>,
 }
 
 pub struct Runtime {
@@ -114,6 +136,7 @@ impl Runtime {
                 results: BTreeMap::new(),
                 log: VecDeque::new(),
                 sent,
+                hold_until: None,
             }),
             kick: Notify::new(),
         }
@@ -139,6 +162,22 @@ impl Runtime {
             text: text.into(),
         });
         inner.log.truncate(LOG_LINES);
+    }
+
+    /// Send nothing until `wait` has passed (429 `Retry-After`).
+    pub fn hold_for(&self, wait: Duration) {
+        self.lock().hold_until = Some(Instant::now() + wait);
+    }
+
+    /// Whole seconds left on a 429 hold (at least 1), or `None` once it passed.
+    pub fn held_secs(&self) -> Option<u64> {
+        let until = self.lock().hold_until?;
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            None
+        } else {
+            Some(left.as_secs().max(1))
+        }
     }
 
     pub fn set_status(&self, text: impl Into<String>) {
@@ -210,6 +249,9 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     let mut _watcher = None;
     let mut settle = SettleSet::default();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    // After a long upload, don't burst missed ticks (that would fake the
+    // settle samples on a file WoW is still writing).
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut idle_secs = 0u32;
     scan_and_upload(&app, &rt).await;
     loop {
@@ -264,6 +306,13 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     if app.state::<Shared>().is_paused() {
         return publish(app, rt, &format!("Paused — {waiting} export(s) waiting"));
     }
+    if let Some(secs) = rt.held_secs() {
+        return publish(
+            app,
+            rt,
+            &format!("Rate limited — {waiting} export(s) waiting, retry in {secs}s"),
+        );
+    }
     let token = match app.state::<Shared>().token() {
         Ok(Some(t)) => t,
         Ok(None) => return publish(app, rt, "Link this device to upload"),
@@ -276,6 +325,13 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
     let mut sent = 0usize;
     for pending in &scan.pending {
+        if app.state::<Shared>().is_paused() {
+            return publish(
+                app,
+                rt,
+                &format!("Paused — uploaded {sent} of {waiting} export(s)"),
+            );
+        }
         let outcome = uploader
             .send(&token, pending.contract, &pending.body, tokio::time::sleep)
             .await;
@@ -285,9 +341,16 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         if fx.ok {
             sent += 1;
         }
-        if fx.stop {
+        if let Some(wait) = fx.hold {
+            rt.hold_for(wait);
+        }
+        if fx.relink {
             let _ = app.state::<Shared>().clear_token();
             return publish(app, rt, "Re-link this device");
+        }
+        if fx.stop {
+            let line = format!("Uploaded {sent} of {waiting} export(s); {}", fx.text);
+            return publish(app, rt, &line);
         }
     }
     publish(app, rt, &format!("Uploaded {sent} of {waiting} export(s)"));
