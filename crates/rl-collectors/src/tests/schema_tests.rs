@@ -17,19 +17,19 @@ const INVALID_RAW_FOLDER_KEY: &str =
 const INVALID_SAVE_NAME_CONTROL_CHAR: &str =
     include_str!("../../../../contracts/bg3-save/v1/fixtures/invalid/save-name-control-char.json");
 
-/// The pinned `saveName` pattern excludes `\p{Cs}` (lone surrogates), a class
-/// Rust's regex engines refuse to compile. Rust strings are valid UTF-8 and
-/// can never hold a surrogate, so dropping it changes nothing that validates.
-/// The assert fails loudly if a re-pin changes the pattern.
+/// The pinned schema, verbatim. Since ROK-2034 the `saveName` pattern no
+/// longer carries `\p{Cs}` (lone surrogates), a class Rust's regex engines
+/// refuse to compile, so no rewrite is needed. The assert fails loudly if a
+/// re-pin brings an uncompilable class back.
 fn rust_compatible_schema() -> Value {
-    let mut schema = json(SCHEMA);
-    let pattern = &mut schema["properties"]["payload"]["properties"]["saveName"]["pattern"];
-    let original = pattern.as_str().expect("saveName pattern").to_owned();
+    let schema = json(SCHEMA);
+    let pattern = schema["properties"]["payload"]["properties"]["saveName"]["pattern"]
+        .as_str()
+        .expect("saveName pattern");
     assert!(
-        original.contains(r"\p{Cs}"),
-        "saveName pattern changed: {original}"
+        !pattern.contains(r"\p{Cs}"),
+        "saveName pattern has \\p{{Cs}} again: {pattern}"
     );
-    *pattern = Value::String(original.replace(r"\p{Cs}", ""));
     schema
 }
 
