@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rl-collectors"]
+members = ["crates/rl-collectors", "apps/companion/src-tauri"]
 
 [workspace.package]
 edition = "2024"
