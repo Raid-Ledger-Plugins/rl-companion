@@ -126,7 +126,10 @@ fn extract_code(err: &ExtractError) -> ErrorCode {
 pub fn inspect_bg3_save(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let inspection = inspect(bytes).map_err(|(code, message)| js_error(code, &message))?;
     let (webp, thumbnail) = match &inspection.thumbnail {
-        Some((data, r)) => (JsValue::from(Uint8Array::from(data.as_slice())), thumbnail_js(r)?),
+        Some((data, r)) => (
+            JsValue::from(Uint8Array::from(data.as_slice())),
+            thumbnail_js(r)?,
+        ),
         None => (JsValue::NULL, JsValue::NULL),
     };
     let out = Object::new();
@@ -153,6 +156,10 @@ fn js_error(code: ErrorCode, message: &str) -> JsValue {
     let err = Error::new(message);
     err.set_name("Bg3SaveError");
     // Setting a property on a fresh Error cannot fail.
-    let _ = Reflect::set(&err, &JsValue::from_str("code"), &JsValue::from_str(code.as_str()));
+    let _ = Reflect::set(
+        &err,
+        &JsValue::from_str("code"),
+        &JsValue::from_str(code.as_str()),
+    );
     err.into()
 }

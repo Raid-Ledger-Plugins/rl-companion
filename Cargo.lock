@@ -3462,6 +3462,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl-collectors-web"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "lz4_flex",
+ "rl-collectors",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "rl-companion"
 version = "0.1.0"
 dependencies = [
