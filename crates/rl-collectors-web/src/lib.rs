@@ -6,6 +6,13 @@
 //! web app (the contract's TypeScript reference normaliser). A failure
 //! throws an `Error` named `Bg3SaveError` whose `code` is one of
 //! [`ErrorCode::as_str`].
+//!
+//! A WebAssembly trap is NOT a `Bg3SaveError`. A panic (logged to
+//! `console.error` first by the hook [`inspect_bg3_save`] installs) or an
+//! out-of-memory abort surfaces as a `WebAssembly.RuntimeError`
+//! (`unreachable`, or a failed `memory.grow`). After a trap the instance's
+//! state is undefined: callers must drop it and instantiate a fresh module
+//! before the next call, and treat the upload as failed.
 
 use js_sys::{Error, Object, Reflect, Uint8Array};
 use rl_collectors::{
@@ -50,13 +57,15 @@ export interface Bg3SaveInspection {
 /// Why a package could not be inspected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
-    /// Not an LSPK package, or cut short.
+    /// Not an LSPK package: bad magic, or shorter than the 40-byte header.
     NotLspk,
     /// LSPK, but not version 18.
     UnsupportedVersion,
     /// Multi-part, too many files, or an unsupported compression method.
     UnsupportedPackage,
-    /// The file table or an entry does not decompress.
+    /// A valid header, but the package is cut short after it, or the file
+    /// table or an entry does not decompress (including a zstd frame that
+    /// declares an oversized window).
     CorruptPackage,
     /// No root `SaveInfo.json`.
     MissingSaveInfo,
@@ -102,7 +111,7 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection, (ErrorCode, String)> {
 
 fn lspk_code(err: &LspkError) -> ErrorCode {
     match err {
-        LspkError::BadMagic(_) | LspkError::Truncated { .. } => ErrorCode::NotLspk,
+        LspkError::BadMagic(_) | LspkError::Truncated { what: "header", .. } => ErrorCode::NotLspk,
         LspkError::UnsupportedVersion(_) => ErrorCode::UnsupportedVersion,
         LspkError::UnsupportedMultiPart(_)
         | LspkError::TooManyFiles(_)
@@ -124,6 +133,7 @@ fn extract_code(err: &ExtractError) -> ErrorCode {
 /// `Bg3SaveError` with a `code` on failure.
 #[wasm_bindgen(js_name = inspectBg3Save, unchecked_return_type = "Bg3SaveInspection")]
 pub fn inspect_bg3_save(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    install_panic_hook();
     let inspection = inspect(bytes).map_err(|(code, message)| js_error(code, &message))?;
     let (webp, thumbnail) = match &inspection.thumbnail {
         Some((data, r)) => (
@@ -137,6 +147,27 @@ pub fn inspect_bg3_save(bytes: &[u8]) -> Result<JsValue, JsValue> {
     set(&out, "webp", &webp)?;
     set(&out, "thumbnail", &thumbnail)?;
     Ok(out.into())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(message: &str);
+}
+
+/// Log a panic's message to `console.error` before the module traps, so the
+/// opaque `RuntimeError: unreachable` has a cause next to it. No-op natively.
+fn install_panic_hook() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::panic::set_hook(Box::new(|info| {
+                console_error(&format!("rl-collectors-web panicked: {info}"));
+            }));
+        });
+    }
 }
 
 fn thumbnail_js(r: &ThumbnailRef) -> Result<JsValue, JsValue> {
