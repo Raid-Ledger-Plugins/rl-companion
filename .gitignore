@@ -3,3 +3,4 @@
 node_modules/
 apps/companion/dist/
 apps/companion/src-tauri/gen/
+crates/rl-collectors-web/pkg/

@@ -35,6 +35,18 @@ const NAME_LEN: usize = 256;
 pub const MAX_FILES: u32 = 65_536;
 /// Default cap on one decompressed entry (the largest save entry is ~48 MB).
 pub const DEFAULT_MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+/// LZ4's largest possible expansion: one input byte stands for at most 255
+/// output bytes, so fewer than `size / 255` compressed bytes cannot be real.
+const LZ4_MAX_RATIO: u64 = 255;
+/// A zstd frame may declare a window up to its entry's size, or this much
+/// for smaller entries. 8 MiB (windowLog 23) is the largest window any
+/// standard zstd level up to 19 picks, so a frame a real encoder made for a
+/// small entry still fits; anything larger is refused before the decoder
+/// reserves it (ruzstd itself allows windows up to 100 MiB).
+const ZSTD_MIN_WINDOW_ALLOWANCE: u64 = 8 * 1024 * 1024;
+/// Most bytes reserved up front for a zstd entry; the rest grows as decoded.
+const ZSTD_PREALLOC_CAP: usize = 16 * 1024 * 1024;
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
 
 /// Compression method, from the low nibble of an entry's flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +208,12 @@ fn decode(entry: &Entry, raw: &[u8], expected: usize) -> Result<Vec<u8>, LspkErr
     match entry.compression() {
         CompressionMethod::None => Ok(raw.to_vec()),
         CompressionMethod::Lz4 => {
+            if !lz4_can_hold(raw.len() as u64, expected as u64) {
+                return Err(failed(format!(
+                    "{} compressed bytes cannot hold {expected} bytes",
+                    raw.len()
+                )));
+            }
             lz4_flex::block::decompress(raw, expected).map_err(|e| failed(e.to_string()))
         }
         CompressionMethod::Zstd => zstd_decode(raw, expected).map_err(failed),
@@ -208,16 +226,72 @@ fn decode(entry: &Entry, raw: &[u8], expected: usize) -> Result<Vec<u8>, LspkErr
     }
 }
 
-/// Decode one zstd frame, reading at most `expected + 1` bytes so a lying
-/// frame cannot balloon memory; the caller compares the length.
+/// Whether `compressed` LZ4 bytes could possibly expand to `size` bytes.
+fn lz4_can_hold(compressed: u64, size: u64) -> bool {
+    compressed.saturating_mul(LZ4_MAX_RATIO) >= size
+}
+
+/// Decode one zstd frame. The frame header is checked first so a tiny entry
+/// cannot make the decoder reserve a huge window; then at most
+/// `expected + 1` bytes are read and the caller compares the length.
 fn zstd_decode(raw: &[u8], expected: usize) -> Result<Vec<u8>, String> {
+    let wanted = expected as u64;
+    let window = zstd_window_size(raw)?;
+    let allowance = wanted.max(ZSTD_MIN_WINDOW_ALLOWANCE);
+    if window > allowance {
+        return Err(format!(
+            "zstd frame declares a {window}-byte window, over the {allowance}-byte allowance for this entry"
+        ));
+    }
     let decoder = ruzstd::decoding::StreamingDecoder::new(raw).map_err(|e| format!("{e:?}"))?;
-    let mut out = Vec::with_capacity(expected);
+    let mut out = Vec::with_capacity(expected.min(ZSTD_PREALLOC_CAP));
     decoder
-        .take(expected as u64 + 1)
+        .take(wanted + 1)
         .read_to_end(&mut out)
         .map_err(|e| e.to_string())?;
     Ok(out)
+}
+
+/// The window size a zstd frame header declares (RFC 8878 §3.1.1.1); for a
+/// single-segment frame that is its content size. A content size that
+/// disagrees with the file table surfaces later as a size mismatch.
+fn zstd_window_size(raw: &[u8]) -> Result<u64, String> {
+    if raw.get(..4) != Some(&ZSTD_MAGIC[..]) {
+        return Err("not a zstd frame (bad magic)".to_owned());
+    }
+    let short = || "zstd frame header is truncated".to_owned();
+    let descriptor = *raw.get(4).ok_or_else(short)?;
+    let single_segment = descriptor & 0x20 != 0;
+    let mut at = 5;
+    let mut window = None;
+    if !single_segment {
+        let wd = *raw.get(at).ok_or_else(short)?;
+        at += 1;
+        let base = 1u64 << (10 + u32::from(wd >> 3));
+        window = Some(base + (base / 8) * u64::from(wd & 7));
+    }
+    at += match descriptor & 0x03 {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 4,
+    };
+    let fcs_len = match descriptor >> 6 {
+        0 => usize::from(single_segment),
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    let mut content = None;
+    if fcs_len > 0 {
+        let field = raw.get(at..at + fcs_len).ok_or_else(short)?;
+        let mut le = [0u8; 8];
+        le[..fcs_len].copy_from_slice(field);
+        let n = u64::from_le_bytes(le);
+        content = Some(if fcs_len == 2 { n + 256 } else { n });
+    }
+    // A single-segment frame always carries its content size.
+    window.or(content).ok_or_else(short)
 }
 
 fn read_file_table(bytes: &[u8], offset: u64) -> Result<Vec<Entry>, LspkError> {
@@ -229,6 +303,11 @@ fn read_file_table(bytes: &[u8], offset: u64) -> Result<Vec<Entry>, LspkError> {
     let compressed_size = u64::from(le_u32(head, 4));
     let compressed = slice(bytes, offset + 8, compressed_size, "file table")?;
     let expected = num_files as usize * ENTRY_LEN;
+    if !lz4_can_hold(compressed_size, expected as u64) {
+        return Err(LspkError::FileTable(format!(
+            "{compressed_size} compressed bytes cannot hold {num_files} entries ({expected} bytes)"
+        )));
+    }
     let table = lz4_flex::block::decompress(compressed, expected)
         .map_err(|e| LspkError::FileTable(e.to_string()))?;
     if table.len() != expected {

@@ -208,3 +208,34 @@ rl_test! {
         );
     }
 }
+
+rl_test! {
+    fn refuses_a_file_table_too_small_for_its_count_before_allocating() {
+        let mut bytes = sample();
+        let table = get_u64(&bytes, 8) as usize;
+        // 65_536 entries is 17.8 MiB; the sample's few compressed bytes
+        // cannot expand that far even at LZ4's 255:1 maximum.
+        set_u32(&mut bytes, table, 65_536);
+        let err = read_lspk(&bytes).unwrap_err();
+        assert!(matches!(&err, LspkError::FileTable(m) if m.contains("cannot hold")), "{err:?}");
+    }
+}
+
+rl_test! {
+    fn refuses_a_zstd_window_larger_than_the_entry_before_decoding() {
+        // Descriptor 0x00 (no content size), then a window byte, then one
+        // last raw block of 2 bytes. 0x80 declares 64 MiB; 0x00 is 1 KiB.
+        const BIG: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x80, 0x11, 0x00, 0x00, b'{', b'}'];
+        const SMALL: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x00, 0x11, 0x00, 0x00, b'{', b'}'];
+        let ok = write_lspk(&one("s.bin", b"{}", Method::Precompressed(0x23, SMALL)));
+        let package = read_lspk(&ok).expect("table parses");
+        assert_eq!(package.read_file("s.bin").expect("1 KiB window decodes"), b"{}");
+        let bomb = write_lspk(&one("b.bin", b"{}", Method::Precompressed(0x23, BIG)));
+        let package = read_lspk(&bomb).expect("table parses");
+        let err = package.read_file("b.bin").unwrap_err();
+        assert!(
+            matches!(&err, LspkError::Decompress { reason, .. } if reason.contains("67108864-byte window")),
+            "{err:?}"
+        );
+    }
+}
