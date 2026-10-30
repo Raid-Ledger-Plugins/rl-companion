@@ -85,6 +85,16 @@ jobs:
       # Ledger vendors this pkg/ with the commit sha and the .wasm sha256.
       - name: wasm-pack build rl-collectors-web (--target web, wasm-opt -Oz)
         run: wasm-pack build crates/rl-collectors-web --target web --release
+      # The synthetic .lsv Raid Ledger's upload tests feed inspectBg3Save,
+      # plus the result it must return. Written after the build, which
+      # recreates pkg/.
+      - name: Export the synthetic .lsv fixture into pkg/fixtures
+        run: |
+          out="$PWD/crates/rl-collectors-web/pkg/fixtures"
+          RL_FIXTURE_OUT="$out" cargo test -p rl-collectors-web export_synthetic_fixture_for_raid_ledger
+          test -s "$out/synthetic-act2.lsv"
+          test -s "$out/synthetic-act2.expected.json"
+          sha256sum "$out"/* | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report .wasm size
         run: |
           f=crates/rl-collectors-web/pkg/rl_collectors_web_bg.wasm
@@ -92,7 +102,7 @@ jobs:
           gz=$(gzip -9 -c "$f" | wc -c)
           sum=$(sha256sum "$f" | cut -d' ' -f1)
           echo "rl_collectors_web_bg.wasm raw=${raw}B gzip=${gz}B sha256=${sum} commit=${GITHUB_SHA}" | tee -a "$GITHUB_STEP_SUMMARY"
-          ls -la crates/rl-collectors-web/pkg
+          ls -la crates/rl-collectors-web/pkg crates/rl-collectors-web/pkg/fixtures
       - uses: actions/upload-artifact@v4
         with:
           name: rl-collectors-web-pkg

@@ -97,6 +97,71 @@ rl_test! {
 }
 
 rl_test! {
+    fn damage_after_a_valid_header_is_corrupt_package() {
+        let valid = save(SAVEINFO.as_bytes(), None);
+        let cut_table = inspect(&valid[..valid.len() - 3]).expect_err("cut file table");
+        assert_eq!(cut_table.0, ErrorCode::CorruptPackage, "{}", cut_table.1);
+        let header_only = inspect(&valid[..44]).expect_err("header, no table");
+        assert_eq!(header_only.0, ErrorCode::CorruptPackage, "{}", header_only.1);
+        let bad_lz4 = write_lspk(&[FileSpec {
+            name: "SaveInfo.json",
+            data: SAVEINFO.as_bytes(),
+            method: Method::Precompressed(0x22, b"\xff\xff\xff"),
+        }]);
+        let (c, msg) = inspect(&bad_lz4).expect_err("3 bytes cannot hold SaveInfo.json");
+        assert_eq!(c, ErrorCode::CorruptPackage, "{msg}");
+        assert!(msg.contains("cannot hold"), "{msg}");
+    }
+}
+
+rl_test! {
+    fn reads_zstd_save_info_and_refuses_an_oversized_window() {
+        let zstd = write_lspk(&[FileSpec { name: "SaveInfo.json", data: SAVEINFO.as_bytes(), method: Method::ZstdRaw }]);
+        let got = inspect(&zstd).expect("zstd SaveInfo.json");
+        let parsed: Value = serde_json::from_str(&got.save_info).expect("saveInfo is JSON text");
+        assert_eq!(parsed, serde_json::from_str::<Value>(SAVEINFO).expect("fixture is JSON"));
+        // Same 2-byte raw-block frame, window byte 0x00 (1 KiB) vs 0x80 (64 MiB).
+        const SMALL: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x00, 0x11, 0x00, 0x00, b'{', b'}'];
+        const BIG: &[u8] = &[0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x80, 0x11, 0x00, 0x00, b'{', b'}'];
+        let frame = |bytes: &'static [u8]| {
+            write_lspk(&[FileSpec { name: "SaveInfo.json", data: b"{}", method: Method::Precompressed(0x23, bytes) }])
+        };
+        assert_eq!(inspect(&frame(SMALL)).expect("1 KiB window").save_info, "{}");
+        let (c, msg) = inspect(&frame(BIG)).expect_err("64 MiB window on a 2-byte entry");
+        assert_eq!(c, ErrorCode::CorruptPackage, "{msg}");
+        assert!(msg.contains("67108864-byte window"), "{msg}");
+    }
+}
+
+/// CI writes the synthetic save Raid Ledger vendors into `pkg/fixtures/`
+/// (`RL_FIXTURE_OUT`): the `.lsv` plus what `inspectBg3Save` must return
+/// for it (minus the `webp` bytes, which are the contract's placeholder).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn export_synthetic_fixture_for_raid_ledger() {
+    let Some(dir) = std::env::var_os("RL_FIXTURE_OUT") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let bytes = save(&with_bom(SAVEINFO), Some(WEBP));
+    let got = inspect(&bytes).expect("fixture inspects");
+    let (_, r) = got.thumbnail.expect("fixture has a thumbnail");
+    let expected = serde_json::json!({
+        "saveInfo": got.save_info,
+        "thumbnail": {
+            "sha256": r.sha256,
+            "byteLength": r.byte_length,
+            "width": r.width,
+            "height": r.height,
+        },
+    });
+    let text = serde_json::to_string_pretty(&expected).expect("serialise expected");
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    std::fs::write(dir.join("synthetic-act2.lsv"), &bytes).expect("write .lsv");
+    std::fs::write(dir.join("synthetic-act2.expected.json"), text + "\n").expect("write expected");
+}
+
+rl_test! {
     fn error_code_strings_match_the_web_contract() {
         let all = [
             (ErrorCode::NotLspk, "not_lspk"),
