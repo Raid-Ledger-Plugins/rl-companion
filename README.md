@@ -66,6 +66,21 @@ decoder is exercised, not only raw blocks.
 
 Toolchain pinned to Rust 1.90.0, wasm-pack 0.13.1.
 
+## Releases
+
+Test releases are cut by pushing a tag:
+
+```sh
+git tag v0.1.0-test.1   # vX.Y.Z-test.N
+git push origin v0.1.0-test.1
+```
+
+`.github/workflows/release.yml` then builds the unsigned Windows installer
+(NSIS `.exe`) and the unsigned macOS `.dmg`, and publishes both as a GitHub
+**pre-release** for that tag, with notes on getting past the "unsigned app"
+warnings (Windows: More info → Run anyway; macOS: right-click → Open).
+Re-running the workflow for the same tag replaces the attached files.
+
 ## License
 
 MIT, see `LICENSE`.

@@ -1,0 +1,126 @@
+name: Release
+
+# Tagged test releases (ROK-2057). Pushing a tag such as `v0.1.0-test.1`
+# builds the unsigned desktop installers and publishes them as a GitHub
+# pre-release for that tag. Nothing here signs or notarises anything.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The two build jobs mirror `app-build-windows` / `app-build-macos` in
+  # ci.yml step for step. Keep them in sync when either changes. Third-party
+  # actions are pinned to the commit their ci.yml ref resolves to
+  # (dtolnay/rust-toolchain branch 1.90.0, Swatinem/rust-cache tag v2).
+  build-windows:
+    name: build (windows, unsigned NSIS)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7dcc700092a1a8b9c17ba0e140b4e34e93000946 # 1.90.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/companion/package-lock.json
+      - working-directory: apps/companion
+        run: npm ci
+      - working-directory: apps/companion
+        run: npx tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rl-companion-windows-nsis
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: build (macos, unsigned dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@7dcc700092a1a8b9c17ba0e140b4e34e93000946 # 1.90.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/companion/package-lock.json
+      - working-directory: apps/companion
+        run: npm ci
+      - working-directory: apps/companion
+        run: npx tauri build --bundles dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rl-companion-macos-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: publish pre-release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check both installers are present
+        run: |
+          shopt -s nullglob
+          exe=(dist/*.exe)
+          dmg=(dist/*.dmg)
+          ls -la dist
+          if [ "${#exe[@]}" -ne 1 ] || [ "${#dmg[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one .exe and one .dmg, got ${#exe[@]} and ${#dmg[@]}"
+            exit 1
+          fi
+      - name: Write release notes
+        run: |
+          commit_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          cat > notes.md <<EOF
+          **Unsigned test build.** These installers are not code-signed, so your
+          computer will warn you before running them.
+
+          - **Windows** (\`.exe\`): when SmartScreen says "Windows protected your PC",
+            click **More info**, then **Run anyway**.
+          - **macOS** (\`.dmg\`): open the disk image, drag the app to Applications,
+            then **right-click** the app and choose **Open** (double-clicking the
+            first time is blocked).
+
+          Built from commit [\`${GITHUB_SHA:0:7}\`](${commit_url}).
+          EOF
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # Re-run of the same tag: replace the assets, keep the release.
+            gh release upload "$GITHUB_REF_NAME" dist/*.exe dist/*.dmg \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.exe dist/*.dmg \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --prerelease \
+              --title "rl-companion $GITHUB_REF_NAME (unsigned test build)" \
+              --notes-file notes.md
+          fi
