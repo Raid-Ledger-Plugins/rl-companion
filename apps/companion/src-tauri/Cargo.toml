@@ -35,6 +35,8 @@ thiserror = "2"
 rl-collectors = { path = "../../../crates/rl-collectors" }
 notify = "8"
 tauri-plugin-dialog = "2"
+# Desktop-only plugins (the app ships for Windows/macOS/Linux only).
+tauri-plugin-autostart = "2.7"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }

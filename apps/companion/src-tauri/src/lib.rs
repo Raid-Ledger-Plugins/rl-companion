@@ -4,6 +4,7 @@
 //! and the collector runtime (lane C-3): watch WoW's `LedgerLink.lua`, settle,
 //! upload changed exports, honour the tray's Upload now / Pause.
 
+pub mod autostart;
 pub mod bg3_collector;
 pub mod blob_send;
 pub mod collector;
@@ -36,6 +37,10 @@ use tauri::{Listener, Manager};
 /// the tray menu.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![autostart::AUTOSTART_ARG]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -52,6 +57,12 @@ pub fn run() {
             let kick = rt.clone();
             app.listen(tray::UPLOAD_NOW_EVENT, move |_| kick.kick());
             runtime::start(app.handle().clone(), rt);
+            autostart::init_default(app.handle());
+            // The window starts hidden (tauri.conf.json); a login-item launch
+            // leaves it in the tray, any other launch shows it.
+            if autostart::should_show_window(autostart::process_args()) {
+                tray::show_window(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

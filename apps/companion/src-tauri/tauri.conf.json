@@ -16,7 +16,8 @@
         "title": "RL Companion",
         "width": 440,
         "height": 600,
-        "resizable": true
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {

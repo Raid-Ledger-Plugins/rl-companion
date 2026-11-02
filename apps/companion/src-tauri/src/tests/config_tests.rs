@@ -67,6 +67,7 @@ fn config_round_trips_and_defaults_to_prod() {
         collector_roots: Default::default(),
         collector_consent: Default::default(),
         legacy_ledgerlink_enabled: None,
+        autostart_initialized: true,
     };
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);
