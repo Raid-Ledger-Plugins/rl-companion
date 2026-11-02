@@ -123,7 +123,9 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
 
 struct Inner {
     status: String,
-    results: BTreeMap<String, CharResult>,
+    /// Keyed by `(scope, item)`: every BG3 save shares the item `save`, so the
+    /// scope (one per save file) keeps one save's result from overwriting another's.
+    results: BTreeMap<(String, String), CharResult>,
     log: VecDeque<LogLine>,
     sent: SentState,
     /// No uploads before this (a 429's `Retry-After`).
@@ -207,7 +209,7 @@ impl Runtime {
         let mut inner = self.lock();
         let at = now();
         inner.results.insert(
-            pending.item.clone(),
+            (pending.scope.clone(), pending.item.clone()),
             CharResult {
                 label: pending.label.clone(),
                 result: fx.text.clone(),

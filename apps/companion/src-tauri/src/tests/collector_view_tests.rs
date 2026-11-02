@@ -6,7 +6,8 @@ use crate::collector_view::{apply_root, device_state, rows};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, WOW_LEDGERLINK};
 use crate::preview::{base64, hold};
-use crate::runtime::Runtime;
+use crate::runtime::{effect, Runtime};
+use crate::upload::UploadOutcome;
 use serde_json::json;
 use std::collections::BTreeMap;
 
@@ -198,4 +199,26 @@ fn consent_round_trips_and_is_omitted_when_empty() {
     );
     let back: AppConfig = serde_json::from_str(&json).unwrap_or_default();
     assert!(back.consented(BG3_SAVE.id) && !back.consented(WOW_LEDGERLINK.id));
+}
+
+#[test]
+fn every_save_keeps_its_own_result_when_one_is_rejected_and_another_lands() {
+    let dir = super::temp_dir("two-save-results");
+    let rt = Runtime::new(dir.join("sent.json"));
+    let rejected = pending("A", "2026-10-01T00:00:00Z", "a1");
+    let accepted = pending("B", "2026-10-02T00:00:00Z", "b2");
+    rt.finish(
+        &rejected,
+        &effect(&UploadOutcome::Rejected {
+            status: 422,
+            code: "invalid".into(),
+            issue: None,
+        }),
+    );
+    rt.finish(&accepted, &effect(&UploadOutcome::Accepted));
+    let results = rt.snapshot(&AppConfig::default()).results;
+    let by_label: Vec<(&str, bool)> = results.iter().map(|r| (r.label.as_str(), r.ok)).collect();
+    assert_eq!(by_label.len(), 2, "both saves keep a result: {by_label:?}");
+    assert!(by_label.contains(&("A", false)), "{by_label:?}");
+    assert!(by_label.contains(&("B", true)), "{by_label:?}");
 }
