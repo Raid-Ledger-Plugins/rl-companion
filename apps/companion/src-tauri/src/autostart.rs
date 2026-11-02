@@ -61,8 +61,13 @@ pub fn first_run_action(initialized: bool, enabled: bool) -> FirstRun {
 }
 
 /// Run once from `setup`: default start-at-login to on, exactly once. A failed
-/// `enable()` leaves the flag unset so the next run tries again.
+/// `enable()` leaves the flag unset so the next run tries again. Debug builds
+/// (`tauri dev`) skip it: they would register the debug binary for login and
+/// mark the shared config, so the installed app would never correct it.
 pub fn init_default(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
     let shared = app.state::<Shared>();
     let launcher = app.autolaunch();
     let enabled = launcher.is_enabled().unwrap_or(false);
