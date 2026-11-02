@@ -13,6 +13,7 @@ use rl_collectors::{
     read_lspk, sha256_hex, thumbnail_ref, Bg3SaveMessage, CampaignKeySource, SaveMeta,
 };
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub const CONTRACT: &str = rl_collectors::CONTRACT;
 pub const CONTRACT_VERSION: u32 = rl_collectors::CONTRACT_VERSION;
@@ -53,6 +54,18 @@ impl Bg3SaveCollector {
             }
         }
         out
+    }
+
+    /// `saves` newest first by mtime (see [`newest_first`]).
+    fn by_mtime(&self, saves: Vec<PathBuf>) -> Vec<PathBuf> {
+        let stamped = saves
+            .into_iter()
+            .map(|p| {
+                let at = self.scope.metadata(&p).and_then(|m| m.modified()).ok();
+                (p, at)
+            })
+            .collect();
+        newest_first(stamped)
     }
 
     fn scan_file(&self, path: &Path, origin: &str, sent: &SentState, scan: &mut Scan) {
@@ -96,6 +109,14 @@ impl Bg3SaveCollector {
             Err(e) => scan.notes.push(format!("{name}: not readable yet ({e})")),
         }
     }
+}
+
+/// Saves ordered newest first by mtime (unknown mtimes last, ties by path),
+/// so a rate-limited batch spends its budget on the saves played last
+/// (ROK-2068). A selection filter (per campaign, max age) runs after this.
+pub fn newest_first(mut saves: Vec<(PathBuf, Option<SystemTime>)>) -> Vec<PathBuf> {
+    saves.sort_by(|(pa, a), (pb, b)| b.cmp(a).then_with(|| pa.cmp(pb)));
+    saves.into_iter().map(|(p, _)| p).collect()
 }
 
 /// Parse one `.lsv` into its message, thumbnail blob and window label. The
@@ -147,7 +168,7 @@ impl Collector for Bg3SaveCollector {
 
     fn scan(&self, origin: &str, sent: &SentState) -> Scan {
         let mut scan = Scan::default();
-        for save in self.saves() {
+        for save in self.by_mtime(self.saves()) {
             self.scan_file(&save, origin, sent, &mut scan);
         }
         scan

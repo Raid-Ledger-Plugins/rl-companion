@@ -1,7 +1,7 @@
 //! ROK-2061 lane 2: the BG3 save collector, through the registry.
 
 use super::temp_dir;
-use crate::bg3_collector::build;
+use crate::bg3_collector::{build, newest_first};
 use crate::collector::SentState;
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE};
@@ -192,4 +192,53 @@ fn blob_urls_take_only_a_sha256() {
     );
     assert!(up.blob_url("../messages/x").is_err());
     assert!(up.blob_url(&sha.to_uppercase()).is_err());
+}
+
+#[test]
+fn newest_first_orders_by_mtime_with_unknown_last() {
+    let at = |s: u64| Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(s));
+    let order = newest_first(vec![
+        (PathBuf::from("old"), at(100)),
+        (PathBuf::from("none"), None),
+        (PathBuf::from("new"), at(300)),
+        (PathBuf::from("mid"), at(200)),
+    ]);
+    let names: Vec<String> = order
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["new", "mid", "old", "none"]);
+}
+
+#[test]
+fn a_scan_queues_the_newest_save_first() {
+    let story = temp_dir("bg3-newest");
+    let stamp = |folder: &str, secs: u64| {
+        let dir = story.join(folder);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let file = dir.join("QuickSave_1.lsv");
+        std::fs::write(&file, save_bytes()).expect("lsv");
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        let f = std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .expect("open");
+        f.set_modified(at).expect("set mtime");
+    };
+    stamp("A_old-1", 1_700_000_000);
+    stamp("B_new-2", 1_800_000_000);
+    stamp("C_mid-3", 1_750_000_000);
+    let on = registry(&story, true);
+    let bg3 = on.get(BG3_SAVE.id).expect("bg3");
+    let scan = bg3
+        .scan("https://raid.example.net", &SentState::default())
+        .expect("enabled");
+    let folders = ["A_old", "B_new", "C_mid"];
+    let order: Vec<&str> = scan
+        .pending
+        .iter()
+        .filter_map(|p| folders.into_iter().find(|f| p.scope.contains(f)))
+        .collect();
+    assert_eq!(order, ["B_new", "C_mid", "A_old"], "{:?}", scan.notes);
+    let _ = std::fs::remove_dir_all(story);
 }
