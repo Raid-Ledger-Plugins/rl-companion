@@ -40,6 +40,9 @@ pub struct AppConfig {
     /// Start-at-login was defaulted on once (ROK-2065). After that the user's
     /// choice stands; the app never turns it back on. Missing = first run.
     pub autostart_initialized: bool,
+    /// The Windows 11 tray icon was promoted out of the overflow once
+    /// (ROK-2065). Never promoted again, so a user's "hide" sticks.
+    pub tray_promoted_once: bool,
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
@@ -56,6 +59,7 @@ impl Default for AppConfig {
             collector_consent: BTreeMap::new(),
             legacy_ledgerlink_enabled: None,
             autostart_initialized: false,
+            tray_promoted_once: false,
         }
     }
 }

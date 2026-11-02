@@ -39,6 +39,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2.7"
 tauri-plugin-single-instance = "2.5"
 
+# First-run tray promotion on Windows 11 (ROK-2065, tray_promote.rs).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 wiremock = "0.6"

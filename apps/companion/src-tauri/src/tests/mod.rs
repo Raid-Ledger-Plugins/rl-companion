@@ -12,6 +12,7 @@ mod poll_tests;
 mod registry_gating_tests;
 mod registry_tests;
 mod scope_tests;
+mod tray_promote_tests;
 mod upload_tests;
 mod watch_tests;
 

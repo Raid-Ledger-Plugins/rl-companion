@@ -23,6 +23,7 @@ pub mod scope;
 pub mod state;
 pub mod token;
 pub mod tray;
+pub mod tray_promote;
 pub mod upload;
 pub mod watch;
 pub mod wow_collector;
@@ -58,6 +59,7 @@ pub fn run() {
             );
             app.manage(shared);
             tray::build(app.handle())?;
+            tray_promote::start(app.handle());
             let sent_path = app.path().app_data_dir()?.join(collector::SENT_STATE_FILE);
             let rt = Arc::new(runtime::Runtime::new(sent_path));
             app.manage(rt.clone());
