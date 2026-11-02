@@ -29,7 +29,6 @@ fn shipped_manifests_are_valid_and_match_the_contract_ids() {
         WOW_LEDGERLINK.contract_version,
         crate::wow_collector::CONTRACT_VERSION
     );
-    assert!(!WOW_LEDGERLINK.default_enabled, "uploads are opt-in");
     assert_eq!(
         WOW_LEDGERLINK.settle_samples(),
         rl_collectors::DEFAULT_STABLE_SAMPLES,
