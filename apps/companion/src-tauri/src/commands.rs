@@ -6,9 +6,11 @@
 use crate::config::{default_device_name, device_os, normalise_server_url, sanitise_device_name};
 use crate::link::{DeviceInfo, LinkClient, SelfCheck};
 use crate::poll::{run_poll, LinkOutcome, PollPlan};
+use crate::runtime::Runtime;
 use crate::state::Shared;
 use crate::tray;
 use serde::Serialize;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
@@ -174,11 +176,14 @@ fn finish_link(app: &AppHandle, origin: &str, outcome: LinkOutcome) {
     let payload = match outcome {
         LinkOutcome::Linked { token, device } => {
             match app.state::<Shared>().save_token(origin, &token) {
-                Ok(()) => LinkEventDto {
-                    state: "linked",
-                    message: None,
-                    device_name: Some(device.name),
-                },
+                Ok(()) => {
+                    app.state::<Arc<Runtime>>().linked();
+                    LinkEventDto {
+                        state: "linked",
+                        message: None,
+                        device_name: Some(device.name),
+                    }
+                }
                 Err(e) => event("failed", Some(e.to_string())),
             }
         }

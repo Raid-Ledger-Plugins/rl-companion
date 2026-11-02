@@ -244,6 +244,20 @@ impl Runtime {
         inner.relink = relink;
     }
 
+    /// A scan is starting: a 401 from an earlier scan must not ride along on
+    /// this scan's mid-scan updates ("Uploading…"). Only the scan's own 401
+    /// sets it again, through `set_lines`.
+    pub fn begin_scan(&self) {
+        self.lock().relink = false;
+    }
+
+    /// The device linked (or re-linked): the old 401 no longer applies, and a
+    /// scan runs now so the waiting exports go up with the new token.
+    pub fn linked(&self) {
+        self.lock().relink = false;
+        self.kick();
+    }
+
     /// Hold `id`'s batch behind its first-upload preview (replaces any
     /// earlier hold); `None` clears it.
     pub fn set_held(&self, id: &str, held: Option<Held>) {
@@ -381,6 +395,7 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
 
 /// Scan every registered collector; upload what the enabled ones found.
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
+    rt.begin_scan();
     let cfg = app.state::<Shared>().config();
     let registry = CollectorRegistry::from_config(&cfg);
     let shared = app.state::<Shared>();

@@ -258,3 +258,37 @@ fn a_401_sets_the_structured_relink_flag_whatever_the_joined_line_says() {
     rt.set_lines(lines, Some("Link this device to upload".into()), false);
     assert!(!rt.snapshot(&cfg).relink, "the next scan clears it");
 }
+
+fn relinked_runtime(tag: &str) -> Runtime {
+    let rt = Runtime::new(super::temp_dir(tag).join("sent.json"));
+    let fx = effect(&UploadOutcome::Unauthorized);
+    let lines = BTreeMap::from([(WOW_LEDGERLINK.id.to_owned(), fx.text.clone())]);
+    rt.set_lines(lines, None, fx.relink);
+    assert!(rt.snapshot(&AppConfig::default()).relink, "the 401 set it");
+    rt
+}
+
+#[test]
+fn a_successful_link_after_a_401_clears_the_relink_flag() {
+    let rt = relinked_runtime("relink-then-link");
+    rt.linked();
+    let s = rt.snapshot(&AppConfig::default());
+    assert!(!s.relink, "a fresh link is not a re-link notice");
+}
+
+#[test]
+fn a_mid_scan_update_after_a_re_link_does_not_carry_the_old_401() {
+    let rt = relinked_runtime("relink-mid-scan");
+    rt.linked();
+    rt.begin_scan();
+    rt.set_status("Uploading 2 export(s)…");
+    assert!(!rt.snapshot(&AppConfig::default()).relink, "after link");
+    // Even without the link hook, a new scan never inherits the last scan's 401.
+    let rt = relinked_runtime("relink-stale-scan");
+    rt.begin_scan();
+    rt.set_status("Uploading 2 export(s)…");
+    assert!(
+        !rt.snapshot(&AppConfig::default()).relink,
+        "stale flag leaked"
+    );
+}
