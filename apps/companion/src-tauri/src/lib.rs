@@ -100,6 +100,20 @@ pub fn run() {
             collector_commands::confirm_first_upload,
             collector_commands::skip_first_upload,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running RL Companion");
+        .build(tauri::generate_context!())
+        .expect("error while building RL Companion")
+        .run(|app, event| {
+            // macOS: clicking the Dock icon while the window is hidden sends
+            // Reopen, not a second launch, so single-instance never sees it.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                tray::show_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

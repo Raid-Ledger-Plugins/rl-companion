@@ -25,9 +25,11 @@ pub const RETRY_ATTEMPTS: u32 = 30;
 /// the environment variable that resolves each one.
 pub const KNOWN_FOLDERS: &[(&str, &str)] = &[
     ("{6D809377-6AF0-444B-8957-A3773F02200E}", "ProgramFiles"),
-    ("{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}", "ProgramFiles(x86)"),
+    (
+        "{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}",
+        "ProgramFiles(x86)",
+    ),
     ("{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}", "LOCALAPPDATA"),
-    ("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}", "SystemRoot"),
 ];
 
 /// Whether to start the promotion retry at all: only until it succeeded once.
@@ -107,6 +109,7 @@ mod registry {
             }
         };
         let folders = resolved_folders();
+        let mut logged_error = false;
         for _ in 0..RETRY_ATTEMPTS {
             match try_promote(&exe, &folders) {
                 Ok(Outcome::Promoted) => {
@@ -120,7 +123,12 @@ mod registry {
                 }
                 Ok(Outcome::NoParentKey) => return,
                 Ok(Outcome::NotYet) => {}
-                Err(e) => eprintln!("RL Companion: tray promotion: {e}"),
+                // Log the first failure only: the retry loop runs up to 30 times.
+                Err(e) if !logged_error => {
+                    logged_error = true;
+                    eprintln!("RL Companion: tray promotion: {e}");
+                }
+                Err(_) => {}
             }
             std::thread::sleep(std::time::Duration::from_secs(RETRY_EVERY_SECS));
         }
