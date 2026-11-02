@@ -29,6 +29,7 @@ const base: CollectorStatus = {
   ],
   log: [{ at: "2026-11-02T18:00:01Z", text: "LedgerLink uploads turned on" }],
   device: null,
+  relink: false,
   collectors: [],
 };
 

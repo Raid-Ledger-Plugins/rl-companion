@@ -222,3 +222,23 @@ fn every_save_keeps_its_own_result_when_one_is_rejected_and_another_lands() {
     assert!(by_label.contains(&("A", false)), "{by_label:?}");
     assert!(by_label.contains(&("B", true)), "{by_label:?}");
 }
+
+#[test]
+fn a_401_sets_the_structured_relink_flag_whatever_the_joined_line_says() {
+    let dir = super::temp_dir("relink-flag");
+    let rt = Runtime::new(dir.join("sent.json"));
+    let cfg = AppConfig::default();
+    let fx = effect(&UploadOutcome::Unauthorized);
+    assert!(fx.relink, "a 401 clears the token");
+    let lines = BTreeMap::from([
+        (WOW_LEDGERLINK.id.to_owned(), "Up to date".to_owned()),
+        (BG3_SAVE.id.to_owned(), "Re-link this device".to_owned()),
+    ]);
+    rt.set_lines(lines.clone(), None, fx.relink);
+    rt.set_status("Up to date · Re-link this device");
+    let s = rt.snapshot(&cfg);
+    assert_ne!(s.status, "Re-link this device", "the line is joined");
+    assert!(s.relink, "the window learns of the 401 from the flag");
+    rt.set_lines(lines, Some("Link this device to upload".into()), false);
+    assert!(!rt.snapshot(&cfg).relink, "the next scan clears it");
+}

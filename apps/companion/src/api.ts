@@ -69,6 +69,8 @@ export interface CollectorStatus {
   log: LogLine[];
   /** Device-level state (paused, not linked, rate limited), shown once. */
   device: string | null;
+  /** The last scan hit a 401 and the token was cleared; the window shows it unlinked. */
+  relink: boolean;
   collectors: CollectorRow[];
 }
 

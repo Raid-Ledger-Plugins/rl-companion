@@ -54,6 +54,9 @@ pub struct CollectorStatusDto {
     pub log: Vec<LogLine>,
     /// Device-level state (paused, not linked, rate limited), shown once.
     pub device: Option<String>,
+    /// The server refused the device token (401) on the last scan and the
+    /// token was cleared. The window keys off this, never off `status` text.
+    pub relink: bool,
     /// One row per registered collector.
     pub collectors: Vec<CollectorRowDto>,
 }
@@ -133,6 +136,8 @@ struct Inner {
     /// Each collector's own line from the last scan.
     lines: BTreeMap<String, String>,
     device: Option<String>,
+    /// The last scan hit a 401 and cleared the token.
+    relink: bool,
     /// Batches waiting on the user's first-upload confirmation.
     held: BTreeMap<String, Held>,
 }
@@ -156,6 +161,7 @@ impl Runtime {
                 hold_until: None,
                 lines: BTreeMap::new(),
                 device: None,
+                relink: false,
                 held: BTreeMap::new(),
             }),
             kick: Notify::new(),
@@ -231,10 +237,11 @@ impl Runtime {
     }
 
     /// Remember the scan's per-collector lines and the device state.
-    pub fn set_lines(&self, lines: BTreeMap<String, String>, device: Option<String>) {
+    pub fn set_lines(&self, lines: BTreeMap<String, String>, device: Option<String>, relink: bool) {
         let mut inner = self.lock();
         inner.lines = lines;
         inner.device = device;
+        inner.relink = relink;
     }
 
     /// Hold `id`'s batch behind its first-upload preview (replaces any
@@ -289,6 +296,7 @@ impl Runtime {
             results: inner.results.values().cloned().collect(),
             log: inner.log.iter().cloned().collect(),
             device: inner.device.clone(),
+            relink: inner.relink,
             collectors: rows(cfg, Platform::current(), &env, &inner.lines, &previews),
         }
     }
@@ -384,6 +392,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let device = device_state(shared.is_paused(), rt.held_secs(), linked);
     let token = token.ok().flatten().filter(|_| device.is_none());
     let mut lines = BTreeMap::new();
+    let mut relink = false;
     for entry in registry.entries() {
         if !entry.enabled {
             rt.set_held(entry.manifest.id, None);
@@ -392,6 +401,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry, token.as_ref()).await;
         lines.insert(entry.manifest.id.to_owned(), line);
         if stop_all {
+            relink = true;
             break;
         }
     }
@@ -401,7 +411,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         Some(d) => format!("{d} · {line}"),
         None => line,
     };
-    rt.set_lines(lines, device);
+    rt.set_lines(lines, device, relink);
     publish(app, rt, &line);
 }
 

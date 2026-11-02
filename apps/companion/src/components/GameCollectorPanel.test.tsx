@@ -67,7 +67,7 @@ describe("GameCollectorPanel — per-game toggle", () => {
     const onToggle = vi.fn();
     const status: CollectorStatus = {
       enabled: true, wowDir: "D:\\WoW", status: "Paused — uploads resume when you unpause · Up to date",
-      results: [], log: [], device: "Paused — uploads resume when you unpause",
+      results: [], log: [], device: "Paused — uploads resume when you unpause", relink: false,
       collectors: [{ ...row, id: "wow-ledgerlink", displayName: "LedgerLink", status: "Up to date" }],
     };
     const p = { status, dirDraft: "D:\\WoW", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle, onUploadNow: vi.fn() };
