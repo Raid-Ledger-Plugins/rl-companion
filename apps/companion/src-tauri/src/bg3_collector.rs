@@ -113,7 +113,7 @@ impl Bg3SaveCollector {
 
 /// Saves ordered newest first by mtime (unknown mtimes last, ties by path),
 /// so a rate-limited batch spends its budget on the saves played last
-/// (ROK-2068). A selection filter (per campaign, max age) runs after this.
+/// (ROK-2068). A per-campaign selection filter (ROK-2070) will slot in after this.
 pub fn newest_first(mut saves: Vec<(PathBuf, Option<SystemTime>)>) -> Vec<PathBuf> {
     saves.sort_by(|(pa, a), (pb, b)| b.cmp(a).then_with(|| pa.cmp(pb)));
     saves.into_iter().map(|(p, _)| p).collect()

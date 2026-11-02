@@ -204,6 +204,13 @@ impl Runtime {
         secs_left(self.lock().hold_until, Instant::now())
     }
 
+    /// `true` exactly once after a 429 hold ran out, clearing it. The expiry
+    /// is latched on the instant, not sampled per tick, so a hold that runs
+    /// out while a scan is still running still triggers the next scan.
+    pub fn take_expired_hold(&self) -> bool {
+        take_expired(&mut self.lock().hold_until, Instant::now())
+    }
+
     pub fn set_status(&self, text: impl Into<String>) {
         self.lock().status = text.into();
     }
@@ -216,7 +223,7 @@ impl Runtime {
             (pending.scope.clone(), pending.item.clone()),
             CharResult {
                 label: pending.label.clone(),
-                result: fx.text.clone(),
+                result: shown_text(fx).to_owned(),
                 ok: fx.ok,
                 at,
             },
@@ -334,12 +341,36 @@ pub fn secs_left(until: Option<Instant>, now: Instant) -> Option<u64> {
     }
 }
 
+/// Clear `until` and return `true` if it is set and has passed at `now`.
+pub fn take_expired(until: &mut Option<Instant>, now: Instant) -> bool {
+    let expired = until.is_some() && secs_left(*until, now).is_none();
+    if expired {
+        *until = None;
+    }
+    expired
+}
+
 /// Whether a loop tick starts a scan: a file settled, the periodic rescan is
-/// due, or a 429 hold just ran out. Nothing else wakes the loop when a hold
-/// expires, so without the last case the batch sat until the next periodic
-/// scan (ROK-2068).
-pub fn tick_scans(was_held: bool, held: bool, settled: bool, idle_secs: u32) -> bool {
-    settled || idle_secs >= PERIODIC_SCAN_SECS || (was_held && !held)
+/// due, or a 429 hold ran out (from [`Runtime::take_expired_hold`]). Nothing
+/// else wakes the loop when a hold expires, so without the last case the
+/// batch sat until the next periodic scan (ROK-2068).
+pub fn tick_scans(hold_expired: bool, settled: bool, idle_secs: u32) -> bool {
+    settled || idle_secs >= PERIODIC_SCAN_SECS || hold_expired
+}
+
+/// The copy a settled upload leaves on screen. A 429's text carries a
+/// countdown that would freeze there, so it shows [`RETRYING`] instead.
+pub fn shown_text(fx: &Effect) -> &str {
+    if fx.hold.is_some() {
+        RETRYING
+    } else {
+        fx.text.as_str()
+    }
+}
+
+/// The batch line when an upload stopped the batch.
+pub fn stopped_line(sent: usize, waiting: usize, fx: &Effect) -> String {
+    format!("Uploaded {sent} of {waiting} export(s); {}", shown_text(fx))
 }
 
 fn now() -> String {
@@ -383,7 +414,6 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     // settle samples on a file WoW is still writing).
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut idle_secs = 0u32;
-    let mut was_held = false;
     scan_and_upload(&app, &rt).await;
     loop {
         let registry = CollectorRegistry::from_config(&app.state::<Shared>().config());
@@ -401,16 +431,15 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
         tokio::select! {
             _ = tick.tick() => {
                 idle_secs += 1;
-                let held = rt.held_secs().is_some();
+                let hold_expired = rt.take_expired_hold();
                 let settled = !settle.tick().is_empty();
-                if tick_scans(was_held, held, settled, idle_secs) {
+                if tick_scans(hold_expired, settled, idle_secs) {
                     idle_secs = 0;
                     scan_and_upload(&app, &rt).await;
-                } else if held {
+                } else if rt.held_secs().is_some() {
                     // Keep the window's rate-limit countdown live.
                     let _ = app.emit(STATUS_EVENT, status(&app, &rt));
                 }
-                was_held = held;
             }
             Some(path) = rx.recv() => {
                 let samples = registry.wanting(&path).map(|e| e.manifest.settle_samples()).max();
@@ -556,13 +585,7 @@ async fn upload_all(
             return ("Re-link this device".to_owned(), true);
         }
         if fx.stop {
-            let why = if fx.hold.is_some() {
-                RETRYING
-            } else {
-                fx.text.as_str()
-            };
-            let line = format!("Uploaded {sent} of {waiting} export(s); {why}");
-            return (line, false);
+            return (stopped_line(sent, waiting, &fx), false);
         }
     }
     (format!("Uploaded {sent} of {waiting} export(s)"), false)

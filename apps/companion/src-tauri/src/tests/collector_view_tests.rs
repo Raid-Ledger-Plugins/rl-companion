@@ -6,11 +6,13 @@ use crate::collector_view::{apply_root, device_note, device_state, rows, RETRYIN
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, WOW_LEDGERLINK};
 use crate::preview::{base64, hold};
-use crate::runtime::{effect, secs_left, tick_scans, Runtime};
+use crate::runtime::{
+    effect, secs_left, shown_text, stopped_line, take_expired, tick_scans, Runtime,
+};
 use crate::upload::UploadOutcome;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn env(k: &str) -> Option<String> {
     (k == "HOME").then(|| "/home/ada".to_owned())
@@ -297,11 +299,46 @@ fn a_mid_scan_update_after_a_re_link_does_not_carry_the_old_401() {
 
 #[test]
 fn an_expired_hold_starts_a_scan_on_the_next_tick() {
-    assert!(tick_scans(true, false, false, 1), "the hold just ran out");
-    assert!(!tick_scans(true, true, false, 1), "still held");
-    assert!(!tick_scans(false, false, false, 1), "nothing to do");
-    assert!(tick_scans(false, false, true, 1), "a file settled");
-    assert!(tick_scans(false, true, false, 300), "periodic rescan");
+    assert!(tick_scans(true, false, 1), "the hold just ran out");
+    assert!(!tick_scans(false, false, 1), "nothing to do, or still held");
+    assert!(tick_scans(false, true, 1), "a file settled");
+    assert!(tick_scans(false, false, 300), "periodic rescan");
+}
+
+#[test]
+fn an_expired_hold_is_taken_exactly_once() {
+    let now = Instant::now();
+    let later = now + Duration::from_secs(1);
+    let mut until = Some(now);
+    assert!(take_expired(&mut until, later), "a past hold is taken");
+    assert_eq!(until, None, "and cleared");
+    assert!(!take_expired(&mut until, later), "only once");
+    let live = now + Duration::from_secs(47);
+    let mut until = Some(live);
+    assert!(!take_expired(&mut until, now), "a live hold is not taken");
+    assert_eq!(until, Some(live), "and is kept");
+
+    let rt = Runtime::new(super::temp_dir("take-hold").join("sent.json"));
+    assert!(!rt.take_expired_hold(), "no hold, nothing to take");
+    rt.hold_for(Duration::ZERO);
+    assert_eq!(rt.held_secs(), None, "an expired hold shows no countdown");
+    assert!(rt.take_expired_hold(), "a hold already in the past is taken");
+    assert!(!rt.take_expired_hold(), "only once");
+}
+
+#[test]
+fn a_hold_that_expires_during_a_scan_still_starts_the_next_scan() {
+    let rt = Runtime::new(super::temp_dir("hold-mid-scan").join("sent.json"));
+    assert!(!tick_scans(rt.take_expired_hold(), false, 1), "idle tick");
+    // The scan hits a 429 whose Retry-After runs out before the scan
+    // returns, so no tick ever sees the hold live.
+    rt.hold_for(Duration::ZERO);
+    assert_eq!(rt.held_secs(), None, "no tick samples it as held");
+    assert!(
+        tick_scans(rt.take_expired_hold(), false, 2),
+        "the latched expiry rescans on the next tick"
+    );
+    assert!(!tick_scans(rt.take_expired_hold(), false, 3), "only once");
 }
 
 #[test]
@@ -347,4 +384,23 @@ fn baked_text_never_carries_a_countdown() {
         wait: Duration::from_secs(47),
     });
     assert_eq!(fx.hold, Some(Duration::from_secs(47)));
+    assert_eq!(shown_text(&fx), RETRYING);
+    assert_eq!(
+        stopped_line(2, 5, &fx),
+        format!("Uploaded 2 of 5 export(s); {RETRYING}"),
+        "the batch line"
+    );
+    let rt = Runtime::new(super::temp_dir("baked-result").join("sent.json"));
+    rt.finish(&pending("A", "2026-10-01T00:00:00Z", "a1"), &fx);
+    let shown: Vec<String> = rt
+        .snapshot(&AppConfig::default())
+        .results
+        .into_iter()
+        .map(|r| r.result)
+        .collect();
+    assert_eq!(shown, vec![RETRYING.to_owned()], "the per-export result");
+    let fx = effect(&UploadOutcome::Deferred {
+        reason: "offline".into(),
+    });
+    assert_eq!(shown_text(&fx), "Will retry: offline", "no hold keeps its text");
 }
