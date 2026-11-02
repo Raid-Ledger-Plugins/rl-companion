@@ -241,3 +241,30 @@ pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
     settle_ms: 3_000,
     no_files_hint: "No LedgerLink.lua found — check the WoW folder",
 };
+
+/// The BG3 save collector (ROK-2061 lane 2, contract `bg3-save/v1`). Its roots
+/// are the `Savegames/Story` folders; each save sits in its own sub-folder.
+pub const BG3_SAVE: CollectorManifest = CollectorManifest {
+    id: "bg3-save",
+    display_name: "Baldur's Gate 3",
+    contract_id: "bg3-save",
+    contract_version: 1,
+    default_enabled: false,
+    default_roots: &[
+        RootSpec {
+            platform: Platform::Windows,
+            path: r"%LOCALAPPDATA%\Larian Studios\Baldur's Gate 3\PlayerProfiles\Public\Savegames\Story",
+        },
+        RootSpec {
+            platform: Platform::Macos,
+            path: "~/Documents/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story",
+        },
+        RootSpec {
+            platform: Platform::Linux,
+            path: "~/.local/share/Steam/steamapps/compatdata/1086940/pfx/drive_c/users/steamuser/AppData/Local/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story",
+        },
+    ],
+    file_patterns: &["*.lsv"],
+    settle_ms: 3_000,
+    no_files_hint: "No BG3 save found — check the save folder",
+};

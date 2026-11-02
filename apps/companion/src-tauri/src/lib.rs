@@ -4,6 +4,7 @@
 //! and the collector runtime (lane C-3): watch WoW's `LedgerLink.lua`, settle,
 //! upload changed exports, honour the tray's Upload now / Pause.
 
+pub mod bg3_collector;
 pub mod collector;
 pub mod collector_commands;
 pub mod commands;

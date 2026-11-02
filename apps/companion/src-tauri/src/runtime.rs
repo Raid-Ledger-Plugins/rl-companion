@@ -373,6 +373,25 @@ async fn scan_and_upload_one(
     upload_all(app, rt, &uploader, &token, &scan.pending).await
 }
 
+/// PUT the message's blobs, then POST it. A blob the server refuses
+/// terminally is skipped (the message is still useful without it); any other
+/// blob failure (401, 429, network) is the message's outcome.
+async fn send_with_blobs(
+    uploader: &Uploader,
+    token: &crate::token::DeviceToken,
+    p: &PendingUpload,
+) -> UploadOutcome {
+    for blob in &p.blobs {
+        match uploader.send_blob(token, blob, tokio::time::sleep).await {
+            UploadOutcome::Accepted | UploadOutcome::Rejected { .. } => {}
+            other => return other,
+        }
+    }
+    uploader
+        .send(token, p.contract, &p.body, tokio::time::sleep)
+        .await
+}
+
 async fn upload_all(
     app: &AppHandle,
     rt: &Runtime,
@@ -389,9 +408,7 @@ async fn upload_all(
                 false,
             );
         }
-        let outcome = uploader
-            .send(token, p.contract, &p.body, tokio::time::sleep)
-            .await;
+        let outcome = send_with_blobs(uploader, token, p).await;
         let fx = effect(&outcome);
         rt.log(format!("{}: {}", p.label, fx.text));
         rt.finish(p, &fx);

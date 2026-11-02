@@ -6,11 +6,11 @@ use crate::collector::{envelope, scope_key, Collector, PendingUpload, Scan, Sent
 use crate::scope::WatchScope;
 use rl_collectors::{
     changed_entries, is_flavor_folder, ledgerlink_sv_candidates, parse_ledgerlink_outbox,
-    rfc3339_utc_from_unix_seconds, OutboxEntry, SvCandidate, LEDGERLINK_SV_FILE, MAX_SV_BYTES,
+    OutboxEntry, SvCandidate, LEDGERLINK_SV_FILE, MAX_SV_BYTES,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 pub const CONTRACT: &str = "wow-ledgerlink";
 pub const CONTRACT_VERSION: u32 = 1;
@@ -137,6 +137,7 @@ impl LedgerLinkCollector {
                 sha256: entry.sha256.clone(),
                 label: label(entry),
                 body: message(&entry.text, &captured_at),
+                blobs: Vec::new(),
             });
         }
     }
@@ -180,13 +181,7 @@ pub fn message(export_string: &str, captured_at: &str) -> serde_json::Value {
 /// `capturedAt` = the file's mtime (spec §5), never in the future (the
 /// server rejects more than 5 minutes ahead of its clock).
 pub fn captured_at(mtime: Option<SystemTime>) -> String {
-    let now = SystemTime::now();
-    let t = mtime.filter(|m| *m <= now).unwrap_or(now);
-    let secs = t
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    rfc3339_utc_from_unix_seconds(i64::try_from(secs).unwrap_or(0))
+    crate::collector::captured_at(mtime)
 }
 
 fn label(entry: &OutboxEntry) -> String {

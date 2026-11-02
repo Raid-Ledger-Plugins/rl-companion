@@ -5,9 +5,11 @@
 use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{
-    resolve_override, validate_all, CollectorManifest, ManifestError, Platform, WOW_LEDGERLINK,
+    resolve_override, validate_all, CollectorManifest, ManifestError, Platform, BG3_SAVE,
+    WOW_LEDGERLINK,
 };
 use crate::scope::WatchScope;
+use crate::bg3_collector::Bg3SaveCollector;
 use crate::wow_collector::LedgerLinkCollector;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -27,11 +29,21 @@ fn make_wow(roots: &[PathBuf], scope: WatchScope) -> Box<dyn Collector> {
     Box::new(LedgerLinkCollector::scoped(root, scope))
 }
 
-/// Every collector this build ships. Lane 2 (ROK-2061) adds `bg3-save`.
-pub const BUILTINS: &[Builtin] = &[Builtin {
-    manifest: &WOW_LEDGERLINK,
-    make: make_wow,
-}];
+fn make_bg3(roots: &[PathBuf], scope: WatchScope) -> Box<dyn Collector> {
+    Box::new(Bg3SaveCollector::scoped(roots, scope))
+}
+
+/// Every collector this build ships.
+pub const BUILTINS: &[Builtin] = &[
+    Builtin {
+        manifest: &WOW_LEDGERLINK,
+        make: make_wow,
+    },
+    Builtin {
+        manifest: &BG3_SAVE,
+        make: make_bg3,
+    },
+];
 
 pub struct Entry {
     pub manifest: &'static CollectorManifest,

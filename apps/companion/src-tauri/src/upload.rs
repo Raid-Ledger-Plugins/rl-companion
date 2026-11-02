@@ -250,6 +250,67 @@ impl Uploader {
     }
 }
 
+impl Uploader {
+    /// The blob URL (`companion/v1/blobs/:sha256`); the id must be 64 hex.
+    pub fn blob_url(&self, sha256: &str) -> Result<url::Url, String> {
+        let hex = sha256.len() == 64
+            && sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !hex {
+            return Err(format!("bad blob id {sha256:?}"));
+        }
+        self.base
+            .join(&format!("../blobs/{sha256}"))
+            .map_err(|e| e.to_string())
+    }
+
+    /// One blob PUT, classified like a message POST.
+    pub async fn attempt_blob(&self, token: &DeviceToken, blob: &crate::collector::Blob) -> Attempt {
+        let url = match self.blob_url(&blob.sha256) {
+            Ok(u) => u,
+            Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),
+        };
+        let sent = self
+            .http
+            .put(url)
+            .bearer_auth(token.expose())
+            .header(reqwest::header::CONTENT_TYPE, blob.content_type.as_str())
+            .body(blob.bytes.clone())
+            .send()
+            .await;
+        match sent {
+            Err(e) => Attempt::Retry {
+                reason: network_reason(&e).into(),
+            },
+            Ok(res) => {
+                let status = res.status().as_u16();
+                let retry_after = res
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                let bytes = res.bytes().await.unwrap_or_default();
+                classify(status, retry_after.as_deref(), &bytes)
+            }
+        }
+    }
+
+    /// PUT a blob with retries.
+    pub async fn send_blob<S, SF>(
+        &self,
+        token: &DeviceToken,
+        blob: &crate::collector::Blob,
+        sleep: S,
+    ) -> UploadOutcome
+    where
+        S: FnMut(Duration) -> SF,
+        SF: Future<Output = ()>,
+    {
+        send_with_retry(|| self.attempt_blob(token, blob), sleep).await
+    }
+}
+
 fn network_reason(e: &reqwest::Error) -> &'static str {
     if e.is_timeout() {
         "network timeout"
