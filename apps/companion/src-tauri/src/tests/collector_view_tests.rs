@@ -99,13 +99,29 @@ fn apply_root_saves_absolute_clears_blank_and_refuses_the_rest() {
         cfg.collector_roots.is_empty(),
         "a refused folder is not saved"
     );
-    assert!(apply_root(&mut cfg, BG3_SAVE.id, "/", &env)
+    // `/`-rooted paths are not absolute on Windows: build them from a real
+    // absolute folder so the test means the same on every OS (Codex P2).
+    let story = std::env::temp_dir().join("games").join("bg3").join("Story");
+    let drive = story
+        .ancestors()
+        .last()
+        .expect("an absolute path has a root");
+    let story = story.to_string_lossy().into_owned();
+    assert!(
+        apply_root(&mut cfg, BG3_SAVE.id, &drive.to_string_lossy(), &env)
+            .unwrap_err()
+            .contains("whole drive")
+    );
+    apply_root(&mut cfg, BG3_SAVE.id, &format!(" {story} "), &env).expect("absolute is accepted");
+    assert_eq!(cfg.roots_override(BG3_SAVE.id), Some(vec![story.clone()]));
+    let climbing = format!("{story}{}..", std::path::MAIN_SEPARATOR);
+    assert!(apply_root(&mut cfg, BG3_SAVE.id, &climbing, &env)
         .unwrap_err()
-        .contains("whole drive"));
-    apply_root(&mut cfg, BG3_SAVE.id, " /games/bg3/Story ", &env).expect("absolute is accepted");
+        .contains("must not use"));
     assert_eq!(
         cfg.roots_override(BG3_SAVE.id),
-        Some(vec!["/games/bg3/Story".to_owned()])
+        Some(vec![story]),
+        "a refused override leaves the saved one alone"
     );
     apply_root(&mut cfg, BG3_SAVE.id, "  ", &env).expect("blank resets");
     assert_eq!(cfg.roots_override(BG3_SAVE.id), None);
