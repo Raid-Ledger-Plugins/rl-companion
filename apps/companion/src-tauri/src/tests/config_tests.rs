@@ -63,7 +63,9 @@ fn config_round_trips_and_defaults_to_prod() {
         server_url: "https://slot-1.gamernight.net".into(),
         device_name: Some("PC".into()),
         wow_dir: r"D:\Games\WoW".into(),
-        ledgerlink_enabled: true,
+        collectors_enabled: [("wow-ledgerlink".to_owned(), true)].into(),
+        collector_roots: Default::default(),
+        legacy_ledgerlink_enabled: None,
     };
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);

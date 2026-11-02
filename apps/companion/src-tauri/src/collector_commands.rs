@@ -1,6 +1,7 @@
 //! Window commands for the collector: status, WoW folder, LedgerLink toggle,
 //! "Upload now".
 
+use crate::manifest::WOW_LEDGERLINK;
 use crate::runtime::{status, CollectorStatusDto, Runtime};
 use crate::state::Shared;
 use std::sync::Arc;
@@ -68,7 +69,7 @@ pub fn set_ledgerlink_enabled(
     enabled: bool,
 ) -> Result<CollectorStatusDto, String> {
     state
-        .update_config(|c| c.ledgerlink_enabled = enabled)
+        .update_config(|c| c.set_collector_enabled(WOW_LEDGERLINK.id, enabled))
         .map_err(|e| format!("Could not save settings: {e}"))?;
     rt.log(if enabled {
         "LedgerLink uploads turned on"

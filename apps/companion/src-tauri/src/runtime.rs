@@ -2,12 +2,14 @@
 //! window shows. One loop task per app; "Upload now" and setting changes
 //! kick it through [`Runtime::kick`].
 
-use crate::collector::{Collector, PendingUpload, SentState};
+use crate::collector::{PendingUpload, SentState};
+use crate::config::AppConfig;
+use crate::manifest::WOW_LEDGERLINK;
+use crate::registry::{CollectorRegistry, Entry};
 use crate::state::Shared;
 use crate::tray;
 use crate::upload::{UploadOutcome, Uploader};
 use crate::watch::{start_watcher, SettleSet};
-use crate::wow_collector::LedgerLinkCollector;
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
@@ -226,10 +228,11 @@ fn now() -> String {
     crate::wow_collector::captured_at(None)
 }
 
-/// Current status for the window.
+/// Current status for the window (the WoW collector's switch and folder).
 pub fn status(app: &AppHandle, rt: &Runtime) -> CollectorStatusDto {
     let cfg = app.state::<Shared>().config();
-    rt.snapshot(cfg.ledgerlink_enabled, &cfg.wow_dir)
+    let m = &WOW_LEDGERLINK;
+    rt.snapshot(cfg.collector_enabled(m.id, m.default_enabled), &cfg.wow_dir)
 }
 
 fn publish(app: &AppHandle, rt: &Runtime, line: &str) {
@@ -243,9 +246,18 @@ pub fn start(app: AppHandle, rt: Arc<Runtime>) {
     tauri::async_runtime::spawn(async move { run_loop(app, rt).await });
 }
 
+/// Every collector's configured roots: the watcher restarts when this changes.
+fn roots_key(registry: &CollectorRegistry) -> Vec<PathBuf> {
+    registry
+        .entries()
+        .iter()
+        .flat_map(|e| e.roots.iter().cloned())
+        .collect()
+}
+
 async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
-    let mut watched: Option<String> = None;
+    let mut watched: Option<Vec<PathBuf>> = None;
     let mut _watcher = None;
     let mut settle = SettleSet::default();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -255,13 +267,17 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     let mut idle_secs = 0u32;
     scan_and_upload(&app, &rt).await;
     loop {
-        let dir = app.state::<Shared>().config().wow_dir;
-        if watched.as_deref() != Some(dir.as_str()) {
-            let (w, notes) =
-                start_watcher(&LedgerLinkCollector::new(&dir).watch_roots(), tx.clone());
-            notes.into_iter().for_each(|n| rt.log(n));
+        let registry = CollectorRegistry::from_config(&app.state::<Shared>().config());
+        let key = roots_key(&registry);
+        if watched.as_ref() != Some(&key) {
+            let (w, notes) = start_watcher(&registry.watch_roots(), tx.clone());
+            registry
+                .notes
+                .iter()
+                .chain(&notes)
+                .for_each(|n| rt.log(n.clone()));
             _watcher = w;
-            watched = Some(dir);
+            watched = Some(key);
         }
         tokio::select! {
             _ = tick.tick() => {
@@ -272,8 +288,9 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
                 }
             }
             Some(path) = rx.recv() => {
-                if crate::wow_collector::is_ledgerlink_file(&path) {
-                    settle.touch(path);
+                let samples = registry.wanting(&path).map(|e| e.manifest.settle_samples()).max();
+                if let Some(samples) = samples {
+                    settle.touch_with(path, samples);
                 }
             }
             _ = rt.kick.notified() => {
@@ -284,60 +301,88 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     }
 }
 
+/// Scan every registered collector; upload what the enabled ones found.
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let cfg = app.state::<Shared>().config();
-    let collector = LedgerLinkCollector::new(&cfg.wow_dir);
-    let scan = collector.scan(&cfg.server_url, &rt.sent());
+    let registry = CollectorRegistry::from_config(&cfg);
+    let mut lines = Vec::new();
+    for entry in registry.entries() {
+        let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry).await;
+        lines.push(line);
+        if stop_all {
+            break;
+        }
+    }
+    publish(app, rt, &lines.join(" · "));
+}
+
+/// One collector's pass. Returns its status line, and whether the device must
+/// re-link (which stops every collector).
+async fn scan_and_upload_one(
+    app: &AppHandle,
+    rt: &Runtime,
+    cfg: &AppConfig,
+    entry: &Entry,
+) -> (String, bool) {
+    let scan = entry.collector.scan(&cfg.server_url, &rt.sent());
     scan.notes.iter().for_each(|n| rt.log(n.clone()));
     let waiting = scan.pending.len();
     if scan.files == 0 {
-        return publish(app, rt, "No LedgerLink.lua found — check the WoW folder");
+        return (entry.manifest.no_files_hint.to_owned(), false);
     }
     if waiting == 0 {
-        return publish(app, rt, "Up to date");
+        return ("Up to date".to_owned(), false);
     }
-    if !cfg.ledgerlink_enabled {
-        return publish(
-            app,
-            rt,
-            &format!("{waiting} export(s) waiting — turn on LedgerLink uploads"),
+    if !entry.enabled {
+        let name = entry.manifest.display_name;
+        return (
+            format!("{waiting} export(s) waiting — turn on {name} uploads"),
+            false,
         );
     }
-    if app.state::<Shared>().is_paused() {
-        return publish(app, rt, &format!("Paused — {waiting} export(s) waiting"));
+    let shared = app.state::<Shared>();
+    if shared.is_paused() {
+        return (format!("Paused — {waiting} export(s) waiting"), false);
     }
     if let Some(secs) = rt.held_secs() {
-        return publish(
-            app,
-            rt,
-            &format!("Rate limited — {waiting} export(s) waiting, retry in {secs}s"),
-        );
+        let line = format!("Rate limited — {waiting} export(s) waiting, retry in {secs}s");
+        return (line, false);
     }
-    let token = match app.state::<Shared>().token() {
+    let token = match shared.token() {
         Ok(Some(t)) => t,
-        Ok(None) => return publish(app, rt, "Link this device to upload"),
-        Err(e) => return publish(app, rt, &format!("Cannot read the device token ({e})")),
+        Ok(None) => return ("Link this device to upload".to_owned(), false),
+        Err(e) => return (format!("Cannot read the device token ({e})"), false),
     };
     let uploader = match Uploader::new(&cfg.server_url) {
         Ok(u) => u,
-        Err(e) => return publish(app, rt, &e),
+        Err(e) => return (e, false),
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
+    upload_all(app, rt, &uploader, &token, &scan.pending).await
+}
+
+async fn upload_all(
+    app: &AppHandle,
+    rt: &Runtime,
+    uploader: &Uploader,
+    token: &crate::token::DeviceToken,
+    pending: &[PendingUpload],
+) -> (String, bool) {
+    let waiting = pending.len();
     let mut sent = 0usize;
-    for pending in &scan.pending {
+    for p in pending {
         if app.state::<Shared>().is_paused() {
-            return publish(
-                app,
-                rt,
-                &format!("Paused — uploaded {sent} of {waiting} export(s)"),
+            return (
+                format!("Paused — uploaded {sent} of {waiting} export(s)"),
+                false,
             );
         }
         let outcome = uploader
-            .send(&token, pending.contract, &pending.body, tokio::time::sleep)
+            .send(token, p.contract, &p.body, tokio::time::sleep)
             .await;
         let fx = effect(&outcome);
-        rt.log(format!("{}: {}", pending.label, fx.text));
-        rt.finish(pending, &fx);
+        rt.log(format!("{}: {}", p.label, fx.text));
+        rt.finish(p, &fx);
         if fx.ok {
             sent += 1;
         }
@@ -346,12 +391,12 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         }
         if fx.relink {
             let _ = app.state::<Shared>().clear_token();
-            return publish(app, rt, "Re-link this device");
+            return ("Re-link this device".to_owned(), true);
         }
         if fx.stop {
             let line = format!("Uploaded {sent} of {waiting} export(s); {}", fx.text);
-            return publish(app, rt, &line);
+            return (line, false);
         }
     }
-    publish(app, rt, &format!("Uploaded {sent} of {waiting} export(s)"));
+    (format!("Uploaded {sent} of {waiting} export(s)"), false)
 }
