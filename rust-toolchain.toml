@@ -1,0 +1,5 @@
+# Matches CI (`dtolnay/rust-toolchain@1.90.0` in .github/workflows/ci.yml and
+# release.yml), so local clippy sees the same lints CI does.
+[toolchain]
+channel = "1.90.0"
+components = ["clippy", "rustfmt"]

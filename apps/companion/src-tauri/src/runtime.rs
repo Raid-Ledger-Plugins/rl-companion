@@ -2,12 +2,18 @@
 //! window shows. One loop task per app; "Upload now" and setting changes
 //! kick it through [`Runtime::kick`].
 
-use crate::collector::{Collector, PendingUpload, SentState};
+use crate::blob_send::send_with_blobs;
+use crate::collector::{PendingUpload, SentState};
+use crate::collector_view::{device_state, rows, CollectorRowDto};
+use crate::config::AppConfig;
+use crate::gate::{gate, Gate};
+use crate::manifest::{Platform, WOW_LEDGERLINK};
+use crate::preview::Held;
+use crate::registry::{CollectorRegistry, Entry};
 use crate::state::Shared;
 use crate::tray;
 use crate::upload::{UploadOutcome, Uploader};
 use crate::watch::{start_watcher, SettleSet};
-use crate::wow_collector::LedgerLinkCollector;
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
@@ -46,6 +52,13 @@ pub struct CollectorStatusDto {
     pub status: String,
     pub results: Vec<CharResult>,
     pub log: Vec<LogLine>,
+    /// Device-level state (paused, not linked, rate limited), shown once.
+    pub device: Option<String>,
+    /// The server refused the device token (401) on the last scan and the
+    /// token was cleared. The window keys off this, never off `status` text.
+    pub relink: bool,
+    /// One row per registered collector.
+    pub collectors: Vec<CollectorRowDto>,
 }
 
 /// What to do after one upload ended.
@@ -113,11 +126,20 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
 
 struct Inner {
     status: String,
-    results: BTreeMap<String, CharResult>,
+    /// Keyed by `(scope, item)`: every BG3 save shares the item `save`, so the
+    /// scope (one per save file) keeps one save's result from overwriting another's.
+    results: BTreeMap<(String, String), CharResult>,
     log: VecDeque<LogLine>,
     sent: SentState,
     /// No uploads before this (a 429's `Retry-After`).
     hold_until: Option<Instant>,
+    /// Each collector's own line from the last scan.
+    lines: BTreeMap<String, String>,
+    device: Option<String>,
+    /// The last scan hit a 401 and cleared the token.
+    relink: bool,
+    /// Batches waiting on the user's first-upload confirmation.
+    held: BTreeMap<String, Held>,
 }
 
 pub struct Runtime {
@@ -137,6 +159,10 @@ impl Runtime {
                 log: VecDeque::new(),
                 sent,
                 hold_until: None,
+                lines: BTreeMap::new(),
+                device: None,
+                relink: false,
+                held: BTreeMap::new(),
             }),
             kick: Notify::new(),
         }
@@ -189,7 +215,7 @@ impl Runtime {
         let mut inner = self.lock();
         let at = now();
         inner.results.insert(
-            pending.item.clone(),
+            (pending.scope.clone(), pending.item.clone()),
             CharResult {
                 label: pending.label.clone(),
                 result: fx.text.clone(),
@@ -210,14 +236,82 @@ impl Runtime {
         }
     }
 
-    pub fn snapshot(&self, enabled: bool, wow_dir: &str) -> CollectorStatusDto {
+    /// Remember the scan's per-collector lines and the device state.
+    pub fn set_lines(&self, lines: BTreeMap<String, String>, device: Option<String>, relink: bool) {
+        let mut inner = self.lock();
+        inner.lines = lines;
+        inner.device = device;
+        inner.relink = relink;
+    }
+
+    /// A scan is starting: a 401 from an earlier scan must not ride along on
+    /// this scan's mid-scan updates ("Uploading…"). Only the scan's own 401
+    /// sets it again, through `set_lines`.
+    pub fn begin_scan(&self) {
+        self.lock().relink = false;
+    }
+
+    /// The device linked (or re-linked): the old 401 no longer applies, and a
+    /// scan runs now so the waiting exports go up with the new token.
+    pub fn linked(&self) {
+        self.lock().relink = false;
+        self.kick();
+    }
+
+    /// Hold `id`'s batch behind its first-upload preview (replaces any
+    /// earlier hold); `None` clears it.
+    pub fn set_held(&self, id: &str, held: Option<Held>) {
+        let mut inner = self.lock();
+        // A scan that began before Skip re-holds keys already recorded as
+        // handled; such a hold is stale and is dropped (review MINOR 5).
+        let fresh = held.filter(|h| {
+            h.keys
+                .iter()
+                .any(|(scope, item, sha)| inner.sent.scope(scope).get(item) != Some(sha))
+        });
+        match fresh {
+            Some(h) => inner.held.insert(id.to_owned(), h),
+            None => inner.held.remove(id),
+        };
+    }
+
+    /// Skip: record every held item as handled so it is never sent. Returns
+    /// how many were skipped.
+    pub fn skip_held(&self, id: &str) -> usize {
+        let mut inner = self.lock();
+        let Some(held) = inner.held.remove(id) else {
+            return 0;
+        };
+        for (scope, item, sha) in &held.keys {
+            inner.sent.record(scope, item, sha);
+        }
+        if let Err(e) = inner.sent.save(&self.sent_path) {
+            inner.log.push_front(LogLine {
+                at: now(),
+                text: format!("Could not save upload state ({e})"),
+            });
+        }
+        held.keys.len()
+    }
+
+    pub fn snapshot(&self, cfg: &AppConfig) -> CollectorStatusDto {
+        let m = &WOW_LEDGERLINK;
         let inner = self.lock();
+        let previews = inner
+            .held
+            .iter()
+            .map(|(id, h)| (id.clone(), h.preview.clone()))
+            .collect();
+        let env = |k: &str| std::env::var(k).ok();
         CollectorStatusDto {
-            enabled,
-            wow_dir: wow_dir.to_owned(),
+            enabled: cfg.collector_enabled(m.id, m.default_enabled),
+            wow_dir: cfg.wow_dir.clone(),
             status: inner.status.clone(),
             results: inner.results.values().cloned().collect(),
             log: inner.log.iter().cloned().collect(),
+            device: inner.device.clone(),
+            relink: inner.relink,
+            collectors: rows(cfg, Platform::current(), &env, &inner.lines, &previews),
         }
     }
 }
@@ -226,10 +320,9 @@ fn now() -> String {
     crate::wow_collector::captured_at(None)
 }
 
-/// Current status for the window.
+/// Current status for the window: every collector's row and the device state.
 pub fn status(app: &AppHandle, rt: &Runtime) -> CollectorStatusDto {
-    let cfg = app.state::<Shared>().config();
-    rt.snapshot(cfg.ledgerlink_enabled, &cfg.wow_dir)
+    rt.snapshot(&app.state::<Shared>().config())
 }
 
 fn publish(app: &AppHandle, rt: &Runtime, line: &str) {
@@ -243,9 +336,20 @@ pub fn start(app: AppHandle, rt: Arc<Runtime>) {
     tauri::async_runtime::spawn(async move { run_loop(app, rt).await });
 }
 
+/// Every enabled collector's configured roots: the watcher restarts when
+/// this changes (so switching a collector on starts watching it).
+fn roots_key(registry: &CollectorRegistry) -> Vec<PathBuf> {
+    registry
+        .entries()
+        .iter()
+        .filter(|e| e.enabled)
+        .flat_map(|e| e.roots.iter().cloned())
+        .collect()
+}
+
 async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
-    let mut watched: Option<String> = None;
+    let mut watched: Option<Vec<PathBuf>> = None;
     let mut _watcher = None;
     let mut settle = SettleSet::default();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -255,13 +359,17 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     let mut idle_secs = 0u32;
     scan_and_upload(&app, &rt).await;
     loop {
-        let dir = app.state::<Shared>().config().wow_dir;
-        if watched.as_deref() != Some(dir.as_str()) {
-            let (w, notes) =
-                start_watcher(&LedgerLinkCollector::new(&dir).watch_roots(), tx.clone());
-            notes.into_iter().for_each(|n| rt.log(n));
+        let registry = CollectorRegistry::from_config(&app.state::<Shared>().config());
+        let key = roots_key(&registry);
+        if watched.as_ref() != Some(&key) {
+            let (w, notes) = start_watcher(&registry.watch_roots(), tx.clone());
+            registry
+                .notes
+                .iter()
+                .chain(&notes)
+                .for_each(|n| rt.log(n.clone()));
             _watcher = w;
-            watched = Some(dir);
+            watched = Some(key);
         }
         tokio::select! {
             _ = tick.tick() => {
@@ -272,8 +380,9 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
                 }
             }
             Some(path) = rx.recv() => {
-                if crate::wow_collector::is_ledgerlink_file(&path) {
-                    settle.touch(path);
+                let samples = registry.wanting(&path).map(|e| e.manifest.settle_samples()).max();
+                if let Some(samples) = samples {
+                    settle.touch_with(path, samples);
                 }
             }
             _ = rt.kick.notified() => {
@@ -284,60 +393,122 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     }
 }
 
+/// Scan every registered collector; upload what the enabled ones found.
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
+    rt.begin_scan();
     let cfg = app.state::<Shared>().config();
-    let collector = LedgerLinkCollector::new(&cfg.wow_dir);
-    let scan = collector.scan(&cfg.server_url, &rt.sent());
+    let registry = CollectorRegistry::from_config(&cfg);
+    let shared = app.state::<Shared>();
+    let token = shared.token();
+    let linked = token
+        .as_ref()
+        .map(Option::is_some)
+        .map_err(|e| e.to_string());
+    let device = device_state(shared.is_paused(), rt.held_secs(), linked);
+    let token = token.ok().flatten().filter(|_| device.is_none());
+    let mut lines = BTreeMap::new();
+    let mut relink = false;
+    for entry in registry.entries() {
+        if !entry.enabled {
+            rt.set_held(entry.manifest.id, None);
+            continue;
+        }
+        let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry, token.as_ref()).await;
+        lines.insert(entry.manifest.id.to_owned(), line);
+        if stop_all {
+            relink = true;
+            break;
+        }
+    }
+    let joined: Vec<String> = lines.values().cloned().collect();
+    let line = status_line(&registry, &joined);
+    let line = match &device {
+        Some(d) => format!("{d} · {line}"),
+        None => line,
+    };
+    rt.set_lines(lines, device, relink);
+    publish(app, rt, &line);
+}
+
+/// The enabled collectors' lines; when none is on, say how to start.
+pub fn status_line(registry: &CollectorRegistry, lines: &[String]) -> String {
+    if !lines.is_empty() {
+        return lines.join(" · ");
+    }
+    let names: Vec<&str> = registry
+        .entries()
+        .iter()
+        .map(|e| e.manifest.display_name)
+        .collect();
+    format!("Uploads are off — turn on {} uploads", names.join(" or "))
+}
+
+/// One collector's pass. Returns its status line, and whether the device must
+/// re-link (which stops every collector).
+async fn scan_and_upload_one(
+    app: &AppHandle,
+    rt: &Runtime,
+    cfg: &AppConfig,
+    entry: &Entry,
+    token: Option<&crate::token::DeviceToken>,
+) -> (String, bool) {
+    // `Entry::scan` is `None` for a disabled collector: nothing is read.
+    let Some(scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
+        let name = entry.manifest.display_name;
+        return (format!("{name} uploads are off"), false);
+    };
     scan.notes.iter().for_each(|n| rt.log(n.clone()));
     let waiting = scan.pending.len();
-    if scan.files == 0 {
-        return publish(app, rt, "No LedgerLink.lua found — check the WoW folder");
+    let id = entry.manifest.id;
+    match gate(entry.manifest, cfg.consented(id), scan.files, &scan.pending) {
+        Gate::NoFiles => {
+            rt.set_held(id, None);
+            return (entry.manifest.no_files_hint.to_owned(), false);
+        }
+        Gate::UpToDate => {
+            rt.set_held(id, None);
+            return ("Up to date".to_owned(), false);
+        }
+        Gate::Hold(held) => {
+            rt.set_held(id, held.map(|h| *h));
+            let line = format!("{waiting} waiting — check the preview before the first upload");
+            return (line, false);
+        }
+        Gate::Send => rt.set_held(id, None),
     }
-    if waiting == 0 {
-        return publish(app, rt, "Up to date");
-    }
-    if !cfg.ledgerlink_enabled {
-        return publish(
-            app,
-            rt,
-            &format!("{waiting} export(s) waiting — turn on LedgerLink uploads"),
-        );
-    }
-    if app.state::<Shared>().is_paused() {
-        return publish(app, rt, &format!("Paused — {waiting} export(s) waiting"));
-    }
-    if let Some(secs) = rt.held_secs() {
-        return publish(
-            app,
-            rt,
-            &format!("Rate limited — {waiting} export(s) waiting, retry in {secs}s"),
-        );
-    }
-    let token = match app.state::<Shared>().token() {
-        Ok(Some(t)) => t,
-        Ok(None) => return publish(app, rt, "Link this device to upload"),
-        Err(e) => return publish(app, rt, &format!("Cannot read the device token ({e})")),
+    // Device-level states (paused, not linked, rate limited) are shown once
+    // by the window; here only the count.
+    let Some(token) = token.filter(|_| rt.held_secs().is_none()) else {
+        return (format!("{waiting} export(s) waiting"), false);
     };
     let uploader = match Uploader::new(&cfg.server_url) {
         Ok(u) => u,
-        Err(e) => return publish(app, rt, &e),
+        Err(e) => return (e, false),
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
+    upload_all(app, rt, &uploader, token, &scan.pending).await
+}
+
+async fn upload_all(
+    app: &AppHandle,
+    rt: &Runtime,
+    uploader: &Uploader,
+    token: &crate::token::DeviceToken,
+    pending: &[PendingUpload],
+) -> (String, bool) {
+    let waiting = pending.len();
     let mut sent = 0usize;
-    for pending in &scan.pending {
+    for p in pending {
         if app.state::<Shared>().is_paused() {
-            return publish(
-                app,
-                rt,
-                &format!("Paused — uploaded {sent} of {waiting} export(s)"),
+            return (
+                format!("Paused — uploaded {sent} of {waiting} export(s)"),
+                false,
             );
         }
-        let outcome = uploader
-            .send(&token, pending.contract, &pending.body, tokio::time::sleep)
-            .await;
+        let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         let fx = effect(&outcome);
-        rt.log(format!("{}: {}", pending.label, fx.text));
-        rt.finish(pending, &fx);
+        rt.log(format!("{}: {}", p.label, fx.text));
+        rt.finish(p, &fx);
         if fx.ok {
             sent += 1;
         }
@@ -346,12 +517,12 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         }
         if fx.relink {
             let _ = app.state::<Shared>().clear_token();
-            return publish(app, rt, "Re-link this device");
+            return ("Re-link this device".to_owned(), true);
         }
         if fx.stop {
             let line = format!("Uploaded {sent} of {waiting} export(s); {}", fx.text);
-            return publish(app, rt, &line);
+            return (line, false);
         }
     }
-    publish(app, rt, &format!("Uploaded {sent} of {waiting} export(s)"));
+    (format!("Uploaded {sent} of {waiting} export(s)"), false)
 }

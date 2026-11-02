@@ -33,9 +33,15 @@ pub struct SettleSet {
 impl SettleSet {
     /// A change was seen; start (or keep) watching the path.
     pub fn touch(&mut self, path: PathBuf) {
+        self.touch_with(path, DEFAULT_STABLE_SAMPLES);
+    }
+
+    /// As [`Self::touch`], settling after `samples` unchanged ticks (the
+    /// collector manifest's settle delay).
+    pub fn touch_with(&mut self, path: PathBuf, samples: usize) {
         self.pending
             .entry(path)
-            .or_insert_with(|| SettleWatcher::new(DEFAULT_STABLE_SAMPLES));
+            .or_insert_with(|| SettleWatcher::new(samples.max(1)));
     }
 
     pub fn is_empty(&self) -> bool {

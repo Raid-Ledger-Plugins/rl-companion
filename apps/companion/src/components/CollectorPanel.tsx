@@ -1,4 +1,4 @@
-import type { CollectorStatus } from "../api";
+import { LEDGERLINK_ID, type CollectorStatus } from "../api";
 
 export interface CollectorPanelProps {
   status: CollectorStatus;
@@ -13,10 +13,12 @@ export interface CollectorPanelProps {
 /** The LedgerLink collector section: status, per-character results, WoW folder, toggle, log. */
 export function CollectorPanel(p: CollectorPanelProps) {
   const { status } = p;
+  // This collector's own line; device-level states are shown once above.
+  const line = status.collectors.find((c) => c.id === LEDGERLINK_ID)?.status ?? status.status;
   return (
     <section aria-label="WoW LedgerLink uploads">
       <h2>WoW: LedgerLink uploads</h2>
-      <p role="status" className="muted">{status.status}</p>
+      <p role="status" className="muted">{line}</p>
       <label className="toggle">
         <input type="checkbox" checked={status.enabled} onChange={(e) => p.onToggle(e.target.checked)} />
         Upload LedgerLink exports automatically after you log out or /reload

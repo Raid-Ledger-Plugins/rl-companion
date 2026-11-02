@@ -3,14 +3,14 @@
 //! into one `wow-ledgerlink/v1` message.
 
 use crate::collector::{envelope, scope_key, Collector, PendingUpload, Scan, SentState};
+use crate::scope::WatchScope;
 use rl_collectors::{
     changed_entries, is_flavor_folder, ledgerlink_sv_candidates, parse_ledgerlink_outbox,
-    rfc3339_utc_from_unix_seconds, OutboxEntry, SvCandidate, LEDGERLINK_SV_FILE, MAX_SV_BYTES,
+    OutboxEntry, SvCandidate, LEDGERLINK_SV_FILE, MAX_SV_BYTES,
 };
 use serde_json::json;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 pub const CONTRACT: &str = "wow-ledgerlink";
 pub const CONTRACT_VERSION: u32 = 1;
@@ -20,27 +20,41 @@ pub const EXPORT_MAX: usize = 260_096;
 
 pub struct LedgerLinkCollector {
     root: PathBuf,
+    /// Every read goes through this (ROK-2061): nothing outside the WoW folder.
+    scope: WatchScope,
 }
 
 impl LedgerLinkCollector {
-    /// `root` is the WoW install folder (the one holding `_classic_era_` etc.).
+    /// `root` is the WoW install folder (the one holding `_classic_era_` etc.);
+    /// reads are confined to it.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        let scope = WatchScope::new(std::slice::from_ref(&root));
+        Self::scoped(root, scope)
     }
 
-    /// Every `<root>/<flavor>/WTF` folder that exists.
+    /// As [`Self::new`], with the scope the registry resolved.
+    pub fn scoped(root: impl Into<PathBuf>, scope: WatchScope) -> Self {
+        Self {
+            root: root.into(),
+            scope,
+        }
+    }
+
+    /// Every `<root>/<flavor>/WTF` folder that exists inside the scope.
     fn wtf_dirs(&self) -> Vec<PathBuf> {
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let mut dirs: Vec<PathBuf> = entries
-            .flatten()
-            .filter(|e| e.file_name().to_str().is_some_and(is_flavor_folder))
-            .map(|e| e.path().join("WTF"))
-            .filter(|p| p.is_dir())
-            .collect();
-        dirs.sort();
-        dirs
+        self.scope
+            .read_dir(&self.root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(is_flavor_folder)
+            })
+            .map(|p| p.join("WTF"))
+            .filter(|p| self.scope.is_dir(p))
+            .collect()
     }
 
     /// Files under `<flavor>/WTF/Account/<account>/SavedVariables/`, relative
@@ -49,8 +63,8 @@ impl LedgerLinkCollector {
     pub fn listing(&self) -> Vec<String> {
         let mut out = Vec::new();
         for wtf in self.wtf_dirs() {
-            for account in read_dirs(&wtf.join("Account")) {
-                for file in read_files(&account.join("SavedVariables")) {
+            for account in self.read_dirs(&wtf.join("Account")) {
+                for file in self.read_files(&account.join("SavedVariables")) {
                     if let Ok(rel) = file.strip_prefix(&self.root) {
                         out.push(rel.to_string_lossy().into_owned());
                     }
@@ -68,7 +82,7 @@ impl LedgerLinkCollector {
 
     fn scan_file(&self, cand: &SvCandidate, origin: &str, sent: &SentState, scan: &mut Scan) {
         let path = Path::new(&cand.path);
-        let meta = match fs::metadata(path) {
+        let meta = match self.scope.metadata(path) {
             Ok(m) => m,
             Err(e) => {
                 return scan.notes.push(format!(
@@ -83,7 +97,7 @@ impl LedgerLinkCollector {
                 cand.account
             ));
         }
-        let outbox = match fs::read(path).map(|b| parse_ledgerlink_outbox(&b)) {
+        let outbox = match self.scope.read(path).map(|b| parse_ledgerlink_outbox(&b)) {
             Ok(Ok(o)) => o,
             Ok(Err(e)) => {
                 return scan.notes.push(format!(
@@ -123,6 +137,7 @@ impl LedgerLinkCollector {
                 sha256: entry.sha256.clone(),
                 label: label(entry),
                 body: message(&entry.text, &captured_at),
+                blobs: Vec::new(),
             });
         }
     }
@@ -135,10 +150,6 @@ impl Collector for LedgerLinkCollector {
 
     fn watch_roots(&self) -> Vec<PathBuf> {
         self.wtf_dirs()
-    }
-
-    fn is_relevant(&self, path: &Path) -> bool {
-        is_ledgerlink_file(path)
     }
 
     fn scan(&self, origin: &str, sent: &SentState) -> Scan {
@@ -170,13 +181,7 @@ pub fn message(export_string: &str, captured_at: &str) -> serde_json::Value {
 /// `capturedAt` = the file's mtime (spec §5), never in the future (the
 /// server rejects more than 5 minutes ahead of its clock).
 pub fn captured_at(mtime: Option<SystemTime>) -> String {
-    let now = SystemTime::now();
-    let t = mtime.filter(|m| *m <= now).unwrap_or(now);
-    let secs = t
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    rfc3339_utc_from_unix_seconds(i64::try_from(secs).unwrap_or(0))
+    crate::collector::captured_at(mtime)
 }
 
 fn label(entry: &OutboxEntry) -> String {
@@ -187,24 +192,16 @@ fn label(entry: &OutboxEntry) -> String {
     )
 }
 
-fn read_dirs(dir: &Path) -> Vec<PathBuf> {
-    fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect()
-        })
-        .unwrap_or_default()
-}
+impl LedgerLinkCollector {
+    fn read_dirs(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut out = self.scope.read_dir(dir).unwrap_or_default();
+        out.retain(|p| self.scope.is_dir(p));
+        out
+    }
 
-fn read_files(dir: &Path) -> Vec<PathBuf> {
-    fs::read_dir(dir)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_file())
-                .collect()
-        })
-        .unwrap_or_default()
+    fn read_files(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut out = self.scope.read_dir(dir).unwrap_or_default();
+        out.retain(|p| self.scope.is_file(p));
+        out
+    }
 }

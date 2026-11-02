@@ -67,13 +67,58 @@ export interface CollectorStatus {
   status: string;
   results: CharResult[];
   log: LogLine[];
+  /** Device-level state (paused, not linked, rate limited), shown once. */
+  device: string | null;
+  /** The last scan hit a 401 and the token was cleared; the window shows it unlinked. */
+  relink: boolean;
+  collectors: CollectorRow[];
 }
+
+export interface PartyLine {
+  name: string;
+  summary: string;
+}
+
+/** Local summary of what the first upload would send (nothing is sent yet). */
+export interface Preview {
+  collectorId: string;
+  saveName: string;
+  campaign: string;
+  location: string;
+  difficulty: string;
+  savedAt: string;
+  party: PartyLine[];
+  thumbnail: string | null;
+  waiting: number;
+}
+
+export interface CollectorRow {
+  id: string;
+  displayName: string;
+  enabled: boolean;
+  status: string;
+  detectedFolder: string | null;
+  folderOverride: string;
+  overrideNote: string | null;
+  confirmFirstUpload: boolean;
+  consented: boolean;
+  preview: Preview | null;
+}
+
+export const LEDGERLINK_ID = "wow-ledgerlink";
 
 export const getCollectorStatus = () => invoke<CollectorStatus>("get_collector_status");
 export const setWowDir = (dir: string) => invoke<CollectorStatus>("set_wow_dir", { dir });
 export const pickWowDir = () => invoke<CollectorStatus | null>("pick_wow_dir");
 export const setLedgerlinkEnabled = (enabled: boolean) =>
   invoke<CollectorStatus>("set_ledgerlink_enabled", { enabled });
+export const setCollectorEnabled = (id: string, enabled: boolean) =>
+  invoke<CollectorStatus>("set_collector_enabled", { id, enabled });
+export const setCollectorRoot = (id: string, dir: string) =>
+  invoke<CollectorStatus>("set_collector_root", { id, dir });
+export const pickCollectorRoot = (id: string) => invoke<CollectorStatus | null>("pick_collector_root", { id });
+export const confirmFirstUpload = (id: string) => invoke<CollectorStatus>("confirm_first_upload", { id });
+export const skipFirstUpload = (id: string) => invoke<CollectorStatus>("skip_first_upload", { id });
 export const uploadNow = () => invoke<void>("upload_now");
 
 export const onCollectorStatus = (cb: (s: CollectorStatus) => void): Promise<UnlistenFn> =>

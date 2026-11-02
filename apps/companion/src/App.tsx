@@ -41,7 +41,7 @@ export default function App() {
       await refresh();
     });
     const unlistenCollector = api.onCollectorStatus((c) => {
-      if (c.status === "Re-link this device") {
+      if (c.relink) {
         setNotice("The server no longer accepts this device. Re-link this device.");
         void refresh();
       }

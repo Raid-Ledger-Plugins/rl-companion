@@ -28,6 +28,9 @@ const base: CollectorStatus = {
     { label: "Player-0000-0A000002 (guild)", result: "Rejected 400: invalid_payload (ROSTER_HELD)", ok: false, at: "2026-11-02T18:00:01Z" },
   ],
   log: [{ at: "2026-11-02T18:00:01Z", text: "LedgerLink uploads turned on" }],
+  device: null,
+  relink: false,
+  collectors: [],
 };
 
 describe("CollectorPanel", () => {

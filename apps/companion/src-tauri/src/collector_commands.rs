@@ -1,6 +1,8 @@
 //! Window commands for the collector: status, WoW folder, LedgerLink toggle,
 //! "Upload now".
 
+use crate::collector_view::{apply_root, known};
+use crate::manifest::WOW_LEDGERLINK;
 use crate::runtime::{status, CollectorStatusDto, Runtime};
 use crate::state::Shared;
 use std::sync::Arc;
@@ -68,7 +70,7 @@ pub fn set_ledgerlink_enabled(
     enabled: bool,
 ) -> Result<CollectorStatusDto, String> {
     state
-        .update_config(|c| c.ledgerlink_enabled = enabled)
+        .update_config(|c| c.set_collector_enabled(WOW_LEDGERLINK.id, enabled))
         .map_err(|e| format!("Could not save settings: {e}"))?;
     rt.log(if enabled {
         "LedgerLink uploads turned on"
@@ -82,4 +84,105 @@ pub fn set_ledgerlink_enabled(
 #[tauri::command]
 pub fn upload_now(rt: State<'_, Arc<Runtime>>) {
     rt.kick();
+}
+
+fn save(state: &Shared, f: impl FnOnce(&mut crate::config::AppConfig)) -> Result<(), String> {
+    state
+        .update_config(f)
+        .map(|_| ())
+        .map_err(|e| format!("Could not save settings: {e}"))
+}
+
+/// Per-game upload switch (ROK-2061): one per registered collector.
+#[tauri::command]
+pub fn set_collector_enabled(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    rt: State<'_, Arc<Runtime>>,
+    id: String,
+    enabled: bool,
+) -> Result<CollectorStatusDto, String> {
+    let m = known(&id)?;
+    save(&state, |c| c.set_collector_enabled(m.id, enabled))?;
+    let verb = if enabled { "on" } else { "off" };
+    rt.log(format!("{} uploads turned {verb}", m.display_name));
+    rt.kick();
+    Ok(status(&app, &rt))
+}
+
+/// Folder override for a non-WoW collector; blank resets to the detected
+/// folder. A refused path is not saved; the error is the window's note.
+#[tauri::command]
+pub fn set_collector_root(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    rt: State<'_, Arc<Runtime>>,
+    id: String,
+    dir: String,
+) -> Result<CollectorStatusDto, String> {
+    let env = |k: &str| std::env::var(k).ok();
+    let mut cfg = state.config();
+    apply_root(&mut cfg, &id, &dir, &env)?;
+    save(&state, |c| c.collector_roots = cfg.collector_roots)?;
+    rt.kick();
+    Ok(status(&app, &rt))
+}
+
+/// Native folder picker for a collector's override; `None` when cancelled.
+#[tauri::command]
+pub async fn pick_collector_root(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    rt: State<'_, Arc<Runtime>>,
+    id: String,
+) -> Result<Option<CollectorStatusDto>, String> {
+    known(&id)?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(picked) = rx
+        .await
+        .map_err(|_| "The folder picker closed unexpectedly".to_string())?
+    else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    set_collector_root(app, state, rt, id, path.to_string_lossy().into_owned()).map(Some)
+}
+
+/// Upload on the first-upload preview: remember consent, send the batch.
+#[tauri::command]
+pub fn confirm_first_upload(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    rt: State<'_, Arc<Runtime>>,
+    id: String,
+) -> Result<CollectorStatusDto, String> {
+    let m = known(&id)?;
+    save(&state, |c| c.set_consented(m.id))?;
+    rt.set_held(m.id, None);
+    rt.log(format!("{}: first upload confirmed", m.display_name));
+    rt.kick();
+    Ok(status(&app, &rt))
+}
+
+/// Skip on the first-upload preview: the held items are never sent; the
+/// next new item asks again.
+#[tauri::command]
+pub fn skip_first_upload(
+    app: AppHandle,
+    rt: State<'_, Arc<Runtime>>,
+    id: String,
+) -> Result<CollectorStatusDto, String> {
+    let m = known(&id)?;
+    let n = rt.skip_held(m.id);
+    if n > 0 {
+        rt.log(format!(
+            "{}: skipped {n} save(s), nothing uploaded",
+            m.display_name
+        ));
+    }
+    rt.kick();
+    Ok(status(&app, &rt))
 }

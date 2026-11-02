@@ -1,6 +1,7 @@
 //! App settings persisted as JSON in the OS app-config dir. Never holds the token.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Production Raid Ledger. Overridable to a fleet `https://slot-N.gamernight.net`.
@@ -19,10 +20,27 @@ pub struct AppConfig {
     /// WoW install folder (the one holding `_classic_era_`/`_retail_`); the
     /// window's folder picker (C-3) changes it.
     pub wow_dir: String,
-    /// LedgerLink uploads (ROK-1964). Opt-in: off until the user turns it on
-    /// in the window, which is the first-upload confirmation.
-    pub ledgerlink_enabled: bool,
+    /// Per-collector upload switch, keyed by manifest id (ROK-2061). A missing
+    /// id means the manifest's default (off: turning it on in the window is
+    /// the first-upload confirmation).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub collectors_enabled: BTreeMap<String, bool>,
+    /// Per-collector root overrides, keyed by manifest id. WoW keeps using
+    /// `wow_dir`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub collector_roots: BTreeMap<String, Vec<String>>,
+    /// Collectors whose first-upload preview the user confirmed (ROK-2061).
+    /// Later uploads go without asking.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub collector_consent: BTreeMap<String, bool>,
+    /// Pre-ROK-2061 LedgerLink switch. Read only, folded into
+    /// `collectors_enabled` by [`AppConfig::load`], never written back.
+    #[serde(rename = "ledgerlinkEnabled", skip_serializing)]
+    pub legacy_ledgerlink_enabled: Option<bool>,
 }
+
+/// The id the legacy `ledgerlinkEnabled` flag belongs to.
+pub const LEGACY_LEDGERLINK_ID: &str = crate::manifest::WOW_LEDGERLINK.id;
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -30,7 +48,10 @@ impl Default for AppConfig {
             server_url: DEFAULT_SERVER_URL.to_owned(),
             device_name: None,
             wow_dir: default_wow_dir().to_owned(),
-            ledgerlink_enabled: false,
+            collectors_enabled: BTreeMap::new(),
+            collector_roots: BTreeMap::new(),
+            collector_consent: BTreeMap::new(),
+            legacy_ledgerlink_enabled: None,
         }
     }
 }
@@ -45,7 +66,52 @@ impl AppConfig {
             .unwrap_or_default();
         cfg.server_url =
             normalise_server_url(&cfg.server_url).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_owned());
+        cfg.migrate();
         cfg
+    }
+
+    /// Fold the legacy `ledgerlinkEnabled` flag into `collectors_enabled`. An
+    /// explicit per-collector entry wins over the legacy flag.
+    pub fn migrate(&mut self) {
+        if let Some(on) = self.legacy_ledgerlink_enabled.take() {
+            self.collectors_enabled
+                .entry(LEGACY_LEDGERLINK_ID.to_owned())
+                .or_insert(on);
+        }
+    }
+
+    /// The user's switch for `id`, or `default` when never set.
+    pub fn collector_enabled(&self, id: &str, default: bool) -> bool {
+        self.collectors_enabled.get(id).copied().unwrap_or(default)
+    }
+
+    pub fn set_collector_enabled(&mut self, id: &str, on: bool) {
+        self.collectors_enabled.insert(id.to_owned(), on);
+    }
+
+    /// The user confirmed `id`'s first-upload preview.
+    pub fn consented(&self, id: &str) -> bool {
+        self.collector_consent.get(id).copied().unwrap_or(false)
+    }
+
+    pub fn set_consented(&mut self, id: &str) {
+        self.collector_consent.insert(id.to_owned(), true);
+    }
+
+    /// The user's root override for `id`, if any (empty entries ignored).
+    pub fn roots_override(&self, id: &str) -> Option<Vec<String>> {
+        if id == LEGACY_LEDGERLINK_ID {
+            let dir = self.wow_dir.trim();
+            return (!dir.is_empty()).then(|| vec![dir.to_owned()]);
+        }
+        let roots: Vec<String> = self
+            .collector_roots
+            .get(id)?
+            .iter()
+            .map(|r| r.trim().to_owned())
+            .filter(|r| !r.is_empty())
+            .collect();
+        (!roots.is_empty()).then_some(roots)
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {

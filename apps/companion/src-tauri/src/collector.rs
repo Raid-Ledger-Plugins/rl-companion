@@ -29,6 +29,16 @@ pub struct PendingUpload {
     pub label: String,
     /// The full message (envelope + payload).
     pub body: Value,
+    /// Blobs the message references (e.g. a BG3 thumbnail), PUT before it.
+    pub blobs: Vec<Blob>,
+}
+
+/// One content-addressed blob (`PUT /companion/v1/blobs/:sha256`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Blob {
+    pub sha256: String,
+    pub content_type: String,
+    pub bytes: Vec<u8>,
 }
 
 /// What one scan found.
@@ -49,8 +59,8 @@ pub trait Collector: Send + Sync {
     fn id(&self) -> &'static str;
     /// Folders to watch recursively. May be empty (nothing installed yet).
     fn watch_roots(&self) -> Vec<PathBuf>;
-    /// Whether a changed path should trigger a settle-then-scan.
-    fn is_relevant(&self, path: &Path) -> bool;
+    // Which changed files matter is the manifest's `file_patterns`
+    // (`registry::Entry::wants`), not a per-collector method (ROK-2061).
     /// Read the files and return every message that is new versus what
     /// `origin` (the configured server) already settled in `sent`.
     fn scan(&self, origin: &str, sent: &SentState) -> Scan;
@@ -113,4 +123,16 @@ pub fn envelope(contract: &str, contract_version: u32, captured_at: &str, payloa
         "collectorVersion": rl_collectors::COLLECTOR_VERSION,
         "payload": payload,
     })
+}
+
+/// `capturedAt` / `savedAt` from a file mtime, never in the future (the
+/// server rejects more than 5 minutes ahead of its clock).
+pub fn captured_at(mtime: Option<std::time::SystemTime>) -> String {
+    let now = std::time::SystemTime::now();
+    let t = mtime.filter(|m| *m <= now).unwrap_or(now);
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    rl_collectors::rfc3339_utc_from_unix_seconds(i64::try_from(secs).unwrap_or(0))
 }

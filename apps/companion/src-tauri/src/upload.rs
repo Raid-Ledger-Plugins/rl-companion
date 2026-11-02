@@ -107,6 +107,33 @@ pub fn classify(status: u16, retry_after: Option<&str>, body: &[u8]) -> Attempt 
     }
 }
 
+/// A blob PUT's answer. Any 4xx other than 401/408/429 refuses this blob for
+/// good (Raid Ledger's `invalid_blob`, `hash_mismatch`, `unsupported_media`,
+/// `blob_ref_mismatch`, `blob_quota_exceeded`, or a route it does not serve):
+/// it comes back `Rejected`, and the message goes on without the blob.
+/// Everything else is classified like a message answer.
+pub fn classify_blob(status: u16, retry_after: Option<&str>, body: &[u8]) -> Attempt {
+    if !(400..=499).contains(&status) || matches!(status, 401 | 408 | 429) {
+        return classify(status, retry_after, body);
+    }
+    let parsed = serde_json::from_slice::<ErrorBody>(body).unwrap_or_default();
+    let code = if parsed.code.is_empty() {
+        "blob_refused".to_owned()
+    } else {
+        parsed.code
+    };
+    let issue = parsed
+        .issues
+        .into_iter()
+        .map(|i| i.code)
+        .find(|c| !c.is_empty());
+    Attempt::Done(UploadOutcome::Rejected {
+        status,
+        code,
+        issue,
+    })
+}
+
 /// A non-2xx that is neither 401, 408, 429 nor 5xx (including a 3xx, as
 /// redirects are not followed): terminal only for a [`TERMINAL_CODES`] body.
 fn other_status(status: u16, body: &[u8]) -> UploadOutcome {
@@ -247,6 +274,71 @@ impl Uploader {
         SF: Future<Output = ()>,
     {
         send_with_retry(|| self.attempt(token, contract, body), sleep).await
+    }
+}
+
+impl Uploader {
+    /// The blob URL (`companion/v1/blobs/:sha256`); the id must be 64 hex.
+    pub fn blob_url(&self, sha256: &str) -> Result<url::Url, String> {
+        let hex = sha256.len() == 64
+            && sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !hex {
+            return Err(format!("bad blob id {sha256:?}"));
+        }
+        self.base
+            .join(&format!("../blobs/{sha256}"))
+            .map_err(|e| e.to_string())
+    }
+
+    /// One blob PUT, classified like a message POST.
+    pub async fn attempt_blob(
+        &self,
+        token: &DeviceToken,
+        blob: &crate::collector::Blob,
+    ) -> Attempt {
+        let url = match self.blob_url(&blob.sha256) {
+            Ok(u) => u,
+            Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),
+        };
+        let sent = self
+            .http
+            .put(url)
+            .bearer_auth(token.expose())
+            .header(reqwest::header::CONTENT_TYPE, blob.content_type.as_str())
+            .body(blob.bytes.clone())
+            .send()
+            .await;
+        match sent {
+            Err(e) => Attempt::Retry {
+                reason: network_reason(&e).into(),
+            },
+            Ok(res) => {
+                let status = res.status().as_u16();
+                let retry_after = res
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                let bytes = res.bytes().await.unwrap_or_default();
+                classify_blob(status, retry_after.as_deref(), &bytes)
+            }
+        }
+    }
+
+    /// PUT a blob with retries.
+    pub async fn send_blob<S, SF>(
+        &self,
+        token: &DeviceToken,
+        blob: &crate::collector::Blob,
+        sleep: S,
+    ) -> UploadOutcome
+    where
+        S: FnMut(Duration) -> SF,
+        SF: Future<Output = ()>,
+    {
+        send_with_retry(|| self.attempt_blob(token, blob), sleep).await
     }
 }
 
