@@ -5,6 +5,7 @@
 //! upload changed exports, honour the tray's Upload now / Pause.
 
 pub mod bg3_collector;
+pub mod blob_send;
 pub mod collector;
 pub mod collector_commands;
 pub mod collector_view;
