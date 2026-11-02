@@ -189,6 +189,13 @@ pub fn resolve_override(
     if !path.is_absolute() {
         return Err(format!("folder {raw:?} must be a full path"));
     }
+    // `..` could climb to the drive root (`/tmp/..`, `~/../..`).
+    if path
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(format!("folder {raw:?} must not use \"..\""));
+    }
     if path.parent().is_none() {
         return Err(format!(
             "folder {raw:?} is a whole drive; pick the game's folder"

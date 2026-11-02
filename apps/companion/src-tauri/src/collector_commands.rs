@@ -177,10 +177,12 @@ pub fn skip_first_upload(
 ) -> Result<CollectorStatusDto, String> {
     let m = known(&id)?;
     let n = rt.skip_held(m.id);
-    rt.log(format!(
-        "{}: skipped {n} save(s), nothing uploaded",
-        m.display_name
-    ));
+    if n > 0 {
+        rt.log(format!(
+            "{}: skipped {n} save(s), nothing uploaded",
+            m.display_name
+        ));
+    }
     rt.kick();
     Ok(status(&app, &rt))
 }

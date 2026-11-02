@@ -134,7 +134,16 @@ fn root_overrides_must_be_absolute_folders() {
         Ok(PathBuf::from(format!("{}/Saves", home()))),
         "~ expands"
     );
-    let bad = ["Saves", "~foo/Saves", "%UNSET%/x", "/", ""];
+    let bad = [
+        "Saves",
+        "~foo/Saves",
+        "%UNSET%/x",
+        "/",
+        "",
+        "/tmp/..",
+        "~/../..",
+        "/a/../b",
+    ];
     for raw in bad {
         assert!(
             resolve_override(raw, &env).is_err(),

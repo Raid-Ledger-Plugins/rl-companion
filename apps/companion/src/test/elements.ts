@@ -6,6 +6,10 @@ export type Host = ReactElement<Props, string>;
 /**
  * Expand a hook-free component tree into its host elements (`<input>`,
  * `<button>`, …) so a test can read props and call handlers without a DOM.
+ *
+ * It calls function components directly, outside a renderer, so it only works
+ * for hook-free trees (the collector panels are). A component that gains a
+ * hook throws here; test it with a renderer instead.
  */
 export function hosts(node: ReactNode): Host[] {
   if (Array.isArray(node)) return node.flatMap((n: ReactNode) => hosts(n));
