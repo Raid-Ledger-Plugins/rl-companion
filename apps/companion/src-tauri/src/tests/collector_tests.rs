@@ -6,7 +6,7 @@ use crate::wow_collector::{captured_at, LedgerLinkCollector, CONTRACT};
 use std::path::{Path, PathBuf};
 use wiremock::matchers::header;
 
-const MULTI: &str =
+pub(super) const MULTI: &str =
     include_str!("../../../../../crates/rl-collectors/tests/fixtures/wow_sv/multi-entry.lua");
 
 const PROD: &str = "https://raid.example.net";
@@ -20,7 +20,7 @@ fn outbox_len(text: &str) -> usize {
 }
 
 /// `<root>/_classic_era_/WTF/Account/<account>/SavedVariables/LedgerLink.lua`.
-fn install(root: &Path, account: &str, text: &str) -> PathBuf {
+pub(super) fn install(root: &Path, account: &str, text: &str) -> PathBuf {
     let sv = root
         .join("_classic_era_")
         .join("WTF")
