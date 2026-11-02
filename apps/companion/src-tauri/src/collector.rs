@@ -49,8 +49,8 @@ pub trait Collector: Send + Sync {
     fn id(&self) -> &'static str;
     /// Folders to watch recursively. May be empty (nothing installed yet).
     fn watch_roots(&self) -> Vec<PathBuf>;
-    /// Whether a changed path should trigger a settle-then-scan.
-    fn is_relevant(&self, path: &Path) -> bool;
+    // Which changed files matter is the manifest's `file_patterns`
+    // (`registry::Entry::wants`), not a per-collector method (ROK-2061).
     /// Read the files and return every message that is new versus what
     /// `origin` (the configured server) already settled in `sent`.
     fn scan(&self, origin: &str, sent: &SentState) -> Scan;

@@ -246,11 +246,13 @@ pub fn start(app: AppHandle, rt: Arc<Runtime>) {
     tauri::async_runtime::spawn(async move { run_loop(app, rt).await });
 }
 
-/// Every collector's configured roots: the watcher restarts when this changes.
+/// Every enabled collector's configured roots: the watcher restarts when
+/// this changes (so switching a collector on starts watching it).
 fn roots_key(registry: &CollectorRegistry) -> Vec<PathBuf> {
     registry
         .entries()
         .iter()
+        .filter(|e| e.enabled)
         .flat_map(|e| e.roots.iter().cloned())
         .collect()
 }
@@ -306,14 +308,27 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let cfg = app.state::<Shared>().config();
     let registry = CollectorRegistry::from_config(&cfg);
     let mut lines = Vec::new();
-    for entry in registry.entries() {
+    for entry in registry.entries().iter().filter(|e| e.enabled) {
         let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry).await;
         lines.push(line);
         if stop_all {
             break;
         }
     }
-    publish(app, rt, &lines.join(" · "));
+    publish(app, rt, &status_line(&registry, &lines));
+}
+
+/// The enabled collectors' lines; when none is on, say how to start.
+pub fn status_line(registry: &CollectorRegistry, lines: &[String]) -> String {
+    if !lines.is_empty() {
+        return lines.join(" · ");
+    }
+    let names: Vec<&str> = registry
+        .entries()
+        .iter()
+        .map(|e| e.manifest.display_name)
+        .collect();
+    format!("Uploads are off — turn on {} uploads", names.join(" or "))
 }
 
 /// One collector's pass. Returns its status line, and whether the device must
@@ -324,7 +339,11 @@ async fn scan_and_upload_one(
     cfg: &AppConfig,
     entry: &Entry,
 ) -> (String, bool) {
-    let scan = entry.collector.scan(&cfg.server_url, &rt.sent());
+    // `Entry::scan` is `None` for a disabled collector: nothing is read.
+    let Some(scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
+        let name = entry.manifest.display_name;
+        return (format!("{name} uploads are off"), false);
+    };
     scan.notes.iter().for_each(|n| rt.log(n.clone()));
     let waiting = scan.pending.len();
     if scan.files == 0 {
@@ -332,13 +351,6 @@ async fn scan_and_upload_one(
     }
     if waiting == 0 {
         return ("Up to date".to_owned(), false);
-    }
-    if !entry.enabled {
-        let name = entry.manifest.display_name;
-        return (
-            format!("{waiting} export(s) waiting — turn on {name} uploads"),
-            false,
-        );
     }
     let shared = app.state::<Shared>();
     if shared.is_paused() {

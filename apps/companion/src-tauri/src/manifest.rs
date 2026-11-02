@@ -154,7 +154,11 @@ pub fn validate_all(manifests: &[&CollectorManifest]) -> Result<(), ManifestErro
 pub fn resolve_root(template: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let mut out = String::new();
     let mut rest = template;
-    if let Some(tail) = rest.strip_prefix('~') {
+    // Only `~` alone or `~/…` / `~\…`: `~foo` (another user's home) is literal.
+    let home_tail = rest
+        .strip_prefix('~')
+        .filter(|t| t.is_empty() || t.starts_with('/') || t.starts_with('\\'));
+    if let Some(tail) = home_tail {
         out.push_str(&env("HOME").or_else(|| env("USERPROFILE"))?);
         rest = tail;
     }
@@ -167,6 +171,27 @@ pub fn resolve_root(template: &str, env: &dyn Fn(&str) -> Option<String>) -> Opt
     }
     out.push_str(rest);
     Some(PathBuf::from(out))
+}
+
+/// A user root override (settings): `~` and `%VAR%` expanded like a manifest
+/// root, then it must be absolute and not a bare filesystem root (`/`, `C:\`),
+/// which would make the collector's scope meaningless.
+pub fn resolve_override(
+    raw: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<PathBuf, String> {
+    let raw = raw.trim();
+    let path = resolve_root(raw, env)
+        .ok_or_else(|| format!("folder {raw:?} names an environment variable that is not set"))?;
+    if !path.is_absolute() {
+        return Err(format!("folder {raw:?} must be a full path"));
+    }
+    if path.parent().is_none() {
+        return Err(format!(
+            "folder {raw:?} is a whole drive; pick the game's folder"
+        ));
+    }
+    Ok(path)
 }
 
 /// `*` matches any run of characters; everything else literally, any case.

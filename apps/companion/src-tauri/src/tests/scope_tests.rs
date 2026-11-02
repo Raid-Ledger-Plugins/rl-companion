@@ -109,3 +109,21 @@ fn the_wow_collector_never_reads_a_symlinked_file_outside_the_wow_folder() {
     let _ = std::fs::remove_dir_all(base);
     let _ = std::fs::remove_dir_all(base2);
 }
+
+#[cfg(unix)]
+#[test]
+fn read_dir_lists_the_checked_path_and_keeps_the_callers_prefix() {
+    let base = temp_dir("scope-readdir");
+    let real = base.join("real");
+    std::fs::create_dir_all(&real).expect("mkdir");
+    std::fs::write(real.join("x.txt"), b"x").expect("write");
+    std::os::unix::fs::symlink(&real, base.join("alias")).expect("symlink");
+    let scope = WatchScope::new(&[&base]);
+    let listed = scope.read_dir(&base.join("alias")).expect("in scope");
+    assert_eq!(
+        listed,
+        vec![base.join("alias").join("x.txt")],
+        "names re-joined onto the dir as given"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}

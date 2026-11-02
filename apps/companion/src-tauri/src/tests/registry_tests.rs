@@ -157,8 +157,14 @@ fn file_patterns_match_any_case_with_wildcards() {
 
 #[test]
 fn default_config_registers_wow_disabled_with_the_wow_dir() {
+    // Overrides must be absolute on the host running the test.
+    let dir = if cfg!(windows) {
+        r"D:\Games\WoW"
+    } else {
+        "/games/wow"
+    };
     let cfg = AppConfig {
-        wow_dir: r"D:\Games\WoW".into(),
+        wow_dir: dir.into(),
         ..AppConfig::default()
     };
     let reg = build(&cfg);
@@ -166,7 +172,7 @@ fn default_config_registers_wow_disabled_with_the_wow_dir() {
     assert_eq!(ids, vec!["wow-ledgerlink"]);
     let wow = reg.get("wow-ledgerlink").expect("wow registered");
     assert!(!wow.enabled, "opt-in: off until the user turns it on");
-    assert_eq!(wow.roots, vec![PathBuf::from(r"D:\Games\WoW")]);
+    assert_eq!(wow.roots, vec![PathBuf::from(dir)]);
     assert!(reg.get("bg3-save").is_none(), "lane 2 adds BG3");
     assert!(reg.notes.is_empty());
 }

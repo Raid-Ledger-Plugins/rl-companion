@@ -151,10 +151,6 @@ impl Collector for LedgerLinkCollector {
         self.wtf_dirs()
     }
 
-    fn is_relevant(&self, path: &Path) -> bool {
-        is_ledgerlink_file(path)
-    }
-
     fn scan(&self, origin: &str, sent: &SentState) -> Scan {
         let mut scan = Scan::default();
         for cand in self.candidates() {

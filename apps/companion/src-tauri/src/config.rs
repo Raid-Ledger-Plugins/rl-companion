@@ -36,7 +36,7 @@ pub struct AppConfig {
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
-pub const LEGACY_LEDGERLINK_ID: &str = "wow-ledgerlink";
+pub const LEGACY_LEDGERLINK_ID: &str = crate::manifest::WOW_LEDGERLINK.id;
 
 impl Default for AppConfig {
     fn default() -> Self {

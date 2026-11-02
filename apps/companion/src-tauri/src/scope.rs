@@ -3,6 +3,10 @@
 //! through [`WatchScope`], which canonicalises the path (resolving `..` and
 //! every symlink) and requires it to sit under a canonical root — so a symlink
 //! that points outside the game folder is refused, not followed.
+//!
+//! Threat model: the local user. A path swapped between [`WatchScope::check`]
+//! and the read that follows it (a TOCTOU window) is not defended against;
+//! anyone who can do that can already read the file themselves.
 
 use std::fs;
 use std::io;
@@ -78,8 +82,13 @@ impl WatchScope {
     /// callers can strip their own root prefix). Each entry is itself checked
     /// before use by the next scoped call.
     pub fn read_dir(&self, dir: &Path) -> io::Result<Vec<PathBuf>> {
-        self.check(dir)?;
-        let mut out: Vec<PathBuf> = fs::read_dir(dir)?.flatten().map(|e| e.path()).collect();
+        // List the checked canonical path, not `dir` again: a component
+        // swapped for a symlink after the check cannot redirect the listing.
+        let real = self.check(dir)?;
+        let mut out: Vec<PathBuf> = fs::read_dir(&real)?
+            .flatten()
+            .map(|e| dir.join(e.file_name()))
+            .collect();
         out.sort();
         Ok(out)
     }
