@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
 import { Collector } from "./components/Collector";
+import { Startup } from "./components/Startup";
 
 type Link = { phase: "idle" } | { phase: "waiting"; start: api.LinkStart };
 
@@ -128,6 +129,8 @@ export default function App() {
           <span className="muted">Each server keeps its own link.</span>
         </div>
       </section>
+
+      <Startup onError={setError} />
     </main>
   );
 }
