@@ -27,6 +27,19 @@ pub struct CollectorRowDto {
     pub preview: Option<PreviewDto>,
 }
 
+/// The rate-limit note for text that is not re-rendered every second (the
+/// tray, the baked status line): a countdown there would freeze (ROK-2068).
+pub const RETRYING: &str = "Rate limited — retrying automatically";
+
+/// [`device_state`] for text that is not re-rendered: a rate limit reads
+/// [`RETRYING`] instead of a countdown.
+pub fn device_note(paused: bool, held: bool, linked: Result<bool, String>) -> Option<String> {
+    if held && !paused {
+        return Some(RETRYING.to_owned());
+    }
+    device_state(paused, None, linked)
+}
+
 /// Device-level state that blocks every collector. `None` = free to upload.
 pub fn device_state(
     paused: bool,

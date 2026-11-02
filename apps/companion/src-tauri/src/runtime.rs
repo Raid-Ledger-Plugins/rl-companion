@@ -4,7 +4,7 @@
 
 use crate::blob_send::send_with_blobs;
 use crate::collector::{PendingUpload, SentState};
-use crate::collector_view::{device_state, rows, CollectorRowDto};
+use crate::collector_view::{device_note, device_state, rows, CollectorRowDto, RETRYING};
 use crate::config::AppConfig;
 use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
@@ -109,7 +109,7 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
             ..settle(false, true, false, "Re-link this device".to_owned())
         },
         UploadOutcome::RateLimited { wait } => {
-            let text = format!("Rate limited; will retry in {}s", wait.as_secs());
+            let text = format!("Rate limited; retrying in {}s", wait.as_secs());
             Effect {
                 hold: Some(*wait),
                 ..settle(false, true, false, text)
@@ -135,7 +135,10 @@ struct Inner {
     hold_until: Option<Instant>,
     /// Each collector's own line from the last scan.
     lines: BTreeMap<String, String>,
-    device: Option<String>,
+    /// The last scan's device inputs; the window's device line is derived
+    /// from them and the live hold at render time (ROK-2068).
+    paused: bool,
+    linked: Result<bool, String>,
     /// The last scan hit a 401 and cleared the token.
     relink: bool,
     /// Batches waiting on the user's first-upload confirmation.
@@ -160,7 +163,8 @@ impl Runtime {
                 sent,
                 hold_until: None,
                 lines: BTreeMap::new(),
-                device: None,
+                paused: false,
+                linked: Ok(true),
                 relink: false,
                 held: BTreeMap::new(),
             }),
@@ -197,13 +201,7 @@ impl Runtime {
 
     /// Whole seconds left on a 429 hold (at least 1), or `None` once it passed.
     pub fn held_secs(&self) -> Option<u64> {
-        let until = self.lock().hold_until?;
-        let left = until.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            None
-        } else {
-            Some(left.as_secs().max(1))
-        }
+        secs_left(self.lock().hold_until, Instant::now())
     }
 
     pub fn set_status(&self, text: impl Into<String>) {
@@ -236,12 +234,18 @@ impl Runtime {
         }
     }
 
-    /// Remember the scan's per-collector lines and the device state.
-    pub fn set_lines(&self, lines: BTreeMap<String, String>, device: Option<String>, relink: bool) {
+    /// Remember the scan's per-collector lines and the 401 flag.
+    pub fn set_lines(&self, lines: BTreeMap<String, String>, relink: bool) {
         let mut inner = self.lock();
         inner.lines = lines;
-        inner.device = device;
         inner.relink = relink;
+    }
+
+    /// Remember the scan's device inputs (paused, linked).
+    pub fn set_device(&self, paused: bool, linked: Result<bool, String>) {
+        let mut inner = self.lock();
+        inner.paused = paused;
+        inner.linked = linked;
     }
 
     /// A scan is starting: a 401 from an earlier scan must not ride along on
@@ -309,11 +313,33 @@ impl Runtime {
             status: inner.status.clone(),
             results: inner.results.values().cloned().collect(),
             log: inner.log.iter().cloned().collect(),
-            device: inner.device.clone(),
+            device: device_state(
+                inner.paused,
+                secs_left(inner.hold_until, Instant::now()),
+                inner.linked.clone(),
+            ),
             relink: inner.relink,
             collectors: rows(cfg, Platform::current(), &env, &inner.lines, &previews),
         }
     }
+}
+
+/// Whole seconds left on a hold at `now` (at least 1), `None` once it passed.
+pub fn secs_left(until: Option<Instant>, now: Instant) -> Option<u64> {
+    let left = until?.saturating_duration_since(now);
+    if left.is_zero() {
+        None
+    } else {
+        Some(left.as_secs().max(1))
+    }
+}
+
+/// Whether a loop tick starts a scan: a file settled, the periodic rescan is
+/// due, or a 429 hold just ran out. Nothing else wakes the loop when a hold
+/// expires, so without the last case the batch sat until the next periodic
+/// scan (ROK-2068).
+pub fn tick_scans(was_held: bool, held: bool, settled: bool, idle_secs: u32) -> bool {
+    settled || idle_secs >= PERIODIC_SCAN_SECS || (was_held && !held)
 }
 
 fn now() -> String {
@@ -357,6 +383,7 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
     // settle samples on a file WoW is still writing).
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut idle_secs = 0u32;
+    let mut was_held = false;
     scan_and_upload(&app, &rt).await;
     loop {
         let registry = CollectorRegistry::from_config(&app.state::<Shared>().config());
@@ -374,10 +401,16 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
         tokio::select! {
             _ = tick.tick() => {
                 idle_secs += 1;
-                if !settle.tick().is_empty() || idle_secs >= PERIODIC_SCAN_SECS {
+                let held = rt.held_secs().is_some();
+                let settled = !settle.tick().is_empty();
+                if tick_scans(was_held, held, settled, idle_secs) {
                     idle_secs = 0;
                     scan_and_upload(&app, &rt).await;
+                } else if held {
+                    // Keep the window's rate-limit countdown live.
+                    let _ = app.emit(STATUS_EVENT, status(&app, &rt));
                 }
+                was_held = held;
             }
             Some(path) = rx.recv() => {
                 let samples = registry.wanting(&path).map(|e| e.manifest.settle_samples()).max();
@@ -404,7 +437,9 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         .as_ref()
         .map(Option::is_some)
         .map_err(|e| e.to_string());
-    let device = device_state(shared.is_paused(), rt.held_secs(), linked);
+    let paused = shared.is_paused();
+    let held = rt.held_secs();
+    let device = device_state(paused, held, linked.clone());
     let token = token.ok().flatten().filter(|_| device.is_none());
     let mut lines = BTreeMap::new();
     let mut relink = false;
@@ -422,11 +457,12 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     }
     let joined: Vec<String> = lines.values().cloned().collect();
     let line = status_line(&registry, &joined);
-    let line = match &device {
+    let line = match device_note(paused, held.is_some(), linked.clone()) {
         Some(d) => format!("{d} · {line}"),
         None => line,
     };
-    rt.set_lines(lines, device, relink);
+    rt.set_device(paused, linked);
+    rt.set_lines(lines, relink);
     publish(app, rt, &line);
 }
 
@@ -520,7 +556,12 @@ async fn upload_all(
             return ("Re-link this device".to_owned(), true);
         }
         if fx.stop {
-            let line = format!("Uploaded {sent} of {waiting} export(s); {}", fx.text);
+            let why = if fx.hold.is_some() {
+                RETRYING
+            } else {
+                fx.text.as_str()
+            };
+            let line = format!("Uploaded {sent} of {waiting} export(s); {why}");
             return (line, false);
         }
     }
