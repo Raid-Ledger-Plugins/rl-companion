@@ -25,6 +25,16 @@ fn a_login_launch_stays_hidden_and_a_manual_launch_shows_the_window() {
 }
 
 #[test]
+fn a_forwarded_second_launch_shows_the_window_unless_it_is_a_login_launch() {
+    // The single-instance callback gets the second process's argv as owned
+    // strings, program path first, and passes `&argv`.
+    let login: Vec<String> = vec![WIN.to_owned(), AUTOSTART_ARG.to_owned()];
+    let manual: Vec<String> = vec![WIN.to_owned()];
+    assert!(!should_show_window(&login));
+    assert!(should_show_window(&manual));
+}
+
+#[test]
 fn start_at_login_is_turned_on_only_on_the_first_run() {
     assert_eq!(first_run_action(false, false), FirstRun::EnableAndMark);
     assert_eq!(first_run_action(false, true), FirstRun::MarkOnly);

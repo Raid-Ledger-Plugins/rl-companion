@@ -37,6 +37,7 @@ notify = "8"
 tauri-plugin-dialog = "2"
 # Desktop-only plugins (the app ships for Windows/macOS/Linux only).
 tauri-plugin-autostart = "2.7"
+tauri-plugin-single-instance = "2.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }

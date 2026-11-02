@@ -37,6 +37,13 @@ use tauri::{Listener, Manager};
 /// the tray menu.
 pub fn run() {
     tauri::Builder::default()
+        // Must be first (plugin docs): a second launch hands its argv to this
+        // process and exits, so two runtimes never watch the same files.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if autostart::should_show_window(&argv) {
+                tray::show_window(app);
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![autostart::AUTOSTART_ARG]),
