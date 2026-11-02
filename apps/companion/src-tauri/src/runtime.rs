@@ -6,8 +6,9 @@ use crate::blob_send::send_with_blobs;
 use crate::collector::{PendingUpload, SentState};
 use crate::collector_view::{device_state, rows, CollectorRowDto};
 use crate::config::AppConfig;
+use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
-use crate::preview::{hold, Held};
+use crate::preview::Held;
 use crate::registry::{CollectorRegistry, Entry};
 use crate::state::Shared;
 use crate::tray;
@@ -238,7 +239,14 @@ impl Runtime {
     /// earlier hold); `None` clears it.
     pub fn set_held(&self, id: &str, held: Option<Held>) {
         let mut inner = self.lock();
-        match held {
+        // A scan that began before Skip re-holds keys already recorded as
+        // handled; such a hold is stale and is dropped (review MINOR 5).
+        let fresh = held.filter(|h| {
+            h.keys
+                .iter()
+                .any(|(scope, item, sha)| inner.sent.scope(scope).get(item) != Some(sha))
+        });
+        match fresh {
             Some(h) => inner.held.insert(id.to_owned(), h),
             None => inner.held.remove(id),
         };
@@ -424,22 +432,23 @@ async fn scan_and_upload_one(
     };
     scan.notes.iter().for_each(|n| rt.log(n.clone()));
     let waiting = scan.pending.len();
-    if scan.files == 0 {
-        return (entry.manifest.no_files_hint.to_owned(), false);
-    }
     let id = entry.manifest.id;
-    if waiting == 0 {
-        rt.set_held(id, None);
-        return ("Up to date".to_owned(), false);
+    match gate(entry.manifest, cfg.consented(id), scan.files, &scan.pending) {
+        Gate::NoFiles => {
+            rt.set_held(id, None);
+            return (entry.manifest.no_files_hint.to_owned(), false);
+        }
+        Gate::UpToDate => {
+            rt.set_held(id, None);
+            return ("Up to date".to_owned(), false);
+        }
+        Gate::Hold(held) => {
+            rt.set_held(id, held.map(|h| *h));
+            let line = format!("{waiting} waiting — check the preview before the first upload");
+            return (line, false);
+        }
+        Gate::Send => rt.set_held(id, None),
     }
-    // First upload of a confirm-first collector: hold it behind a local
-    // preview until the user says Upload (consent) or Skip.
-    if entry.manifest.confirm_first_upload && !cfg.consented(id) {
-        rt.set_held(id, hold(id, &scan.pending));
-        let line = format!("{waiting} waiting — check the preview before the first upload");
-        return (line, false);
-    }
-    rt.set_held(id, None);
     // Device-level states (paused, not linked, rate limited) are shown once
     // by the window; here only the count.
     let Some(token) = token.filter(|_| rt.held_secs().is_none()) else {

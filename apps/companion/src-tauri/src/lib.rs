@@ -11,6 +11,7 @@ pub mod collector_commands;
 pub mod collector_view;
 pub mod commands;
 pub mod config;
+pub mod gate;
 pub mod link;
 pub mod manifest;
 pub mod poll;
