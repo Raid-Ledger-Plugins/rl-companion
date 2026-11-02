@@ -4,6 +4,7 @@
 //! and the collector runtime (lane C-3): watch WoW's `LedgerLink.lua`, settle,
 //! upload changed exports, honour the tray's Upload now / Pause.
 
+pub mod autostart;
 pub mod bg3_collector;
 pub mod blob_send;
 pub mod collector;
@@ -22,6 +23,7 @@ pub mod scope;
 pub mod state;
 pub mod token;
 pub mod tray;
+pub mod tray_promote;
 pub mod upload;
 pub mod watch;
 pub mod wow_collector;
@@ -36,6 +38,17 @@ use tauri::{Listener, Manager};
 /// the tray menu.
 pub fn run() {
     tauri::Builder::default()
+        // Must be first (plugin docs): a second launch hands its argv to this
+        // process and exits, so two runtimes never watch the same files.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if autostart::should_show_window(&argv) {
+                tray::show_window(app);
+            }
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![autostart::AUTOSTART_ARG]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -46,12 +59,19 @@ pub fn run() {
             );
             app.manage(shared);
             tray::build(app.handle())?;
+            tray_promote::start(app.handle());
             let sent_path = app.path().app_data_dir()?.join(collector::SENT_STATE_FILE);
             let rt = Arc::new(runtime::Runtime::new(sent_path));
             app.manage(rt.clone());
             let kick = rt.clone();
             app.listen(tray::UPLOAD_NOW_EVENT, move |_| kick.kick());
             runtime::start(app.handle().clone(), rt);
+            autostart::init_default(app.handle());
+            // The window starts hidden (tauri.conf.json); a login-item launch
+            // leaves it in the tray, any other launch shows it.
+            if autostart::should_show_window(autostart::process_args()) {
+                tray::show_window(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -80,6 +100,20 @@ pub fn run() {
             collector_commands::confirm_first_upload,
             collector_commands::skip_first_upload,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running RL Companion");
+        .build(tauri::generate_context!())
+        .expect("error while building RL Companion")
+        .run(|app, event| {
+            // macOS: clicking the Dock icon while the window is hidden sends
+            // Reopen, not a second launch, so single-instance never sees it.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                tray::show_window(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

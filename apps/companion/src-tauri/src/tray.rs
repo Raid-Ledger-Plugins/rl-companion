@@ -1,11 +1,12 @@
 //! System tray: icon + menu (status, Upload now, Pause/Resume, Open window, Quit).
+//! Left-clicking the icon opens the window too.
 //!
 //! C-3 hooks: listen for [`UPLOAD_NOW_EVENT`] on the app handle, check
 //! `Shared::is_paused()`, and call [`set_status`] with upload results.
 
 use crate::state::Shared;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// Emitted when the user picks "Upload now".
@@ -32,16 +33,39 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&status, &sep, &upload, &pause, &open, &quit])?;
 
-    let mut builder = TrayIconBuilder::with_id("main")
+    // Never build the tray without an image: an icon-less tray item is
+    // invisible on Windows, which leaves no way back after closing the window.
+    let icon = match app.default_window_icon() {
+        Some(icon) => icon.clone(),
+        None => tauri::include_image!("icons/32x32.png"),
+    };
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
         .tooltip("RL Companion")
         .menu(&menu)
-        .on_menu_event(|app, event| on_menu(app, event.id().as_ref()));
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
-    builder.build(app)?;
+        // Left click opens the window; the menu stays on right click.
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
+        .on_tray_icon_event(|tray, event| {
+            if is_left_click(&event) {
+                show_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
     app.manage(TrayItems { status, pause });
     Ok(())
+}
+
+/// A left-button release on the tray icon (a press would fire twice per click).
+fn is_left_click(event: &TrayIconEvent) -> bool {
+    matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        }
+    )
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
