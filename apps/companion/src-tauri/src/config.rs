@@ -29,6 +29,10 @@ pub struct AppConfig {
     /// `wow_dir`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub collector_roots: BTreeMap<String, Vec<String>>,
+    /// Collectors whose first-upload preview the user confirmed (ROK-2061).
+    /// Later uploads go without asking.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub collector_consent: BTreeMap<String, bool>,
     /// Pre-ROK-2061 LedgerLink switch. Read only, folded into
     /// `collectors_enabled` by [`AppConfig::load`], never written back.
     #[serde(rename = "ledgerlinkEnabled", skip_serializing)]
@@ -46,6 +50,7 @@ impl Default for AppConfig {
             wow_dir: default_wow_dir().to_owned(),
             collectors_enabled: BTreeMap::new(),
             collector_roots: BTreeMap::new(),
+            collector_consent: BTreeMap::new(),
             legacy_ledgerlink_enabled: None,
         }
     }
@@ -82,6 +87,15 @@ impl AppConfig {
 
     pub fn set_collector_enabled(&mut self, id: &str, on: bool) {
         self.collectors_enabled.insert(id.to_owned(), on);
+    }
+
+    /// The user confirmed `id`'s first-upload preview.
+    pub fn consented(&self, id: &str) -> bool {
+        self.collector_consent.get(id).copied().unwrap_or(false)
+    }
+
+    pub fn set_consented(&mut self, id: &str) {
+        self.collector_consent.insert(id.to_owned(), true);
     }
 
     /// The user's root override for `id`, if any (empty entries ignored).

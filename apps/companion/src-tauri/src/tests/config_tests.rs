@@ -65,6 +65,7 @@ fn config_round_trips_and_defaults_to_prod() {
         wow_dir: r"D:\Games\WoW".into(),
         collectors_enabled: [("wow-ledgerlink".to_owned(), true)].into(),
         collector_roots: Default::default(),
+        collector_consent: Default::default(),
         legacy_ledgerlink_enabled: None,
     };
     cfg.save(&file).expect("save");

@@ -7,11 +7,13 @@
 pub mod bg3_collector;
 pub mod collector;
 pub mod collector_commands;
+pub mod collector_view;
 pub mod commands;
 pub mod config;
 pub mod link;
 pub mod manifest;
 pub mod poll;
+pub mod preview;
 pub mod registry;
 pub mod runtime;
 pub mod scope;
@@ -70,6 +72,11 @@ pub fn run() {
             collector_commands::pick_wow_dir,
             collector_commands::set_ledgerlink_enabled,
             collector_commands::upload_now,
+            collector_commands::set_collector_enabled,
+            collector_commands::set_collector_root,
+            collector_commands::pick_collector_root,
+            collector_commands::confirm_first_upload,
+            collector_commands::skip_first_upload,
         ])
         .run(tauri::generate_context!())
         .expect("error while running RL Companion");

@@ -51,6 +51,9 @@ pub struct CollectorManifest {
     pub settle_ms: u64,
     /// Status line when the scan found no source file at all.
     pub no_files_hint: &'static str,
+    /// Show a local preview and wait for the user's OK before this
+    /// collector's first upload (ROK-2061: the save name is personal text).
+    pub confirm_first_upload: bool,
 }
 
 /// Settle bounds: under 1 s the 1 s sample tick cannot see it; over a minute
@@ -240,6 +243,7 @@ pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
     file_patterns: &["LedgerLink.lua"],
     settle_ms: 3_000,
     no_files_hint: "No LedgerLink.lua found — check the WoW folder",
+    confirm_first_upload: false,
 };
 
 /// The BG3 save collector (ROK-2061 lane 2, contract `bg3-save/v1`). Its roots
@@ -267,4 +271,5 @@ pub const BG3_SAVE: CollectorManifest = CollectorManifest {
     file_patterns: &["*.lsv"],
     settle_ms: 3_000,
     no_files_hint: "No BG3 save found — check the save folder",
+    confirm_first_upload: true,
 };

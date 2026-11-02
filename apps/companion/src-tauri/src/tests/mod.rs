@@ -2,6 +2,7 @@
 
 mod bg3_collector_tests;
 mod collector_tests;
+mod collector_view_tests;
 mod config_tests;
 mod link_tests;
 mod poll_tests;

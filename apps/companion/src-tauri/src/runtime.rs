@@ -3,8 +3,10 @@
 //! kick it through [`Runtime::kick`].
 
 use crate::collector::{PendingUpload, SentState};
+use crate::collector_view::{device_state, rows, CollectorRowDto};
 use crate::config::AppConfig;
-use crate::manifest::WOW_LEDGERLINK;
+use crate::manifest::{Platform, WOW_LEDGERLINK};
+use crate::preview::{hold, Held};
 use crate::registry::{CollectorRegistry, Entry};
 use crate::state::Shared;
 use crate::tray;
@@ -48,6 +50,10 @@ pub struct CollectorStatusDto {
     pub status: String,
     pub results: Vec<CharResult>,
     pub log: Vec<LogLine>,
+    /// Device-level state (paused, not linked, rate limited), shown once.
+    pub device: Option<String>,
+    /// One row per registered collector.
+    pub collectors: Vec<CollectorRowDto>,
 }
 
 /// What to do after one upload ended.
@@ -120,6 +126,11 @@ struct Inner {
     sent: SentState,
     /// No uploads before this (a 429's `Retry-After`).
     hold_until: Option<Instant>,
+    /// Each collector's own line from the last scan.
+    lines: BTreeMap<String, String>,
+    device: Option<String>,
+    /// Batches waiting on the user's first-upload confirmation.
+    held: BTreeMap<String, Held>,
 }
 
 pub struct Runtime {
@@ -139,6 +150,9 @@ impl Runtime {
                 log: VecDeque::new(),
                 sent,
                 hold_until: None,
+                lines: BTreeMap::new(),
+                device: None,
+                held: BTreeMap::new(),
             }),
             kick: Notify::new(),
         }
@@ -212,14 +226,59 @@ impl Runtime {
         }
     }
 
-    pub fn snapshot(&self, enabled: bool, wow_dir: &str) -> CollectorStatusDto {
+    /// Remember the scan's per-collector lines and the device state.
+    pub fn set_lines(&self, lines: BTreeMap<String, String>, device: Option<String>) {
+        let mut inner = self.lock();
+        inner.lines = lines;
+        inner.device = device;
+    }
+
+    /// Hold `id`'s batch behind its first-upload preview (replaces any
+    /// earlier hold); `None` clears it.
+    pub fn set_held(&self, id: &str, held: Option<Held>) {
+        let mut inner = self.lock();
+        match held {
+            Some(h) => inner.held.insert(id.to_owned(), h),
+            None => inner.held.remove(id),
+        };
+    }
+
+    /// Skip: record every held item as handled so it is never sent. Returns
+    /// how many were skipped.
+    pub fn skip_held(&self, id: &str) -> usize {
+        let mut inner = self.lock();
+        let Some(held) = inner.held.remove(id) else {
+            return 0;
+        };
+        for (scope, item, sha) in &held.keys {
+            inner.sent.record(scope, item, sha);
+        }
+        if let Err(e) = inner.sent.save(&self.sent_path) {
+            inner.log.push_front(LogLine {
+                at: now(),
+                text: format!("Could not save upload state ({e})"),
+            });
+        }
+        held.keys.len()
+    }
+
+    pub fn snapshot(&self, cfg: &AppConfig) -> CollectorStatusDto {
+        let m = &WOW_LEDGERLINK;
         let inner = self.lock();
+        let previews = inner
+            .held
+            .iter()
+            .map(|(id, h)| (id.clone(), h.preview.clone()))
+            .collect();
+        let env = |k: &str| std::env::var(k).ok();
         CollectorStatusDto {
-            enabled,
-            wow_dir: wow_dir.to_owned(),
+            enabled: cfg.collector_enabled(m.id, m.default_enabled),
+            wow_dir: cfg.wow_dir.clone(),
             status: inner.status.clone(),
             results: inner.results.values().cloned().collect(),
             log: inner.log.iter().cloned().collect(),
+            device: inner.device.clone(),
+            collectors: rows(cfg, Platform::current(), &env, &inner.lines, &previews),
         }
     }
 }
@@ -228,11 +287,9 @@ fn now() -> String {
     crate::wow_collector::captured_at(None)
 }
 
-/// Current status for the window (the WoW collector's switch and folder).
+/// Current status for the window: every collector's row and the device state.
 pub fn status(app: &AppHandle, rt: &Runtime) -> CollectorStatusDto {
-    let cfg = app.state::<Shared>().config();
-    let m = &WOW_LEDGERLINK;
-    rt.snapshot(cfg.collector_enabled(m.id, m.default_enabled), &cfg.wow_dir)
+    rt.snapshot(&app.state::<Shared>().config())
 }
 
 fn publish(app: &AppHandle, rt: &Runtime, line: &str) {
@@ -307,15 +364,34 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let cfg = app.state::<Shared>().config();
     let registry = CollectorRegistry::from_config(&cfg);
-    let mut lines = Vec::new();
-    for entry in registry.entries().iter().filter(|e| e.enabled) {
-        let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry).await;
-        lines.push(line);
+    let shared = app.state::<Shared>();
+    let token = shared.token();
+    let linked = token
+        .as_ref()
+        .map(Option::is_some)
+        .map_err(|e| e.to_string());
+    let device = device_state(shared.is_paused(), rt.held_secs(), linked);
+    let token = token.ok().flatten().filter(|_| device.is_none());
+    let mut lines = BTreeMap::new();
+    for entry in registry.entries() {
+        if !entry.enabled {
+            rt.set_held(entry.manifest.id, None);
+            continue;
+        }
+        let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry, token.as_ref()).await;
+        lines.insert(entry.manifest.id.to_owned(), line);
         if stop_all {
             break;
         }
     }
-    publish(app, rt, &status_line(&registry, &lines));
+    let joined: Vec<String> = lines.values().cloned().collect();
+    let line = status_line(&registry, &joined);
+    let line = match &device {
+        Some(d) => format!("{d} · {line}"),
+        None => line,
+    };
+    rt.set_lines(lines, device);
+    publish(app, rt, &line);
 }
 
 /// The enabled collectors' lines; when none is on, say how to start.
@@ -338,6 +414,7 @@ async fn scan_and_upload_one(
     rt: &Runtime,
     cfg: &AppConfig,
     entry: &Entry,
+    token: Option<&crate::token::DeviceToken>,
 ) -> (String, bool) {
     // `Entry::scan` is `None` for a disabled collector: nothing is read.
     let Some(scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
@@ -349,28 +426,30 @@ async fn scan_and_upload_one(
     if scan.files == 0 {
         return (entry.manifest.no_files_hint.to_owned(), false);
     }
+    let id = entry.manifest.id;
     if waiting == 0 {
+        rt.set_held(id, None);
         return ("Up to date".to_owned(), false);
     }
-    let shared = app.state::<Shared>();
-    if shared.is_paused() {
-        return (format!("Paused — {waiting} export(s) waiting"), false);
-    }
-    if let Some(secs) = rt.held_secs() {
-        let line = format!("Rate limited — {waiting} export(s) waiting, retry in {secs}s");
+    // First upload of a confirm-first collector: hold it behind a local
+    // preview until the user says Upload (consent) or Skip.
+    if entry.manifest.confirm_first_upload && !cfg.consented(id) {
+        rt.set_held(id, hold(id, &scan.pending));
+        let line = format!("{waiting} waiting — check the preview before the first upload");
         return (line, false);
     }
-    let token = match shared.token() {
-        Ok(Some(t)) => t,
-        Ok(None) => return ("Link this device to upload".to_owned(), false),
-        Err(e) => return (format!("Cannot read the device token ({e})"), false),
+    rt.set_held(id, None);
+    // Device-level states (paused, not linked, rate limited) are shown once
+    // by the window; here only the count.
+    let Some(token) = token.filter(|_| rt.held_secs().is_none()) else {
+        return (format!("{waiting} export(s) waiting"), false);
     };
     let uploader = match Uploader::new(&cfg.server_url) {
         Ok(u) => u,
         Err(e) => return (e, false),
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
-    upload_all(app, rt, &uploader, &token, &scan.pending).await
+    upload_all(app, rt, &uploader, token, &scan.pending).await
 }
 
 /// PUT the message's blobs, then POST it. A blob the server refuses
