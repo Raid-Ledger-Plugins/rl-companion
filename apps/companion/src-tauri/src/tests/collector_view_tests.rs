@@ -308,9 +308,15 @@ fn an_expired_hold_starts_a_scan_on_the_next_tick() {
 fn the_hold_countdown_is_derived_at_render_time() {
     let now = std::time::Instant::now();
     assert_eq!(secs_left(None, now), None);
-    assert_eq!(secs_left(Some(now + Duration::from_secs(47)), now), Some(47));
+    assert_eq!(
+        secs_left(Some(now + Duration::from_secs(47)), now),
+        Some(47)
+    );
     let later = now + Duration::from_secs(20);
-    assert_eq!(secs_left(Some(now + Duration::from_secs(47)), later), Some(27));
+    assert_eq!(
+        secs_left(Some(now + Duration::from_secs(47)), later),
+        Some(27)
+    );
     assert_eq!(secs_left(Some(now), later), None, "an expired hold is gone");
 
     let rt = Runtime::new(super::temp_dir("live-hold").join("sent.json"));
@@ -322,12 +328,19 @@ fn the_hold_countdown_is_derived_at_render_time() {
         "a live hold shows its countdown: {device}"
     );
     rt.hold_for(Duration::ZERO);
-    assert_eq!(rt.snapshot(&cfg).device, None, "no stale countdown once it passes");
+    assert_eq!(
+        rt.snapshot(&cfg).device,
+        None,
+        "no stale countdown once it passes"
+    );
 }
 
 #[test]
 fn baked_text_never_carries_a_countdown() {
-    assert_eq!(device_note(false, true, Ok(true)).as_deref(), Some(RETRYING));
+    assert_eq!(
+        device_note(false, true, Ok(true)).as_deref(),
+        Some(RETRYING)
+    );
     assert!(device_note(true, true, Ok(true)).is_some_and(|d| d.starts_with("Paused")));
     assert_eq!(device_note(false, false, Ok(true)), None);
     let fx = effect(&UploadOutcome::RateLimited {
