@@ -322,7 +322,10 @@ fn an_expired_hold_is_taken_exactly_once() {
     assert!(!rt.take_expired_hold(), "no hold, nothing to take");
     rt.hold_for(Duration::ZERO);
     assert_eq!(rt.held_secs(), None, "an expired hold shows no countdown");
-    assert!(rt.take_expired_hold(), "a hold already in the past is taken");
+    assert!(
+        rt.take_expired_hold(),
+        "a hold already in the past is taken"
+    );
     assert!(!rt.take_expired_hold(), "only once");
 }
 
@@ -402,5 +405,9 @@ fn baked_text_never_carries_a_countdown() {
     let fx = effect(&UploadOutcome::Deferred {
         reason: "offline".into(),
     });
-    assert_eq!(shown_text(&fx), "Will retry: offline", "no hold keeps its text");
+    assert_eq!(
+        shown_text(&fx),
+        "Will retry: offline",
+        "no hold keeps its text"
+    );
 }
