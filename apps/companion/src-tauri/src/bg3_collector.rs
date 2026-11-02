@@ -60,7 +60,9 @@ impl Bg3SaveCollector {
         let name = name.unwrap_or_default();
         let meta = match self.scope.metadata(path) {
             Ok(m) if m.len() > MAX_LSV_BYTES => {
-                return scan.notes.push(format!("{name}: save is over 256 MiB; skipped"))
+                return scan
+                    .notes
+                    .push(format!("{name}: save is over 256 MiB; skipped"))
             }
             Ok(m) => m,
             Err(e) => return scan.notes.push(format!("{name}: cannot read save ({e})")),

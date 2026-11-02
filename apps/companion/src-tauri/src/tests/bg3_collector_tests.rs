@@ -1,0 +1,195 @@
+//! ROK-2061 lane 2: the BG3 save collector, through the registry.
+
+use super::temp_dir;
+use crate::bg3_collector::build;
+use crate::collector::SentState;
+use crate::config::AppConfig;
+use crate::manifest::{Platform, BG3_SAVE};
+use crate::registry::{CollectorRegistry, BUILTINS};
+use crate::upload::Uploader;
+use rl_collectors::sha256_hex;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+const SAVE_INFO: &str = include_str!(
+    "../../../../../contracts/bg3-save/v1/fixtures/saveinfo/act2-party-4p-summon.saveinfo.json"
+);
+const GOLDEN: &str =
+    include_str!("../../../../../contracts/bg3-save/v1/fixtures/act2-party-4p-summon.json");
+const WEBP: &[u8] =
+    include_bytes!("../../../../../contracts/bg3-save/v1/fixtures/placeholder-thumbnail.webp");
+const FOLDER: &str = "QuickSave_1-1234567890";
+
+/// A synthetic LSPK v18 package of stored entries (the layout `read_lspk`
+/// parses: header, data, LZ4 file table last). Never a real user save.
+fn lspk(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = vec![0u8; 40];
+    let mut table = Vec::new();
+    for (name, data) in files {
+        let offset = out.len() as u64;
+        out.extend_from_slice(data);
+        let mut n = [0u8; 256];
+        n[..name.len()].copy_from_slice(name.as_bytes());
+        table.extend_from_slice(&n);
+        table.extend_from_slice(&(offset as u32).to_le_bytes());
+        table.extend_from_slice(&((offset >> 32) as u16).to_le_bytes());
+        table.extend_from_slice(&[0, 0]);
+        table.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        table.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    }
+    let list_offset = out.len() as u64;
+    let compressed = lz4_flex::block::compress(&table);
+    out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    out.extend_from_slice(&compressed);
+    out[0..4].copy_from_slice(b"LSPK");
+    out[4..8].copy_from_slice(&18u32.to_le_bytes());
+    out[8..16].copy_from_slice(&list_offset.to_le_bytes());
+    out[16..20].copy_from_slice(&(8 + compressed.len() as u32).to_le_bytes());
+    out[38..40].copy_from_slice(&1u16.to_le_bytes());
+    out
+}
+
+fn save_bytes() -> Vec<u8> {
+    lspk(&[
+        ("SaveInfo.json", SAVE_INFO.as_bytes()),
+        ("QuickSave_1.WebP", WEBP),
+    ])
+}
+
+/// `<story>/<FOLDER>/QuickSave_1.lsv` plus a file the manifest ignores.
+fn install(story: &Path, bytes: &[u8]) -> PathBuf {
+    let dir = story.join(FOLDER);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("QuickSave_1.WebP"), WEBP).expect("webp");
+    let file = dir.join("QuickSave_1.lsv");
+    std::fs::write(&file, bytes).expect("lsv");
+    file
+}
+
+fn registry(story: &Path, on: bool) -> CollectorRegistry {
+    let mut cfg = AppConfig::default();
+    cfg.collector_roots.insert(
+        BG3_SAVE.id.into(),
+        vec![story.to_string_lossy().into_owned()],
+    );
+    if on {
+        cfg.set_collector_enabled(BG3_SAVE.id, true);
+    }
+    CollectorRegistry::build(BUILTINS, &cfg, Some(Platform::Windows), &|_| None).expect("builtins")
+}
+
+#[test]
+fn a_save_normalises_to_the_golden_payload_without_the_raw_folder_name() {
+    let (body, blobs, label) = build(&save_bytes(), FOLDER, None).expect("parses");
+    let mut golden: Value = serde_json::from_str(GOLDEN).expect("golden");
+    let payload = &body["payload"];
+    // Collector-supplied facts differ from the fixture's synthetic ones.
+    golden["payload"]["savedAt"] = payload["savedAt"].clone();
+    golden["payload"]["campaignKey"] = Value::from(sha256_hex(FOLDER.as_bytes()));
+    assert_eq!(payload, &golden["payload"], "payload matches the contract");
+    assert_eq!(body["contract"], "bg3-save");
+    assert_eq!(body["contractVersion"], 1);
+    assert_eq!(label, "QuickSave_1");
+    assert_eq!(blobs.len(), 1, "the thumbnail goes up as a blob");
+    assert_eq!(blobs[0].sha256, sha256_hex(WEBP));
+    assert_eq!(payload["thumbnail"]["sha256"], sha256_hex(WEBP));
+    assert!(
+        !body.to_string().contains(FOLDER),
+        "the raw save-folder name never leaves the machine"
+    );
+}
+
+#[test]
+fn bg3_is_off_by_default_and_dedupes_by_sha256_once_on() {
+    let story = temp_dir("bg3-story");
+    let file = install(&story, &save_bytes());
+    let off = registry(&story, false);
+    let entry = off.get(BG3_SAVE.id).expect("bg3 registered");
+    assert!(!entry.enabled, "opt-in per game");
+    assert!(entry
+        .scan("https://raid.example.net", &SentState::default())
+        .is_none());
+
+    let on = registry(&story, true);
+    assert_eq!(on.watch_roots(), vec![story.clone()]);
+    assert_eq!(on.wanting(&file).count(), 1, "an .lsv change settles");
+    assert_eq!(on.wanting(&file.with_extension("WebP")).count(), 0);
+    let bg3 = on.get(BG3_SAVE.id).expect("bg3");
+    let origin = "https://raid.example.net";
+    let scan = bg3.scan(origin, &SentState::default()).expect("enabled");
+    assert_eq!((scan.files, scan.pending.len()), (1, 1), "{:?}", scan.notes);
+    let p = &scan.pending[0];
+    assert_eq!(p.sha256, sha256_hex(&save_bytes()));
+    let mut sent = SentState::default();
+    sent.record(&p.scope, &p.item, &p.sha256);
+    let again = bg3.scan(origin, &sent).expect("enabled");
+    assert_eq!(
+        (again.files, again.pending.len()),
+        (1, 0),
+        "unchanged save not resent"
+    );
+
+    let mut changed = save_bytes();
+    changed.push(0);
+    std::fs::write(&file, &changed).expect("rewrite");
+    let third = bg3.scan(origin, &sent).expect("enabled");
+    assert_eq!(third.pending.len(), 1, "a changed save is sent again");
+    let _ = std::fs::remove_dir_all(story);
+}
+
+#[test]
+fn a_broken_save_is_noted_not_uploaded() {
+    let story = temp_dir("bg3-broken");
+    install(&story, b"not an lspk");
+    let reg = registry(&story, true);
+    let scan = reg
+        .get(BG3_SAVE.id)
+        .and_then(|e| e.scan("https://raid.example.net", &SentState::default()))
+        .expect("enabled");
+    assert_eq!(scan.pending.len(), 0);
+    assert!(
+        scan.notes.iter().any(|n| n.contains("not readable yet")),
+        "{:?}",
+        scan.notes
+    );
+    let _ = std::fs::remove_dir_all(story);
+}
+
+#[test]
+fn default_save_folders_resolve_per_os() {
+    let env = |k: &str| match k {
+        "LOCALAPPDATA" => Some(r"C:\Users\p\AppData\Local".to_owned()),
+        "HOME" => Some("/Users/p".to_owned()),
+        _ => None,
+    };
+    let win = BG3_SAVE.default_roots_for(Some(Platform::Windows), &env);
+    assert_eq!(
+        win,
+        vec![PathBuf::from(
+            r"C:\Users\p\AppData\Local\Larian Studios\Baldur's Gate 3\PlayerProfiles\Public\Savegames\Story"
+        )]
+    );
+    let mac = BG3_SAVE.default_roots_for(Some(Platform::Macos), &env);
+    assert_eq!(
+        mac,
+        vec![PathBuf::from(
+            "/Users/p/Documents/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story"
+        )]
+    );
+    assert!(BG3_SAVE
+        .default_roots_for(Some(Platform::Windows), &|_| None)
+        .is_empty());
+}
+
+#[test]
+fn blob_urls_take_only_a_sha256() {
+    let up = Uploader::new("https://raid.example.net").expect("url");
+    let sha = sha256_hex(WEBP);
+    assert_eq!(
+        up.blob_url(&sha).expect("hex").as_str(),
+        format!("https://raid.example.net/api/companion/v1/blobs/{sha}")
+    );
+    assert!(up.blob_url("../messages/x").is_err());
+    assert!(up.blob_url(&sha.to_uppercase()).is_err());
+}

@@ -169,11 +169,11 @@ fn default_config_registers_wow_disabled_with_the_wow_dir() {
     };
     let reg = build(&cfg);
     let ids: Vec<_> = reg.entries().iter().map(|e| e.manifest.id).collect();
-    assert_eq!(ids, vec!["wow-ledgerlink"]);
+    assert_eq!(ids, vec!["wow-ledgerlink", "bg3-save"]);
     let wow = reg.get("wow-ledgerlink").expect("wow registered");
     assert!(!wow.enabled, "opt-in: off until the user turns it on");
     assert_eq!(wow.roots, vec![PathBuf::from(dir)]);
-    assert!(reg.get("bg3-save").is_none(), "lane 2 adds BG3");
+    assert!(!reg.get("bg3-save").expect("bg3").enabled, "BG3 is opt-in");
     assert!(reg.notes.is_empty());
 }
 
@@ -195,8 +195,13 @@ fn enabled_map_switches_a_collector_and_unknown_ids_are_noted_not_fatal() {
 
 #[test]
 fn snapshot_is_a_read_only_view_of_each_collector() {
+    let dir = if cfg!(windows) {
+        r"D:\games\wow"
+    } else {
+        "/games/wow"
+    };
     let mut cfg = AppConfig {
-        wow_dir: "/games/wow".into(),
+        wow_dir: dir.into(),
         ..AppConfig::default()
     };
     cfg.set_collector_enabled("wow-ledgerlink", true);
@@ -210,8 +215,17 @@ fn snapshot_is_a_read_only_view_of_each_collector() {
             "contractId": "wow-ledgerlink",
             "contractVersion": 1,
             "enabled": true,
-            "roots": ["/games/wow"],
+            "roots": [dir],
             "filePatterns": ["LedgerLink.lua"],
+            "settleMs": 3000
+        }, {
+            "id": "bg3-save",
+            "displayName": "Baldur's Gate 3",
+            "contractId": "bg3-save",
+            "contractVersion": 1,
+            "enabled": false,
+            "roots": [],
+            "filePatterns": ["*.lsv"],
             "settleMs": 3000
         }])
     );

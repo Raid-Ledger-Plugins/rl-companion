@@ -266,7 +266,11 @@ impl Uploader {
     }
 
     /// One blob PUT, classified like a message POST.
-    pub async fn attempt_blob(&self, token: &DeviceToken, blob: &crate::collector::Blob) -> Attempt {
+    pub async fn attempt_blob(
+        &self,
+        token: &DeviceToken,
+        blob: &crate::collector::Blob,
+    ) -> Attempt {
         let url = match self.blob_url(&blob.sha256) {
             Ok(u) => u,
             Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),

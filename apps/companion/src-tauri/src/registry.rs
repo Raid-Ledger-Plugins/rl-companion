@@ -2,6 +2,7 @@
 //! manifest + the user's settings, each bound to its own [`WatchScope`]. The
 //! runtime iterates this instead of naming a collector.
 
+use crate::bg3_collector::Bg3SaveCollector;
 use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{
@@ -9,7 +10,6 @@ use crate::manifest::{
     WOW_LEDGERLINK,
 };
 use crate::scope::WatchScope;
-use crate::bg3_collector::Bg3SaveCollector;
 use crate::wow_collector::LedgerLinkCollector;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
