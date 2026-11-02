@@ -2,14 +2,17 @@
 //! first-upload preview hold.
 
 use crate::collector::{Blob, PendingUpload};
-use crate::collector_view::{apply_root, device_state, rows};
+use crate::collector_view::{apply_root, device_note, device_state, rows, RETRYING};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, WOW_LEDGERLINK};
 use crate::preview::{base64, hold};
-use crate::runtime::{effect, Runtime};
+use crate::runtime::{
+    effect, secs_left, shown_text, stopped_line, take_expired, tick_scans, Runtime,
+};
 use crate::upload::UploadOutcome;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 fn env(k: &str) -> Option<String> {
     (k == "HOME").then(|| "/home/ada".to_owned())
@@ -250,12 +253,13 @@ fn a_401_sets_the_structured_relink_flag_whatever_the_joined_line_says() {
         (WOW_LEDGERLINK.id.to_owned(), "Up to date".to_owned()),
         (BG3_SAVE.id.to_owned(), "Re-link this device".to_owned()),
     ]);
-    rt.set_lines(lines.clone(), None, fx.relink);
+    rt.set_lines(lines.clone(), fx.relink);
     rt.set_status("Up to date · Re-link this device");
     let s = rt.snapshot(&cfg);
     assert_ne!(s.status, "Re-link this device", "the line is joined");
     assert!(s.relink, "the window learns of the 401 from the flag");
-    rt.set_lines(lines, Some("Link this device to upload".into()), false);
+    rt.set_device(false, Ok(false));
+    rt.set_lines(lines, false);
     assert!(!rt.snapshot(&cfg).relink, "the next scan clears it");
 }
 
@@ -263,7 +267,7 @@ fn relinked_runtime(tag: &str) -> Runtime {
     let rt = Runtime::new(super::temp_dir(tag).join("sent.json"));
     let fx = effect(&UploadOutcome::Unauthorized);
     let lines = BTreeMap::from([(WOW_LEDGERLINK.id.to_owned(), fx.text.clone())]);
-    rt.set_lines(lines, None, fx.relink);
+    rt.set_lines(lines, fx.relink);
     assert!(rt.snapshot(&AppConfig::default()).relink, "the 401 set it");
     rt
 }
@@ -290,5 +294,120 @@ fn a_mid_scan_update_after_a_re_link_does_not_carry_the_old_401() {
     assert!(
         !rt.snapshot(&AppConfig::default()).relink,
         "stale flag leaked"
+    );
+}
+
+#[test]
+fn an_expired_hold_starts_a_scan_on_the_next_tick() {
+    assert!(tick_scans(true, false, 1), "the hold just ran out");
+    assert!(!tick_scans(false, false, 1), "nothing to do, or still held");
+    assert!(tick_scans(false, true, 1), "a file settled");
+    assert!(tick_scans(false, false, 300), "periodic rescan");
+}
+
+#[test]
+fn an_expired_hold_is_taken_exactly_once() {
+    let now = Instant::now();
+    let later = now + Duration::from_secs(1);
+    let mut until = Some(now);
+    assert!(take_expired(&mut until, later), "a past hold is taken");
+    assert_eq!(until, None, "and cleared");
+    assert!(!take_expired(&mut until, later), "only once");
+    let live = now + Duration::from_secs(47);
+    let mut until = Some(live);
+    assert!(!take_expired(&mut until, now), "a live hold is not taken");
+    assert_eq!(until, Some(live), "and is kept");
+
+    let rt = Runtime::new(super::temp_dir("take-hold").join("sent.json"));
+    assert!(!rt.take_expired_hold(), "no hold, nothing to take");
+    rt.hold_for(Duration::ZERO);
+    assert_eq!(rt.held_secs(), None, "an expired hold shows no countdown");
+    assert!(
+        rt.take_expired_hold(),
+        "a hold already in the past is taken"
+    );
+    assert!(!rt.take_expired_hold(), "only once");
+}
+
+#[test]
+fn a_hold_that_expires_during_a_scan_still_starts_the_next_scan() {
+    let rt = Runtime::new(super::temp_dir("hold-mid-scan").join("sent.json"));
+    assert!(!tick_scans(rt.take_expired_hold(), false, 1), "idle tick");
+    // The scan hits a 429 whose Retry-After runs out before the scan
+    // returns, so no tick ever sees the hold live.
+    rt.hold_for(Duration::ZERO);
+    assert_eq!(rt.held_secs(), None, "no tick samples it as held");
+    assert!(
+        tick_scans(rt.take_expired_hold(), false, 2),
+        "the latched expiry rescans on the next tick"
+    );
+    assert!(!tick_scans(rt.take_expired_hold(), false, 3), "only once");
+}
+
+#[test]
+fn the_hold_countdown_is_derived_at_render_time() {
+    let now = std::time::Instant::now();
+    assert_eq!(secs_left(None, now), None);
+    assert_eq!(
+        secs_left(Some(now + Duration::from_secs(47)), now),
+        Some(47)
+    );
+    let later = now + Duration::from_secs(20);
+    assert_eq!(
+        secs_left(Some(now + Duration::from_secs(47)), later),
+        Some(27)
+    );
+    assert_eq!(secs_left(Some(now), later), None, "an expired hold is gone");
+
+    let rt = Runtime::new(super::temp_dir("live-hold").join("sent.json"));
+    let cfg = AppConfig::default();
+    rt.hold_for(Duration::from_secs(50));
+    let device = rt.snapshot(&cfg).device.unwrap_or_default();
+    assert!(
+        device.starts_with("Rate limited — retrying in"),
+        "a live hold shows its countdown: {device}"
+    );
+    rt.hold_for(Duration::ZERO);
+    assert_eq!(
+        rt.snapshot(&cfg).device,
+        None,
+        "no stale countdown once it passes"
+    );
+}
+
+#[test]
+fn baked_text_never_carries_a_countdown() {
+    assert_eq!(
+        device_note(false, true, Ok(true)).as_deref(),
+        Some(RETRYING)
+    );
+    assert!(device_note(true, true, Ok(true)).is_some_and(|d| d.starts_with("Paused")));
+    assert_eq!(device_note(false, false, Ok(true)), None);
+    let fx = effect(&UploadOutcome::RateLimited {
+        wait: Duration::from_secs(47),
+    });
+    assert_eq!(fx.hold, Some(Duration::from_secs(47)));
+    assert_eq!(shown_text(&fx), RETRYING);
+    assert_eq!(
+        stopped_line(2, 5, &fx),
+        format!("Uploaded 2 of 5 export(s); {RETRYING}"),
+        "the batch line"
+    );
+    let rt = Runtime::new(super::temp_dir("baked-result").join("sent.json"));
+    rt.finish(&pending("A", "2026-10-01T00:00:00Z", "a1"), &fx);
+    let shown: Vec<String> = rt
+        .snapshot(&AppConfig::default())
+        .results
+        .into_iter()
+        .map(|r| r.result)
+        .collect();
+    assert_eq!(shown, vec![RETRYING.to_owned()], "the per-export result");
+    let fx = effect(&UploadOutcome::Deferred {
+        reason: "offline".into(),
+    });
+    assert_eq!(
+        shown_text(&fx),
+        "Will retry: offline",
+        "no hold keeps its text"
     );
 }
