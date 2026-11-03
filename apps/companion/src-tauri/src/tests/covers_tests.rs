@@ -85,7 +85,7 @@ async fn a_url_change_refetches_and_the_same_url_does_not() {
         .as_deref()
         .is_some_and(|d| d.starts_with("data:image/png;base64,")));
     assert!(
-        !dir.join("bg3-save.jpg").exists(),
+        !dir.join("cover-bg3-save.jpg").exists(),
         "the old file is replaced"
     );
 }
@@ -199,4 +199,37 @@ async fn a_hostile_contract_id_never_reads_or_writes_outside_the_covers_dir() {
     );
     // A kebab-case id is still accepted.
     assert!(crate::covers::safe_id("wow-ledgerlink") && crate::covers::safe_id(&"a".repeat(64)));
+}
+
+#[tokio::test]
+async fn a_windows_device_name_id_is_stored_under_a_prefixed_file_name() {
+    const RESERVED: [&str; 4] = ["com1", "nul", "con", "lpt1"];
+    let dir = super::temp_dir("covers-reserved");
+    let n = Arc::new(AtomicUsize::new(0));
+    for id in RESERVED {
+        let name = crate::covers::file_name(id, "jpg");
+        let stem = name.split('.').next().unwrap_or_default();
+        assert!(
+            !RESERVED.contains(&stem),
+            "{id} maps to the device name {name}"
+        );
+        let got = cover(
+            &dir,
+            id,
+            Some(A),
+            counting(&n, Ok(img("image/jpeg", b"art"))),
+        )
+        .await;
+        assert!(got.is_some(), "{id}: a kebab-case id still gets its cover");
+    }
+    assert_eq!(crate::covers::file_name("com1", "jpg"), "cover-com1.jpg");
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .expect("covers dir")
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .collect();
+    files.sort();
+    assert!(
+        files.iter().all(|f| f.starts_with("cover-")),
+        "an unprefixed file was written: {files:?}"
+    );
 }

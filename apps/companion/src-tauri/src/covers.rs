@@ -1,7 +1,8 @@
 //! Tile cover art (ROK-2067 D14). The server names the cover (`game.coverUrl`);
 //! the app fetches it (https only, jpeg/png/webp, ≤ 1 MB, 10 s), keeps it
-//! under the app data dir as `covers/<contract-id>.<ext>` beside the URL it
-//! came from, and hands the window a `data:` URL (the CSP allows only
+//! under the app data dir as `covers/cover-<contract-id>.<ext>` beside the URL
+//! it came from (the prefix keeps an id like `com1` or `nul` off Windows
+//! device names), and hands the window a `data:` URL (the CSP allows only
 //! `img-src 'self' data:`). Fallback order: fresh cover → cached file →
 //! `None` (the window draws a gradient with the game's initials). No artwork
 //! is bundled in the app.
@@ -81,8 +82,15 @@ pub fn safe_id(id: &str) -> bool {
     matches!(b.first(), Some(c) if ok(c)) && b.len() <= 64 && b.iter().all(|c| ok(c) || *c == b'-')
 }
 
+/// The file name for `id`'s cover (`ext`) or source URL (`src`). The
+/// `cover-` prefix means no name is a Windows reserved device name (`con`,
+/// `nul`, `com1`, `lpt1`, …), which a bare id could be.
+pub fn file_name(id: &str, ext: &str) -> String {
+    format!("cover-{id}.{ext}")
+}
+
 fn src_path(dir: &Path, id: &str) -> PathBuf {
-    dir.join(format!("{id}.src"))
+    dir.join(file_name(id, "src"))
 }
 
 /// The cached cover for `id` as a `data:` URL, if any.
@@ -91,7 +99,7 @@ pub fn cached(dir: &Path, id: &str) -> Option<String> {
         return None;
     }
     EXTS.iter().find_map(|ext| {
-        let bytes = std::fs::read(dir.join(format!("{id}.{ext}"))).ok()?;
+        let bytes = std::fs::read(dir.join(file_name(id, ext))).ok()?;
         Some(data_url(ext, &bytes))
     })
 }
@@ -102,9 +110,9 @@ fn store(dir: &Path, id: &str, url: &str, ext: &str, bytes: &[u8]) -> std::io::R
     }
     std::fs::create_dir_all(dir)?;
     for old in EXTS {
-        let _ = std::fs::remove_file(dir.join(format!("{id}.{old}")));
+        let _ = std::fs::remove_file(dir.join(file_name(id, old)));
     }
-    std::fs::write(dir.join(format!("{id}.{ext}")), bytes)?;
+    std::fs::write(dir.join(file_name(id, ext)), bytes)?;
     std::fs::write(src_path(dir, id), url)
 }
 
