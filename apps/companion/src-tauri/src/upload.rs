@@ -107,6 +107,49 @@ pub fn classify(status: u16, retry_after: Option<&str>, body: &[u8]) -> Attempt 
     }
 }
 
+/// The server's "the hub's Gallery is full" answer to a screenshot (413).
+pub const GALLERY_FULL_CODE: &str = "blob_quota_exceeded";
+
+/// A message POST's answer for `contract`. `bg3-screenshot/v1` §3: any 4xx the
+/// server answers with its own error code is final for that screenshot —
+/// `blob_quota_exceeded` (the hub's Gallery is full) and codes the app does
+/// not know included — except `rate_limited` (429, stays queued) and the
+/// "this contract is not served (yet)" codes, which say nothing about it.
+/// Every other contract keeps [`classify`]'s rules.
+pub fn classify_message(
+    contract: &str,
+    status: u16,
+    retry_after: Option<&str>,
+    body: &[u8],
+) -> Attempt {
+    let screenshot_4xx = contract == crate::bg3_screenshot::CONTRACT
+        && (400..=499).contains(&status)
+        && !matches!(status, 401 | 408 | 429);
+    if !screenshot_4xx {
+        return classify(status, retry_after, body);
+    }
+    let Ok(parsed) = serde_json::from_slice::<ErrorBody>(body) else {
+        return classify(status, retry_after, body);
+    };
+    let not_served = matches!(
+        parsed.code.as_str(),
+        "" | "unknown_contract" | "unknown_contract_version" | "retired_contract_version"
+    );
+    if not_served {
+        return classify(status, retry_after, body);
+    }
+    let issue = parsed
+        .issues
+        .into_iter()
+        .map(|i| i.code)
+        .find(|c| !c.is_empty());
+    Attempt::Done(UploadOutcome::Rejected {
+        status,
+        code: parsed.code,
+        issue,
+    })
+}
+
 /// A blob PUT's answer. Any 4xx other than 401/408/429 refuses this blob for
 /// good (Raid Ledger's `invalid_blob`, `hash_mismatch`, `unsupported_media`,
 /// `blob_ref_mismatch`, `blob_quota_exceeded`, or a route it does not serve):
@@ -263,7 +306,7 @@ impl Uploader {
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_owned);
                 let bytes = res.bytes().await.unwrap_or_default();
-                classify(status, retry_after.as_deref(), &bytes)
+                classify_message(contract, status, retry_after.as_deref(), &bytes)
             }
         }
     }

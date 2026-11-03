@@ -40,8 +40,17 @@ where
     for blob in &p.blobs {
         match uploader.send_blob(token, blob, &mut sleep).await {
             UploadOutcome::Accepted => {}
-            UploadOutcome::Rejected { .. } => {
-                drop_blob_ref(body.to_mut(), &blob.sha256);
+            UploadOutcome::Rejected { code, .. } => {
+                // A required ref (a screenshot's `image`) cannot be dropped:
+                // a full Gallery is then that message's own answer.
+                let dropped = drop_blob_ref(body.to_mut(), &blob.sha256);
+                if !dropped && code == crate::upload::GALLERY_FULL_CODE {
+                    return UploadOutcome::Rejected {
+                        status: 413,
+                        code: code.clone(),
+                        issue: None,
+                    };
+                }
             }
             other => return other,
         }

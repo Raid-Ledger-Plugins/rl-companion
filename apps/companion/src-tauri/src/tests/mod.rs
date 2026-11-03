@@ -15,6 +15,7 @@ mod poll_tests;
 mod registry_gating_tests;
 mod registry_tests;
 mod scope_tests;
+mod screenshot_send_tests;
 mod server_config_tests;
 mod tiles_tests;
 mod tray_promote_tests;

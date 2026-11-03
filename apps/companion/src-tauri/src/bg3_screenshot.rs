@@ -135,7 +135,7 @@ impl Bg3ScreenshotCollector {
     pub fn folders(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
         for root in self.roots.iter().filter(|r| self.scope.is_dir(r)) {
-            let found: Vec<PathBuf> = self
+            let candidates: Vec<PathBuf> = self
                 .scope
                 .read_dir(root)
                 .unwrap_or_default()
@@ -143,12 +143,12 @@ impl Bg3ScreenshotCollector {
                 .map(|user| STEAM_SUBPATH.iter().fold(user, |p, s| p.join(s)))
                 .filter(|p| self.scope.is_dir(p))
                 .collect();
-            if found.is_empty() {
+            if candidates.is_empty() {
                 if !self.default_roots {
                     out.push(root.clone());
                 }
             } else {
-                out.extend(found);
+                out.extend(candidates.into_iter().filter(|p| is_bg3_folder(root, p)));
             }
         }
         out
@@ -391,10 +391,7 @@ pub fn finish(p: &PendingUpload) -> Result<PendingUpload, Unready> {
         .pointer("/payload/target/hubGuildId")
         .and_then(Value::as_i64)
         .ok_or_else(|| Unready::Refuse("no hub in the message".into()))?;
-    let bytes = src
-        .scope
-        .read(&src.path)
-        .map_err(|e| Unready::Retry(format!("cannot read screenshot ({e})")))?;
+    let bytes = read_capped(&src.scope, &src.path, MAX_SOURCE_BYTES)?;
     if sha256_hex(&bytes) != p.sha256 {
         return Err(Unready::Retry("screenshot changed; retrying later".into()));
     }
@@ -409,6 +406,55 @@ pub fn finish(p: &PendingUpload) -> Result<PendingUpload, Unready> {
         blobs: vec![blob],
         campaign: p.campaign.clone(),
     })
+}
+
+/// `folder` (`<root>/<steamid>/760/remote/1086940/screenshots`) is a BG3
+/// folder only when it resolves to exactly that path under the resolved root:
+/// a symlink or junction anywhere along it (e.g. `1086940/screenshots` ->
+/// another game's `screenshots`) is refused, even inside the same `userdata`.
+pub fn is_bg3_folder(root: &Path, folder: &Path) -> bool {
+    let Some(user) = folder
+        .ancestors()
+        .nth(STEAM_SUBPATH.len())
+        .and_then(Path::file_name)
+    else {
+        return false;
+    };
+    let (Ok(root), Ok(real)) = (std::fs::canonicalize(root), std::fs::canonicalize(folder)) else {
+        return false;
+    };
+    let expected = STEAM_SUBPATH.iter().fold(root.join(user), |p, s| p.join(s));
+    real == expected
+}
+
+/// Read `path` through `scope`, at most `cap` bytes: a file that grew past the
+/// cap since the scan is never read whole into memory.
+pub fn read_capped(scope: &WatchScope, path: &Path, cap: u64) -> Result<Vec<u8>, Unready> {
+    use std::io::Read;
+    let cannot = |e: std::io::Error| Unready::Retry(format!("cannot read screenshot ({e})"));
+    let real = scope.check(path).map_err(|e| cannot(e.into()))?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(real)
+        .map_err(cannot)?
+        .take(cap.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(cannot)?;
+    if u64::try_from(bytes.len()).map_or(true, |n| n > cap) {
+        return Err(Unready::Retry(
+            "screenshot is now over 64 MiB; retrying later".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Whether screenshots may still be read and sent: the collector switch is
+/// still on and has not been switched off and on again (a new opt-in time)
+/// since `scanned` — the config the batch was scanned with.
+pub fn still_opted_in(scanned: &crate::config::AppConfig, live: &crate::config::AppConfig) -> bool {
+    let id = BG3_SCREENSHOT.id;
+    live.collector_enabled(id, BG3_SCREENSHOT.default_enabled)
+        && live.opted_in_at(id).is_some()
+        && live.opted_in_at(id) == scanned.opted_in_at(id)
 }
 
 /// Run `job` (a decode + encode) on the blocking pool. An encode error or a
