@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
 import { Collector } from "./components/Collector";
 import { Startup } from "./components/Startup";
-import { HOME, navigate, type NavAction, type View } from "./view";
+import { escapeGoesBack, HOME, navigate, type NavAction, type View } from "./view";
 
 type Link = { phase: "idle" } | { phase: "waiting"; start: api.LinkStart };
 
@@ -23,7 +23,9 @@ export default function App() {
 
   useEffect(() => {
     if (view.kind !== "game") return;
-    const onKey = (e: KeyboardEvent) => nav({ type: "key", key: e.key });
+    const onKey = (e: KeyboardEvent) => {
+      if (escapeGoesBack(e)) nav({ type: "back" });
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view.kind, nav]);

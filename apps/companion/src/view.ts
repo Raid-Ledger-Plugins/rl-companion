@@ -16,3 +16,27 @@ export function navigate(view: View, action: NavAction): View {
       return action.key === "Escape" ? HOME : view;
   }
 }
+
+/** The parts of a `keydown` event the Escape rule reads. */
+export interface KeyEventLike {
+  key: string;
+  isComposing: boolean;
+  defaultPrevented: boolean;
+  target: unknown;
+}
+
+const EDITABLE = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
+function isEditable(t: unknown): boolean {
+  if (typeof t !== "object" || t === null) return false;
+  const tag = "tagName" in t && typeof t.tagName === "string" ? t.tagName.toUpperCase() : "";
+  return EDITABLE.has(tag) || ("isContentEditable" in t && t.isContentEditable === true);
+}
+
+/**
+ * Escape leaves the game view, except while the user is typing: Escape in a
+ * text field (or ending an IME composition) means "cancel this field".
+ */
+export function escapeGoesBack(e: KeyEventLike): boolean {
+  return e.key === "Escape" && !e.isComposing && !e.defaultPrevented && !isEditable(e.target);
+}
