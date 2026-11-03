@@ -15,6 +15,9 @@ const preview: Preview = {
   party: [{ name: "Astarion", summary: "Level 5 High Elf Rogue (Thief)" }],
   thumbnail: "data:image/webp;base64,UklGRg==",
   waiting: 2,
+  kind: "save",
+  takenAt: "",
+  hubGuildId: null,
 };
 
 const row: CollectorRow = {
@@ -123,5 +126,69 @@ describe("GameCollectorPanel — first-upload preview", () => {
     expect(p.onSkip).not.toHaveBeenCalled();
     click(button(tree(p), "Skip"));
     expect(p.onSkip).toHaveBeenCalledOnce();
+  });
+});
+
+describe("GameCollectorPanel — BG3 screenshot collector (ROK-1966)", () => {
+  const shotRow: CollectorRow = { ...row, id: "bg3-screenshot", displayName: "BG3 screenshots" };
+  const shot: Preview = {
+    ...preview,
+    collectorId: "bg3-screenshot",
+    kind: "screenshot",
+    saveName: "",
+    campaign: "",
+    location: "",
+    difficulty: "",
+    savedAt: "",
+    party: [],
+    thumbnail: "data:image/webp;base64,TkVX",
+    takenAt: "2026-11-03T12:00:00Z",
+    hubGuildId: 42,
+    waiting: 3,
+  };
+  const hubTargets = [
+    { hubGuildId: 7, name: "Other Hub", isDefault: false },
+    { hubGuildId: 42, name: "Moonrise Towers", isDefault: true },
+  ];
+
+  it("the preview shows the newest screenshot, its hub and the backlog, and no save fields", () => {
+    const html = renderToStaticMarkup(<GameCollectorPanel {...props({ row: { ...shotRow, preview: shot }, hubTargets })} />);
+    expect(html).toContain("the newest screenshot that would be sent to <strong>Moonrise Towers</strong>");
+    expect(html).toContain('src="data:image/webp;base64,TkVX"');
+    expect(html).toContain("Taken ");
+    expect(html).toContain("and 2 other screenshots waiting.");
+    expect(html).toContain("Upload sends these and later screenshots without asking again. Skip sends none of them.");
+    for (const saveOnly of ["Save name", "Campaign", "Difficulty", "save(s)", "newest save"]) {
+      expect(html).not.toContain(saveOnly);
+    }
+  });
+
+  it("an unknown hub id still names a destination; Upload and Skip keep their meaning", () => {
+    const p = props({ row: { ...shotRow, preview: { ...shot, hubGuildId: 99, waiting: 1 } } });
+    const html = renderToStaticMarkup(<GameCollectorPanel {...p} />);
+    expect(html).toContain("sent to <strong>your Baldur&#x27;s Gate 3 hub</strong>");
+    expect(html).not.toContain("other screenshot");
+    click(button(tree(p), "Upload"));
+    expect(p.onUpload).toHaveBeenCalledOnce();
+    click(button(tree(p), "Skip"));
+    expect(p.onSkip).toHaveBeenCalledOnce();
+  });
+
+  it("the shared panel copy names screenshots, not saves", () => {
+    const html = renderToStaticMarkup(<GameCollectorPanel {...props({ row: { ...shotRow, enabled: false } })} />);
+    expect(html).toContain("Baldur&#x27;s Gate 3: screenshot uploads");
+    expect(html).toContain("Upload new Baldur&#x27;s Gate 3 screenshots automatically");
+    expect(html).toContain("Nothing is read from your screenshots folder while off");
+    expect(html).toContain("Screenshots folder");
+    expect(html).toContain("Recent screenshot uploads");
+    expect(html).not.toMatch(/\bsaves?\b/);
+  });
+
+  it("the save collector's copy is unchanged", () => {
+    const html = renderToStaticMarkup(<GameCollectorPanel {...props()} />);
+    expect(html).toContain("Baldur&#x27;s Gate 3: save uploads");
+    expect(html).toContain("Upload new Baldur&#x27;s Gate 3 saves automatically");
+    expect(html).toContain("Save folder");
+    expect(html).toContain("Last upload per save");
   });
 });

@@ -99,11 +99,20 @@ fn settle(record: bool, stop: bool, ok: bool, text: String) -> Effect {
     }
 }
 
+/// A screenshot refused because the hub's Gallery is full (bg3-screenshot/v1 §3).
+pub const GALLERY_FULL_TEXT: &str =
+    "Not uploaded: the hub's Gallery is full — a hub leader can free space";
+
 /// Only accepted uploads and the server's content rejections are recorded;
 /// everything else is tried again on a later scan.
 pub fn effect(outcome: &UploadOutcome) -> Effect {
     match outcome {
         UploadOutcome::Accepted => settle(true, false, true, "Uploaded".to_owned()),
+        UploadOutcome::Rejected { code, .. } if code == crate::upload::GALLERY_FULL_CODE => {
+            // Settled (never resent), and the batch stops: the rest would hit
+            // the same full Gallery and stay queued for a later scan.
+            settle(true, true, false, GALLERY_FULL_TEXT.to_owned())
+        }
         UploadOutcome::Rejected {
             status,
             code,
@@ -566,6 +575,9 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     for entry in registry.entries() {
         if !entry.enabled {
             rt.set_held(entry.manifest.id, None);
+            if entry.manifest.id == crate::manifest::BG3_SCREENSHOT.id {
+                crate::bg3_screenshot::clear_waiting();
+            }
             continue;
         }
         let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry, token.as_ref()).await;
@@ -610,13 +622,15 @@ async fn scan_and_upload_one(
     token: Option<&crate::token::DeviceToken>,
 ) -> (String, bool) {
     // `Entry::scan` is `None` for a disabled collector: nothing is read.
-    let Some(scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
+    let Some(mut scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
         let name = entry.manifest.display_name;
         return (format!("{name} uploads are off"), false);
     };
     scan.notes
         .iter()
         .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
+    // A held screenshot batch's preview image is downscaled off the runtime.
+    crate::screenshot_preview::attach(&mut scan).await;
     let waiting = scan.pending.len();
     let id = entry.manifest.id;
     match gate(entry.manifest, cfg.consented(id), scan.files, &scan.pending) {
@@ -645,7 +659,18 @@ async fn scan_and_upload_one(
         Err(e) => return (e, false),
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
-    upload_all(app, rt, &uploader, token, &scan.pending).await
+    upload_all(app, rt, &uploader, token, cfg, &scan.pending).await
+}
+
+/// A screenshot is read and sent only while its collector is still switched
+/// on with the opt-in the batch was scanned under (bg3-screenshot consent).
+fn switched_off(app: &AppHandle, scanned: &AppConfig, p: &PendingUpload) -> bool {
+    p.contract == crate::bg3_screenshot::CONTRACT
+        && !crate::bg3_screenshot::still_opted_in(scanned, &app.state::<Shared>().config())
+}
+
+fn off_line(sent: usize, waiting: usize) -> String {
+    format!("Uploads switched off — uploaded {sent} of {waiting} export(s)")
 }
 
 async fn upload_all(
@@ -653,6 +678,7 @@ async fn upload_all(
     rt: &Runtime,
     uploader: &Uploader,
     token: &crate::token::DeviceToken,
+    scanned: &AppConfig,
     pending: &[PendingUpload],
 ) -> (String, bool) {
     let waiting = pending.len();
@@ -663,6 +689,31 @@ async fn upload_all(
                 format!("Paused — uploaded {sent} of {waiting} export(s)"),
                 false,
             );
+        }
+        // Before the original is read …
+        if switched_off(app, scanned, p) {
+            return (off_line(sent, waiting), false);
+        }
+        let ready;
+        let p = if crate::bg3_screenshot::needs_encode(p) {
+            // Decode + WebP encode off the async runtime; a crash refuses
+            // only this file and the loop carries on.
+            match crate::bg3_screenshot::encode_for_send(p).await {
+                Ok(done) => {
+                    ready = done;
+                    &ready
+                }
+                Err(line) => {
+                    rt.log_for(p.contract, format!("{}: {line}", p.label));
+                    continue;
+                }
+            }
+        } else {
+            p
+        };
+        // … and again before it is sent (the encode may have taken a while).
+        if switched_off(app, scanned, p) {
+            return (off_line(sent, waiting), false);
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         let fx = effect(&outcome);

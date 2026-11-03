@@ -35,6 +35,10 @@ thiserror = "2"
 rl-collectors = { path = "../../../crates/rl-collectors" }
 notify = "8"
 tauri-plugin-dialog = "2"
+# BG3 screenshot collector (ROK-1966): decode Steam's JPEG/PNG, re-encode to a
+# lossy WebP <= 1 MiB. Kept in the app crate so rl-collectors stays wasm32-clean.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+webp = { version = "0.3", default-features = false }
 # Desktop-only plugins (the app ships for Windows/macOS/Linux only).
 tauri-plugin-autostart = "2.7"
 tauri-plugin-single-instance = "2.5"
@@ -61,5 +65,5 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"
 wiremock = "0.6"
 # Test-only LSPK writer for the BG3 collector tests (already in the lock via rl-collectors).
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode"] }
-# Validates dev-bridge bodies against the pinned contract (already in the lock via rl-collectors).
+# Validates bg3-screenshot messages and dev-bridge bodies against the pinned contracts (already in the lock via rl-collectors).
 jsonschema = { version = "0.30", default-features = false }

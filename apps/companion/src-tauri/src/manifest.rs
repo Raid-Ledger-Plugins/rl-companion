@@ -288,3 +288,35 @@ pub const BG3_SAVE: CollectorManifest = CollectorManifest {
     no_files_hint: "No BG3 save found — check the save folder",
     confirm_first_upload: true,
 };
+
+/// The BG3 screenshot collector (ROK-1966, contract `bg3-screenshot/v1`). Its
+/// roots are Steam's `userdata` folders; the collector finds
+/// `<steamid>/760/remote/1086940/screenshots` under them once switched on. A
+/// user override may name the screenshots folder itself.
+pub const BG3_SCREENSHOT: CollectorManifest = CollectorManifest {
+    id: "bg3-screenshot",
+    display_name: "BG3 screenshots",
+    game_name: "Baldur's Gate 3",
+    game_subtitle: Some("Screenshots"),
+    contract_id: "bg3-screenshot",
+    contract_version: 1,
+    default_enabled: false,
+    default_roots: &[
+        RootSpec {
+            platform: Platform::Windows,
+            path: r"C:\Program Files (x86)\Steam\userdata",
+        },
+        RootSpec {
+            platform: Platform::Macos,
+            path: "~/Library/Application Support/Steam/userdata",
+        },
+        RootSpec {
+            platform: Platform::Linux,
+            path: "~/.local/share/Steam/userdata",
+        },
+    ],
+    file_patterns: &["*.jpg", "*.png"],
+    settle_ms: 2_000,
+    no_files_hint: "No BG3 screenshot found — check the Steam screenshots folder",
+    confirm_first_upload: true,
+};

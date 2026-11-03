@@ -3,11 +3,12 @@
 //! runtime iterates this instead of naming a collector.
 
 use crate::bg3_collector::Bg3SaveCollector;
+use crate::bg3_screenshot::Bg3ScreenshotCollector;
 use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{
     resolve_override, validate_all, CollectorManifest, ManifestError, Platform, BG3_SAVE,
-    WOW_LEDGERLINK,
+    BG3_SCREENSHOT, WOW_LEDGERLINK,
 };
 use crate::scope::WatchScope;
 use crate::wow_collector::LedgerLinkCollector;
@@ -37,6 +38,21 @@ fn make_bg3(roots: &[PathBuf], scope: WatchScope, cfg: &AppConfig) -> Box<dyn Co
     )
 }
 
+fn make_bg3_screenshot(
+    roots: &[PathBuf],
+    scope: WatchScope,
+    cfg: &AppConfig,
+) -> Box<dyn Collector> {
+    Box::new(
+        Bg3ScreenshotCollector::scoped(roots, scope)
+            .with_default_roots(cfg.roots_override(BG3_SCREENSHOT.id).is_none())
+            .previewing(BG3_SCREENSHOT.confirm_first_upload && !cfg.consented(BG3_SCREENSHOT.id))
+            .with_opt_in(cfg.opted_in_at(BG3_SCREENSHOT.id))
+            .with_hub(crate::screenshot_commands::effective_hub(cfg))
+            .reporting(&crate::bg3_screenshot::WAITING),
+    )
+}
+
 /// Every collector this build ships.
 pub const BUILTINS: &[Builtin] = &[
     Builtin {
@@ -46,6 +62,10 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin {
         manifest: &BG3_SAVE,
         make: make_bg3,
+    },
+    Builtin {
+        manifest: &BG3_SCREENSHOT,
+        make: make_bg3_screenshot,
     },
 ];
 

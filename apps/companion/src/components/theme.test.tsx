@@ -26,7 +26,7 @@ const row: CollectorRow = {
   detectedFolder: "/saves", folderOverride: "x", overrideNote: "Not used: folder \"x\" must be a full path",
   confirmFirstUpload: true, consented: false,
   campaigns: [],
-  preview: { collectorId: "bg3-save", saveName: "S", campaign: "abcd", location: "L", difficulty: "D", savedAt: "", party: [{ name: "A", summary: "B" }], thumbnail: "data:image/webp;base64,AA==", waiting: 1 },
+  preview: { collectorId: "bg3-save", saveName: "S", campaign: "abcd", location: "L", difficulty: "D", savedAt: "", party: [{ name: "A", summary: "B" }], thumbnail: "data:image/webp;base64,AA==", waiting: 1, kind: "save", takenAt: "", hubGuildId: null },
 };
 const camp = (i: number) => ({ key: String(i).padStart(64, "0"), name: `Run ${i}`, newestSavedAt: "2026-11-01T00:00:00Z", saveCount: 2, ticked: i === 0, defaultOn: false });
 const campaigns = Array.from({ length: 10 }, (_, i) => camp(i));

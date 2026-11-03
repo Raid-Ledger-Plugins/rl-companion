@@ -3,6 +3,7 @@
 mod autostart_tests;
 mod bg3_campaigns_tests;
 mod bg3_collector_tests;
+mod bg3_screenshot_tests;
 mod blob_send_tests;
 mod collector_tests;
 mod collector_view_tests;
@@ -20,6 +21,7 @@ mod poll_tests;
 mod registry_gating_tests;
 mod registry_tests;
 mod scope_tests;
+mod screenshot_send_tests;
 mod server_config_tests;
 mod tiles_tests;
 mod tray_promote_tests;

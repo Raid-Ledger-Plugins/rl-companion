@@ -44,6 +44,21 @@ pub struct ServerContract {
     /// Owner plugin's game, for the tile art; `None` = null or absent.
     #[serde(default)]
     pub game: Option<ServerGame>,
+    /// Hubs a `bg3-screenshot` may target (ROK-1966); `None` = an older
+    /// server or another contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub_targets: Option<Vec<HubTarget>>,
+}
+
+/// One `CompanionConfigHubTargetSchema` entry: a hub the user may pick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubTarget {
+    pub hub_guild_id: i64,
+    pub name: String,
+    /// Pre-selected in the picker (the hub of the caller's latest save).
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -169,11 +169,13 @@ fn default_config_registers_wow_disabled_with_the_wow_dir() {
     };
     let reg = build(&cfg);
     let ids: Vec<_> = reg.entries().iter().map(|e| e.manifest.id).collect();
-    assert_eq!(ids, vec!["wow-ledgerlink", "bg3-save"]);
+    assert_eq!(ids, vec!["wow-ledgerlink", "bg3-save", "bg3-screenshot"]);
     let wow = reg.get("wow-ledgerlink").expect("wow registered");
     assert!(!wow.enabled, "opt-in: off until the user turns it on");
     assert_eq!(wow.roots, vec![PathBuf::from(dir)]);
     assert!(!reg.get("bg3-save").expect("bg3").enabled, "BG3 is opt-in");
+    let shots = reg.get("bg3-screenshot").expect("bg3 screenshots");
+    assert!(!shots.enabled, "BG3 screenshots are opt-in");
     assert!(reg.notes.is_empty());
 }
 
@@ -227,6 +229,15 @@ fn snapshot_is_a_read_only_view_of_each_collector() {
             "roots": [],
             "filePatterns": ["*.lsv"],
             "settleMs": 3000
+        }, {
+            "id": "bg3-screenshot",
+            "displayName": "BG3 screenshots",
+            "contractId": "bg3-screenshot",
+            "contractVersion": 1,
+            "enabled": false,
+            "roots": [r"C:\Program Files (x86)\Steam\userdata"],
+            "filePatterns": ["*.jpg", "*.png"],
+            "settleMs": 2000
         }])
     );
 }
