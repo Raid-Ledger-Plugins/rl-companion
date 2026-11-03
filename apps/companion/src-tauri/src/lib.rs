@@ -5,6 +5,7 @@
 //! upload changed exports, honour the tray's Upload now / Pause.
 
 pub mod autostart;
+pub mod bg3_campaigns;
 pub mod bg3_collector;
 pub mod blob_send;
 pub mod collector;
@@ -104,6 +105,7 @@ pub fn run() {
             collector_commands::confirm_first_upload,
             collector_commands::skip_first_upload,
             collector_commands::refresh_server_config,
+            collector_commands::set_bg3_campaign,
         ])
         .build(tauri::generate_context!())
         .expect("error while building RL Companion")

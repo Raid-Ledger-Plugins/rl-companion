@@ -83,7 +83,16 @@ fn install(story: &Path, bytes: &[u8]) -> PathBuf {
 }
 
 fn registry(story: &Path, on: bool) -> CollectorRegistry {
+    registry_ticked(story, on, &[])
+}
+
+/// [`registry`] with the picker's ticks, keyed by save-folder name.
+fn registry_ticked(story: &Path, on: bool, ticks: &[(&str, bool)]) -> CollectorRegistry {
     let mut cfg = AppConfig::default();
+    for (folder, t) in ticks {
+        let key = rl_collectors::campaign_key_from_save_folder(folder);
+        cfg.bg3_campaigns.insert(key, *t);
+    }
     cfg.collector_roots.insert(
         BG3_SAVE.id.into(),
         vec![story.to_string_lossy().into_owned()],
@@ -262,25 +271,57 @@ fn newest_first_orders_by_mtime_with_unknown_last() {
     assert_eq!(names, ["new", "mid", "old", "none"]);
 }
 
+fn stamp(story: &Path, folder: &str, secs: u64) {
+    let dir = story.join(folder);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let file = dir.join("QuickSave_1.lsv");
+    std::fs::write(&file, save_bytes()).expect("lsv");
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let f = std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .expect("open");
+    f.set_modified(at).expect("set mtime");
+}
+
+fn queued(reg: &CollectorRegistry, folders: [&'static str; 3]) -> Vec<&'static str> {
+    let scan = reg
+        .get(BG3_SAVE.id)
+        .and_then(|e| e.scan("https://raid.example.net", &SentState::default()))
+        .expect("enabled");
+    scan.pending
+        .iter()
+        .filter_map(|p| folders.into_iter().find(|f| p.scope.contains(f)))
+        .collect()
+}
+
+#[test]
+fn an_unticked_campaign_is_not_queued_and_an_old_one_waits_for_a_tick() {
+    let story = temp_dir("bg3-picker");
+    stamp(&story, "A_old-1", 1_700_000_000);
+    stamp(&story, "B_new-2", 4_000_000_000);
+    stamp(&story, "C_mid-3", 1_750_000_000);
+    let folders = ["A_old", "B_new", "C_mid"];
+    // Defaults: B (saved now) on; A and C (over 30 days old) off.
+    assert_eq!(queued(&registry(&story, true), folders), ["B_new"]);
+    let picked = registry_ticked(&story, true, &[("A_old-1", true), ("B_new-2", false)]);
+    assert_eq!(
+        queued(&picked, folders),
+        ["A_old"],
+        "ticks override the default"
+    );
+    let _ = std::fs::remove_dir_all(story);
+}
+
 #[test]
 fn a_scan_queues_the_newest_save_first() {
     let story = temp_dir("bg3-newest");
-    let stamp = |folder: &str, secs: u64| {
-        let dir = story.join(folder);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let file = dir.join("QuickSave_1.lsv");
-        std::fs::write(&file, save_bytes()).expect("lsv");
-        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
-        let f = std::fs::File::options()
-            .write(true)
-            .open(&file)
-            .expect("open");
-        f.set_modified(at).expect("set mtime");
-    };
-    stamp("A_old-1", 1_700_000_000);
-    stamp("B_new-2", 1_800_000_000);
-    stamp("C_mid-3", 1_750_000_000);
-    let on = registry(&story, true);
+    stamp(&story, "A_old-1", 1_700_000_000);
+    stamp(&story, "B_new-2", 1_800_000_000);
+    stamp(&story, "C_mid-3", 1_750_000_000);
+    // All three ticked: these mtimes are over 30 days old (ROK-2068 picker).
+    let ticks = [("A_old-1", true), ("B_new-2", true), ("C_mid-3", true)];
+    let on = registry_ticked(&story, true, &ticks);
     let bg3 = on.get(BG3_SAVE.id).expect("bg3");
     let scan = bg3
         .scan("https://raid.example.net", &SentState::default())

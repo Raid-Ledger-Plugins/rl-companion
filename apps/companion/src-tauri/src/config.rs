@@ -51,6 +51,10 @@ pub struct AppConfig {
     /// When `last_server_config` was fetched (RFC 3339, UTC).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<String>,
+    /// BG3 campaigns the user ticked or unticked in the picker (ROK-2068),
+    /// keyed by `campaignKey`. A missing key means the 30-day default.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bg3_campaigns: BTreeMap<String, bool>,
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
@@ -70,6 +74,7 @@ impl Default for AppConfig {
             tray_promoted_once: false,
             last_server_config: None,
             fetched_at: None,
+            bg3_campaigns: BTreeMap::new(),
         }
     }
 }

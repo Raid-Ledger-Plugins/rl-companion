@@ -30,7 +30,7 @@ impl Collector for Fake {
     }
 }
 
-fn make_fake(_: &[PathBuf], _: WatchScope) -> Box<dyn Collector> {
+fn make_fake(_: &[PathBuf], _: WatchScope, _: &AppConfig) -> Box<dyn Collector> {
     Box::new(Fake)
 }
 
@@ -120,7 +120,7 @@ fn relevance_comes_from_the_manifest_file_patterns() {
     assert_eq!(reg.wanting(&root.join("notes.txt")).count(), 0);
     // Every shipped manifest names the collector it builds.
     for b in BUILTINS {
-        let c = (b.make)(&[], WatchScope::default());
+        let c = (b.make)(&[], WatchScope::default(), &AppConfig::default());
         assert_eq!(c.id(), b.manifest.id, "manifest id = collector id");
     }
     let _ = std::fs::remove_dir_all(root);

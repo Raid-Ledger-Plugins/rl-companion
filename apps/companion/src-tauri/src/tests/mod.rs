@@ -1,6 +1,7 @@
 //! Unit tests. HTTP behaviour runs against a `wiremock` server.
 
 mod autostart_tests;
+mod bg3_campaigns_tests;
 mod bg3_collector_tests;
 mod blob_send_tests;
 mod collector_tests;

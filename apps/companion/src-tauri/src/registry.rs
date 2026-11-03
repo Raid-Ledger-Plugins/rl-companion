@@ -15,7 +15,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 /// Builds a collector from its resolved roots and the scope it must read in.
-pub type Factory = fn(&[PathBuf], WatchScope) -> Box<dyn Collector>;
+pub type Factory = fn(&[PathBuf], WatchScope, &AppConfig) -> Box<dyn Collector>;
 
 /// A compiled-in collector: its manifest and how to build it.
 #[derive(Clone, Copy)]
@@ -24,13 +24,13 @@ pub struct Builtin {
     pub make: Factory,
 }
 
-fn make_wow(roots: &[PathBuf], scope: WatchScope) -> Box<dyn Collector> {
+fn make_wow(roots: &[PathBuf], scope: WatchScope, _: &AppConfig) -> Box<dyn Collector> {
     let root = roots.first().cloned().unwrap_or_default();
     Box::new(LedgerLinkCollector::scoped(root, scope))
 }
 
-fn make_bg3(roots: &[PathBuf], scope: WatchScope) -> Box<dyn Collector> {
-    Box::new(Bg3SaveCollector::scoped(roots, scope))
+fn make_bg3(roots: &[PathBuf], scope: WatchScope, cfg: &AppConfig) -> Box<dyn Collector> {
+    Box::new(Bg3SaveCollector::scoped(roots, scope).with_ticks(cfg.bg3_campaigns.clone()))
 }
 
 /// Every collector this build ships.
@@ -130,7 +130,7 @@ impl CollectorRegistry {
                 Entry {
                     manifest: m,
                     enabled: cfg.collector_enabled(m.id, m.default_enabled),
-                    collector: (b.make)(&roots, scope.clone()),
+                    collector: (b.make)(&roots, scope.clone(), cfg),
                     roots,
                     scope,
                 }
