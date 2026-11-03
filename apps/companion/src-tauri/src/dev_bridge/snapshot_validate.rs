@@ -1,7 +1,8 @@
 //! Rust-side check of a `ledgerlink-snapshot` (ROK-2072 §4, §6) before it is
 //! cached. Mirrors `$defs/ledgerlink-snapshot` (strict keys, types, enums,
 //! lengths) plus the refinements `schema.json` cannot express: the player-GUID
-//! guard, unique `apis[].path`, `type` iff `status: presence`, and the item /
+//! guard, unique `apis[].path`, `type` iff `status: presence`, D4 (a
+//! name-bearing fn is reported as `presence` only), and the item /
 //! head / whole byte caps. String lengths count chars (Zod counts UTF-16 units;
 //! identical for the ASCII the addon writes).
 
@@ -17,6 +18,20 @@ pub const SNAPSHOT_HEAD_MAX_BYTES: usize = 4_096;
 pub const RESULT_ITEM_MAX_BYTES: usize = 3_072;
 const LUA_TYPES: &[&str] = &[
     "nil", "function", "table", "string", "number", "boolean", "userdata", "thread",
+];
+
+/// D4: `DEV_BRIDGE_SNAPSHOT_NAME_BEARING_FNS` — values carry a name, realm,
+/// guild or GUID, so a snapshot reports them as `status: presence` only.
+pub const NAME_BEARING_FNS: &[&str] = &[
+    "UnitGUID",
+    "GetUnitName",
+    "UnitFullName",
+    "UnitName",
+    "GetRealmName",
+    "GetNormalizedRealmName",
+    "GetGuildInfo",
+    "GetGuildRosterInfo",
+    "GetGuildRosterLastOnline",
 ];
 
 type Check = Result<(), String>;
@@ -266,6 +281,10 @@ fn call(v: &Value, at: &str) -> Check {
     }
     if presence != m.contains_key("type") || (presence && m.contains_key("values")) {
         return err(at, "type (and no values) iff status is presence");
+    }
+    let fn_name = m.get("fn").and_then(Value::as_str).unwrap_or_default();
+    if !presence && NAME_BEARING_FNS.contains(&fn_name) {
+        return err(at, "name-bearing fn is reported as presence only (D4)");
     }
     if m.contains_key("type") && !one_of(m.get("type"), LUA_TYPES, false) {
         return err(at, "bad type");

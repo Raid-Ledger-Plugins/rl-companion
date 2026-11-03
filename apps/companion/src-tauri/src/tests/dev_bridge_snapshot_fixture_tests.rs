@@ -65,6 +65,17 @@ fn every_invalid_snapshot_fixture_is_rejected_at_its_expected_path() {
         let v = load(&format!("invalid/{stem}.json"));
         let want = expected[&stem]["path"].as_str().expect("EXPECTED entry");
         let def = def_for(&stem);
+        if let Some(slice_at) = want.strip_prefix("snapshot.") {
+            // A page's slice refinements (GUID guard, presence rows, D4).
+            match validate_slice(&v["snapshot"]) {
+                Ok(()) => panic!("{stem}: slice accepted, expected an issue at {want}"),
+                Err(e) => assert!(
+                    e.starts_with(&format!("{slice_at}:")),
+                    "{stem}: want {slice_at}, got {e}"
+                ),
+            }
+            continue;
+        }
         if def != "ledgerlink-snapshot" {
             assert!(
                 !schema_errors(def, &v).is_empty(),
