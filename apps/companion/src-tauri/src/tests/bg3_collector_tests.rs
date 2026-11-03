@@ -1,14 +1,17 @@
 //! ROK-2061 lane 2: the BG3 save collector, through the registry.
 
 use super::temp_dir;
-use crate::bg3_collector::{build, newest_first};
-use crate::collector::SentState;
+use crate::bg3_campaigns::CampaignStore;
+use crate::bg3_collector::{build, newest_first, Bg3SaveCollector};
+use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE};
 use crate::registry::{CollectorRegistry, BUILTINS};
+use crate::scope::WatchScope;
 use crate::upload::Uploader;
 use rl_collectors::sha256_hex;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const SAVE_INFO: &str = include_str!(
@@ -333,5 +336,59 @@ fn a_scan_queues_the_newest_save_first() {
         .filter_map(|p| folders.into_iter().find(|f| p.scope.contains(f)))
         .collect();
     assert_eq!(order, ["B_new", "C_mid", "A_old"], "{:?}", scan.notes);
+    let _ = std::fs::remove_dir_all(story);
+}
+
+/// A bare collector over `story` with `ticks` (by save folder) and its own store.
+fn picked(story: &Path, ticks: &[(&str, bool)]) -> (Bg3SaveCollector, &'static CampaignStore) {
+    let ticks: BTreeMap<String, bool> = ticks
+        .iter()
+        .map(|(f, t)| (rl_collectors::campaign_key_from_save_folder(f), *t))
+        .collect();
+    let store: &'static CampaignStore = Box::leak(Box::new(CampaignStore::new()));
+    let bg3 = Bg3SaveCollector::scoped(&[story.to_path_buf()], WatchScope::new(&[story]))
+        .with_ticks(ticks)
+        .remembering(store);
+    (bg3, store)
+}
+
+#[test]
+fn an_unticked_campaigns_saves_are_listed_but_never_built() {
+    let story = temp_dir("bg3-off-unbuilt");
+    stamp(&story, "A_off-1", 1_750_000_000);
+    stamp(&story, "B_on-2", 1_760_000_000);
+    let (bg3, store) = picked(&story, &[("A_off-1", false), ("B_on-2", true)]);
+    let off = rl_collectors::campaign_key_from_save_folder("A_off-1");
+    let found = bg3.found(
+        "https://raid.example.net",
+        &SentState::default(),
+        &mut Scan::default(),
+    );
+    let built: Vec<bool> = found
+        .iter()
+        .filter(|(c, _)| c.key == off)
+        .map(|(_, p)| p.is_some())
+        .collect();
+    assert_eq!(
+        built,
+        [false],
+        "the unticked campaign's save must be found but carry no upload"
+    );
+    assert_eq!(
+        bg3.builds(),
+        1,
+        "only the ticked campaign's save may reach the builder"
+    );
+    let scan = bg3.scan("https://raid.example.net", &SentState::default());
+    assert_eq!(
+        (bg3.builds(), scan.pending.len()),
+        (2, 1),
+        "{:?}",
+        scan.notes
+    );
+    let row = store.groups().into_iter().find(|g| g.key == off);
+    let row = row.expect("the unticked campaign still has a picker row");
+    assert_eq!((row.count, row.newest_unix), (1, 1_750_000_000));
+    assert!(!row.name.is_empty(), "the row keeps its name");
     let _ = std::fs::remove_dir_all(story);
 }

@@ -16,8 +16,10 @@ use rl_collectors::{
     read_lsf_attribute, read_lspk, sha256_hex, thumbnail_ref, Bg3SaveMessage, Package, SaveMeta,
     META_LSF_MAX_BYTES, META_LSF_NAME,
 };
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 pub const CONTRACT: &str = rl_collectors::CONTRACT;
@@ -38,6 +40,8 @@ pub struct Bg3SaveCollector {
     ticks: BTreeMap<String, bool>,
     /// Where the scan leaves its groups (the app's [`crate::bg3_campaigns::STORE`]).
     store: Option<&'static CampaignStore>,
+    /// How many saves reached [`build_from`] (the thumbnail and payload).
+    builds: AtomicUsize,
 }
 
 impl Bg3SaveCollector {
@@ -48,7 +52,21 @@ impl Bg3SaveCollector {
             scope,
             ticks: BTreeMap::new(),
             store: None,
+            builds: AtomicUsize::new(0),
         }
+    }
+
+    /// How many saves this collector has built an upload for.
+    pub fn builds(&self) -> usize {
+        self.builds.load(Ordering::Relaxed)
+    }
+
+    /// What each readable save contributes, newest first, before [`select`].
+    pub fn found(&self, origin: &str, sent: &SentState, scan: &mut Scan) -> Vec<Found> {
+        self.by_mtime(self.saves())
+            .iter()
+            .filter_map(|save| self.scan_file(save, origin, sent, scan))
+            .collect()
     }
 
     /// Only ticked campaigns upload ([`crate::bg3_campaigns::select`]).
@@ -126,16 +144,22 @@ impl Bg3SaveCollector {
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
         let mtime = meta.modified().ok();
-        let campaign = match campaign_of(&bytes, &folder, mtime) {
-            Ok(c) => c,
+        let (package, info) = match open(&bytes) {
+            Ok(opened) => opened,
             Err(e) => return note(scan, format!("not readable yet ({e})")),
         };
+        let campaign = campaign_of(&package, &info, &folder, mtime);
+        // An unticked campaign is listed but never hashed or built (ROK-2068).
+        if self.ticks.get(&campaign.key) == Some(&false) {
+            return Some((campaign, None));
+        }
         let scope = scope_key(origin, &path.to_string_lossy());
         let sha = sha256_hex(&bytes);
         if sent.scope(&scope).get(ITEM) == Some(&sha) {
             return Some((campaign, None));
         }
-        match build(&bytes, &folder, mtime) {
+        self.builds.fetch_add(1, Ordering::Relaxed);
+        match build_from(&package, &info, &folder, mtime) {
             Ok((body, blobs, label)) => Some((
                 campaign.clone(),
                 Some(PendingUpload {
@@ -154,27 +178,34 @@ impl Bg3SaveCollector {
     }
 }
 
-/// One save's campaign for the picker: its key (as [`build`] sends it), the
-/// party leader's name from `meta.lsf` (else the save's name) and its mtime.
-pub fn campaign_of(
-    bytes: &[u8],
-    folder: &str,
-    mtime: Option<SystemTime>,
-) -> Result<SaveCampaign, String> {
+/// The save's package index and `SaveInfo.json`; nothing else is unpacked.
+fn open(bytes: &[u8]) -> Result<(Package<'_>, Value), String> {
     let package = read_lspk(bytes).map_err(|e| e.to_string())?;
     let info = extract_save_info(&package).map_err(|e| e.to_string())?;
+    Ok((package, info))
+}
+
+/// One save's campaign for the picker: its key (as [`build`] sends it), the
+/// party leader's name from `meta.lsf` (else the save's name) and its mtime.
+/// Reads only the package index, `SaveInfo.json` and `meta.lsf`.
+fn campaign_of(
+    package: &Package<'_>,
+    info: &Value,
+    folder: &str,
+    mtime: Option<SystemTime>,
+) -> SaveCampaign {
     let save_name = info
         .get("Save Name")
         .and_then(|v| v.as_str())
         .unwrap_or(folder);
-    let (key, _) = campaign_key_from_package(&package, folder);
+    let (key, _) = campaign_key_from_package(package, folder);
     let now = SystemTime::now();
     let at = mtime.filter(|m| *m <= now).unwrap_or(now);
-    Ok(SaveCampaign {
+    SaveCampaign {
         key,
-        name: campaign_name(leader_name(&package).as_deref(), save_name),
+        name: campaign_name(leader_name(package).as_deref(), save_name),
         saved_unix: unix(at),
-    })
+    }
 }
 
 /// `meta.lsf`'s `LeaderName`, when present and readable. Local display only.
@@ -199,22 +230,31 @@ pub fn newest_first(mut saves: Vec<(PathBuf, Option<SystemTime>)>) -> Vec<PathBu
 pub fn build(
     bytes: &[u8],
     folder: &str,
-    mtime: Option<std::time::SystemTime>,
-) -> Result<(serde_json::Value, Vec<Blob>, String), String> {
-    let package = read_lspk(bytes).map_err(|e| e.to_string())?;
-    let info = extract_save_info(&package).map_err(|e| e.to_string())?;
+    mtime: Option<SystemTime>,
+) -> Result<(Value, Vec<Blob>, String), String> {
+    let (package, info) = open(bytes)?;
+    build_from(&package, &info, folder, mtime)
+}
+
+/// [`build`] on an already opened save: the thumbnail, then the payload.
+fn build_from(
+    package: &Package<'_>,
+    info: &Value,
+    folder: &str,
+    mtime: Option<SystemTime>,
+) -> Result<(Value, Vec<Blob>, String), String> {
     // A missing or broken thumbnail is not an error (contract §7).
-    let thumb = extract_thumbnail_webp(&package)
+    let thumb = extract_thumbnail_webp(package)
         .ok()
         .and_then(|webp| thumbnail_ref(&webp).ok().map(|r| (webp, r)));
-    let (campaign_key, campaign_key_source) = campaign_key_from_package(&package, folder);
+    let (campaign_key, campaign_key_source) = campaign_key_from_package(package, folder);
     let meta = SaveMeta {
         saved_at: captured_at(mtime),
         campaign_key,
         campaign_key_source,
         thumbnail: thumb.as_ref().map(|(_, r)| r.clone()),
     };
-    let payload = normalise_save_info(&info, &meta).map_err(|e| e.to_string())?;
+    let payload = normalise_save_info(info, &meta).map_err(|e| e.to_string())?;
     let label = payload.save_name.clone();
     let message = Bg3SaveMessage::new(payload, captured_at(None), APP_VERSION);
     let body = serde_json::to_value(message).map_err(|e| e.to_string())?;
@@ -244,11 +284,7 @@ impl Collector for Bg3SaveCollector {
 
     fn scan(&self, origin: &str, sent: &SentState) -> Scan {
         let mut scan = Scan::default();
-        let found: Vec<Found> = self
-            .by_mtime(self.saves())
-            .iter()
-            .filter_map(|save| self.scan_file(save, origin, sent, &mut scan))
-            .collect();
+        let found = self.found(origin, sent, &mut scan);
         let now = now_unix();
         let (groups, pending) = select(found, &self.ticks, now);
         if let Some(store) = self.store {
