@@ -97,7 +97,10 @@ fn character(cache: &SnapshotCache, flavor: &str, q: &Query) -> Result<String, (
     let keys = cache.characters(flavor);
     match q.get("character") {
         Some(c) if keys.contains(c) => Ok(c.clone()),
-        Some(_) => Err(bad("character", "Unknown character (see /snapshot/history)")),
+        Some(_) => Err(bad(
+            "character",
+            "Unknown character (see /snapshot/history)",
+        )),
         None => match keys.as_slice() {
             [] => Err(not_found()),
             [only] => Ok(only.clone()),
@@ -189,9 +192,9 @@ pub fn page_body(flavor: &str, key: &str, row: &Row, latest: bool, start: usize)
 
 fn history_entry(flavor: &str, key: &str, r: &Row, latest: bool) -> Value {
     let s = &r.snapshot;
-    let missing = s["apis"].as_array().map_or(0, |a| {
-        a.iter().filter(|x| x["type"] == "nil").count()
-    });
+    let missing = s["apis"]
+        .as_array()
+        .map_or(0, |a| a.iter().filter(|x| x["type"] == "nil").count());
     let active: Vec<Value> = s["ruleset"]["rules"].as_array().map_or_else(Vec::new, |a| {
         a.iter()
             .filter(|x| x["active"] == true)
@@ -234,12 +237,18 @@ pub fn history_ep(snap: &Snapshot, flavor: &str, q: &Query) -> Res {
         None => 0,
         Some(raw) => {
             let after = decode(raw, 'h').ok_or_else(|| bad("cursor", "Unknown cursor"))?;
-            entries.iter().position(|e| id(e) < after).unwrap_or(entries.len())
+            entries
+                .iter()
+                .position(|e| id(e) < after)
+                .unwrap_or(entries.len())
         }
     };
-    let mut body = page(&entries, start, HISTORY_MAX, |items, next| {
-        json!({ "entries": items, "next": next })
-    });
+    let mut body = page(
+        &entries,
+        start,
+        HISTORY_MAX,
+        |items, next| json!({ "entries": items, "next": next }),
+    );
     if !body["next"].is_null() {
         let last = body["entries"].as_array().and_then(|a| a.last()).map(id);
         body["next"] = Value::String(B64.encode(format!("h{}", last.unwrap_or_default())));

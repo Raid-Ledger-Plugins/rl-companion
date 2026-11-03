@@ -66,13 +66,19 @@ fn every_invalid_snapshot_fixture_is_rejected_at_its_expected_path() {
         let want = expected[&stem]["path"].as_str().expect("EXPECTED entry");
         let def = def_for(&stem);
         if def != "ledgerlink-snapshot" {
-            assert!(!schema_errors(def, &v).is_empty(), "{stem} passed $defs/{def}");
+            assert!(
+                !schema_errors(def, &v).is_empty(),
+                "{stem} passed $defs/{def}"
+            );
             continue;
         }
         let at = if want.is_empty() { "root" } else { want };
         match validate_snapshot(&v) {
             Ok(()) => panic!("{stem}: accepted, expected an issue at {at}"),
-            Err(e) => assert!(e.starts_with(&format!("{at}:")), "{stem}: want {at}, got {e}"),
+            Err(e) => assert!(
+                e.starts_with(&format!("{at}:")),
+                "{stem}: want {at}, got {e}"
+            ),
         }
     }
 }

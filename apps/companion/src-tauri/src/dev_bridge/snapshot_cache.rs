@@ -236,7 +236,11 @@ impl SnapshotCache {
         match rl_collectors::parse_ledgerlink_dev_snapshots(&bytes) {
             Ok(d) => self.ingest(flavor, &d.entries, now),
             Err(e) => {
-                logbuf::log("warn", "dev_bridge", &format!("dev snapshot read failed: {e}"));
+                logbuf::log(
+                    "warn",
+                    "dev_bridge",
+                    &format!("dev snapshot read failed: {e}"),
+                );
                 0
             }
         }

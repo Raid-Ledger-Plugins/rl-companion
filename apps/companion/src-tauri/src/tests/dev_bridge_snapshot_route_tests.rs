@@ -53,7 +53,10 @@ impl Env {
     }
 
     fn add(&self, guid: &str, v: &Value, now: i64) {
-        let e = DevSnapshotEntry { guid: guid.into(), json: v.to_string() };
+        let e = DevSnapshotEntry {
+            guid: guid.into(),
+            json: v.to_string(),
+        };
         assert_eq!(self.cache.ingest(FLAVOR, &[e], now), 1, "ingested");
     }
 
@@ -74,7 +77,11 @@ impl Env {
 fn ok_body(env: &Env, path: &str, q: &str, def: &str) -> Value {
     let (status, body) = env.get(path, q);
     assert_eq!(status, 200, "{path}?{q} → {body}");
-    assert_eq!(schema_errors(def, &body), Vec::<String>::new(), "{path}?{q}");
+    assert_eq!(
+        schema_errors(def, &body),
+        Vec::<String>::new(),
+        "{path}?{q}"
+    );
     let len = serde_json::to_vec(&body).unwrap().len();
     assert!(len <= PAGE_MAX_BYTES, "{path}?{q}: {len} bytes");
     body
@@ -115,19 +122,36 @@ fn reassemble(pages: &[Value]) -> Value {
 fn read_through_serves_a_saved_snapshot_in_valid_pages_that_reassemble() {
     let env = Env::new("snap-route-read-through");
     let stored = fixture("ledgerlink-snapshot--max-size.json");
-    let lua_str = stored.to_string().replace('\\', "\\\\").replace('"', "\\\"");
-    let sv_dir = env.wow.join(FLAVOR).join("WTF/Account/ACCT1/SavedVariables");
+    let lua_str = stored
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let sv_dir = env
+        .wow
+        .join(FLAVOR)
+        .join("WTF/Account/ACCT1/SavedVariables");
     std::fs::create_dir_all(&sv_dir).expect("mkdir");
     let lua = format!(
         "LedgerLinkDB = {{\n[\"dev\"] = {{\n[\"snapshots\"] = {{\n[\"{G1}\"] = \"{lua_str}\",\n}},\n}},\n}}\n"
     );
     std::fs::write(sv_dir.join("LedgerLink.lua"), lua).expect("write sv");
     let pages = all_pages(&env, &format!("flavor={FLAVOR}"));
-    assert!(pages.len() >= 3, "a 48 KiB snapshot spans pages: {}", pages.len());
-    assert_eq!(reassemble(&pages), stored, "pages concatenate to the stored object");
+    assert!(
+        pages.len() >= 3,
+        "a 48 KiB snapshot spans pages: {}",
+        pages.len()
+    );
+    assert_eq!(
+        reassemble(&pages),
+        stored,
+        "pages concatenate to the stored object"
+    );
     let first = &pages[0];
     assert_eq!(first["characterKey"], json!(character_key(G1)));
-    assert_eq!((first["latest"].clone(), first["seenCount"].clone()), (json!(true), json!(1)));
+    assert_eq!(
+        (first["latest"].clone(), first["seenCount"].clone()),
+        (json!(true), json!(1))
+    );
 }
 
 #[test]
@@ -137,11 +161,22 @@ fn a_cursor_survives_a_new_row_and_a_pruned_or_bad_cursor_is_400() {
     let first = ok_body(&env, PAGE, "", "ledgerlink-snapshot-page");
     let cursor = first["next"].as_str().expect("multi-page").to_owned();
     env.add(G1, &variant(60), NOW + 60);
-    let second = ok_body(&env, PAGE, &format!("cursor={cursor}"), "ledgerlink-snapshot-page");
-    assert_eq!(second["snapshotId"], first["snapshotId"], "same row after a new one");
+    let second = ok_body(
+        &env,
+        PAGE,
+        &format!("cursor={cursor}"),
+        "ledgerlink-snapshot-page",
+    );
+    assert_eq!(
+        second["snapshotId"], first["snapshotId"],
+        "same row after a new one"
+    );
     assert_eq!(second["latest"], json!(false));
     let latest = ok_body(&env, PAGE, "", "ledgerlink-snapshot-page");
-    assert_ne!(latest["snapshotId"], first["snapshotId"], "default is the newest row");
+    assert_ne!(
+        latest["snapshotId"], first["snapshotId"],
+        "default is the newest row"
+    );
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
     for bad in [b64.encode("s01ZZZZZZZZZZZZZZZZZZZZZZZ:3"), "!!".into()] {
         let (status, body) = env.get(PAGE, &format!("cursor={bad}"));
@@ -166,7 +201,11 @@ fn unknown_or_ambiguous_params_are_400_and_nothing_cached_is_404() {
     assert_eq!(env.get(PAGE, "at=01NOPE").0, 404, "unknown at");
     env.add(G2, &variant(2), NOW + 1);
     let (s, b) = env.get(PAGE, "");
-    assert_eq!((s, issue_at(&b)), (400, "character"), "two cached, none named");
+    assert_eq!(
+        (s, issue_at(&b)),
+        (400, "character"),
+        "two cached, none named"
+    );
     let q = format!("character={}", character_key(G2));
     let body = ok_body(&env, PAGE, &q, "ledgerlink-snapshot-page");
     assert_eq!(body["characterKey"], json!(character_key(G2)));
@@ -200,7 +239,12 @@ fn history_is_newest_first_pages_by_snapshot_id_and_filters_by_character() {
     assert_eq!(entries[0]["latest"], json!(true));
     assert_eq!(entries[0]["clientBuild"], json!("1100"));
     let at = entries[0]["snapshotId"].as_str().expect("id");
-    let page = ok_body(&env, PAGE, &format!("{q}&at={at}"), "ledgerlink-snapshot-page");
+    let page = ok_body(
+        &env,
+        PAGE,
+        &format!("{q}&at={at}"),
+        "ledgerlink-snapshot-page",
+    );
     assert_eq!(page["snapshotId"], json!(at));
 }
 
