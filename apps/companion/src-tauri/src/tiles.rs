@@ -1,6 +1,8 @@
 //! Game tiles for the window's home view (ROK-2067 D6/D7/D9). One tile per
 //! game in the union of the app's collectors and the server's `/config`
-//! contracts; each tile's state comes from the cached `/config`.
+//! contracts; each tile's state comes from the cached `/config`. A game with
+//! several collectors (BG3 saves + screenshots) is ONE tile with one line per
+//! collector (ROK-2073).
 
 use crate::collector_view::CollectorRowDto;
 use crate::config::AppConfig;
@@ -47,6 +49,24 @@ pub struct TileDto {
     pub fallback: bool,
     /// Up to two letters for the fallback art.
     pub initials: String,
+    /// One line per collector of the game (ROK-2073); empty for `app_too_old`.
+    /// The tile's own `state`/`chip`/`line`/`banner` are its [`headline`].
+    pub lines: Vec<TileLineDto>,
+}
+
+/// One collector's state inside its game's tile.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TileLineDto {
+    pub collector_id: String,
+    /// "Saves", "Screenshots" (the manifest's `line_label`).
+    pub label: String,
+    pub state: TileState,
+    pub chip: Option<String>,
+    pub line: String,
+    /// This collector's game-view banner (`plugin_off`, `not_on_server`).
+    pub banner: Option<String>,
+    pub plugin_name: Option<String>,
 }
 
 pub struct TileInputs<'a> {
@@ -135,24 +155,30 @@ fn base(v: &TileInputs, id: &str, title: String, state: TileState, line: String)
         clickable: true,
         fallback: cover.is_none(),
         cover,
+        lines: Vec::new(),
     }
 }
 
-fn app_tile(v: &TileInputs, m: &CollectorManifest) -> TileDto {
-    let contract = v
-        .cfg
+/// The game's name: the server's for the first collector, else the manifest's.
+fn game_title(v: &TileInputs, m: &CollectorManifest) -> String {
+    v.cfg
         .last_server_config
         .as_ref()
-        .and_then(|s| s.contract(m.contract_id));
-    let title = contract
+        .and_then(|s| s.contract(m.contract_id))
         .and_then(|c| c.game.as_ref())
-        .map_or_else(|| m.game_name.to_owned(), |g| g.name.clone());
+        .map_or_else(|| m.game_name.to_owned(), |g| g.name.clone())
+}
+
+/// One collector's line inside its game's tile. `what` names its uploads in
+/// the not-on-server banner ("Baldur's Gate 3 uploads").
+fn app_line(v: &TileInputs, m: &CollectorManifest, what: &str) -> TileLineDto {
     let status = v
         .rows
         .iter()
         .find(|r| r.id == m.id)
         .map(|r| r.status.clone());
-    let (state, line) = match verdict(v.cfg, v.linked, m.contract_id) {
+    let verdict = verdict(v.cfg, v.linked, m.contract_id);
+    let (state, line) = match &verdict {
         Verdict::Supported => (TileState::Supported, status.unwrap_or_default()),
         Verdict::PluginOff(p) => (TileState::PluginOff, off_line(p).to_owned()),
         Verdict::NotOnServer => (
@@ -168,21 +194,108 @@ fn app_tile(v: &TileInputs, m: &CollectorManifest) -> TileDto {
         ),
         Verdict::Checking => (TileState::Unknown, "Checking the server…".into()),
     };
-    let mut t = base(v, m.contract_id, title, state, line);
-    t.collector_id = Some(m.id.to_owned());
-    t.subtitle = m.game_subtitle.map(str::to_owned);
-    if let Verdict::PluginOff(p) = verdict(v.cfg, v.linked, m.contract_id) {
-        t.chip = Some(off_line(p).to_owned());
-        t.banner = Some(off_banner(p));
-        t.plugin_name = Some(p.name.clone());
+    let mut l = TileLineDto {
+        collector_id: m.id.to_owned(),
+        label: m.line_label.to_owned(),
+        state,
+        chip: None,
+        line,
+        banner: None,
+        plugin_name: None,
+    };
+    if let Verdict::PluginOff(p) = verdict {
+        l.chip = Some(off_line(p).to_owned());
+        l.banner = Some(off_banner(p));
+        l.plugin_name = Some(p.name.clone());
     } else if state == TileState::NotOnServer {
-        t.chip = Some("Not on this server".into());
+        l.chip = Some("Not on this server".into());
+        l.banner = Some(format!(
+            "This server doesn't take {what}. Your settings are kept."
+        ));
+    }
+    l
+}
+
+/// Higher = more urgent, for the tile's chip/overlay (ROK-2073).
+fn urgency(s: TileState) -> u8 {
+    match s {
+        TileState::Supported => 0,
+        TileState::Unknown => 1,
+        TileState::NotOnServer => 2,
+        TileState::PluginOff => 3,
+        TileState::AppTooOld => 4,
+    }
+}
+
+/// The line that speaks for the whole tile: the most urgent, earliest first.
+/// `not_on_server` leads only when NO collector of the game is on the server
+/// — a partly supported game keeps it on that collector's line (AC2).
+pub fn headline(lines: &[TileLineDto]) -> Option<&TileLineDto> {
+    let on: Vec<&TileLineDto> = lines
+        .iter()
+        .filter(|l| l.state != TileState::NotOnServer)
+        .collect();
+    let pool = if on.is_empty() {
+        lines.iter().collect()
+    } else {
+        on
+    };
+    pool.into_iter().rev().max_by_key(|l| urgency(l.state))
+}
+
+/// One tile for a game's collectors (`ms`, non-empty, `BUILTINS` order).
+fn game_tile(v: &TileInputs, ms: &[&CollectorManifest]) -> Option<TileDto> {
+    let first = ms.first()?;
+    let title = game_title(v, first);
+    let lines: Vec<TileLineDto> = ms
+        .iter()
+        .map(|m| {
+            let what = if ms.len() == 1 {
+                format!("{title} uploads")
+            } else {
+                format!("{title} {}", m.line_label.to_lowercase())
+            };
+            app_line(v, m, &what)
+        })
+        .collect();
+    let head = headline(&lines)?.clone();
+    let mut t = base(v, first.contract_id, title, head.state, head.line);
+    if let Some(c) = ms
+        .iter()
+        .find_map(|m| v.covers.get(m.contract_id).cloned().flatten())
+    {
+        (t.cover, t.fallback) = (Some(c), false);
+    }
+    t.collector_id = Some(first.id.to_owned());
+    t.subtitle = first
+        .game_subtitle
+        .filter(|_| ms.len() == 1)
+        .map(str::to_owned);
+    (t.chip, t.banner, t.plugin_name) = (head.chip, head.banner, head.plugin_name);
+    if head.state == TileState::NotOnServer {
+        // Only when no collector is on the server: name the whole game.
         t.banner = Some(format!(
             "This server doesn't take {} uploads. Your settings are kept.",
             t.title
         ));
     }
-    t
+    t.lines = lines;
+    Some(t)
+}
+
+/// The app's collectors grouped by game, in `BUILTINS` order (ROK-2073).
+fn games() -> Vec<Vec<&'static CollectorManifest>> {
+    let mut out: Vec<Vec<&'static CollectorManifest>> = Vec::new();
+    for m in BUILTINS.iter().map(|b| b.manifest) {
+        match out
+            .iter_mut()
+            .find(|g| g.first().is_some_and(|f| f.game_name == m.game_name))
+        {
+            Some(g) => g.push(m),
+            None => out.push(vec![m]),
+        }
+    }
+    out
 }
 
 fn too_old_tile(v: &TileInputs, c: &ServerContract) -> TileDto {
@@ -201,7 +314,7 @@ fn too_old_tile(v: &TileInputs, c: &ServerContract) -> TileDto {
 /// D6: the app's collectors in `BUILTINS` order, then server-only contracts
 /// A–Z (only while linked with a cached `/config`).
 pub fn tiles(v: &TileInputs) -> Vec<TileDto> {
-    let mut out: Vec<TileDto> = BUILTINS.iter().map(|b| app_tile(v, b.manifest)).collect();
+    let mut out: Vec<TileDto> = games().iter().filter_map(|g| game_tile(v, g)).collect();
     let known = |id: &str| BUILTINS.iter().any(|b| b.manifest.contract_id == id);
     let mut extra: Vec<&ServerContract> = match (&v.cfg.last_server_config, v.linked) {
         (Some(sc), true) => sc

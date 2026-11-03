@@ -42,6 +42,9 @@ pub struct CollectorManifest {
     pub game_name: &'static str,
     /// A second line under the tile title ("LedgerLink addon"), if any.
     pub game_subtitle: Option<&'static str>,
+    /// This collector's label on its status line inside a game's tile, when
+    /// the game has more than one collector ("Saves", "Screenshots"; ROK-2073).
+    pub line_label: &'static str,
     /// Raid Ledger `COMPANION_CONTRACTS` id + version this collector emits.
     pub contract_id: &'static str,
     pub contract_version: u32,
@@ -240,6 +243,7 @@ pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
     display_name: "LedgerLink",
     game_name: "World of Warcraft",
     game_subtitle: Some("LedgerLink addon"),
+    line_label: "LedgerLink addon",
     contract_id: "wow-ledgerlink",
     contract_version: 1,
     default_enabled: false,
@@ -266,6 +270,7 @@ pub const BG3_SAVE: CollectorManifest = CollectorManifest {
     display_name: "Baldur's Gate 3",
     game_name: "Baldur's Gate 3",
     game_subtitle: None,
+    line_label: "Saves",
     contract_id: "bg3-save",
     contract_version: 1,
     default_enabled: false,
@@ -298,6 +303,7 @@ pub const BG3_SCREENSHOT: CollectorManifest = CollectorManifest {
     display_name: "BG3 screenshots",
     game_name: "Baldur's Gate 3",
     game_subtitle: Some("Screenshots"),
+    line_label: "Screenshots",
     contract_id: "bg3-screenshot",
     contract_version: 1,
     default_enabled: false,
