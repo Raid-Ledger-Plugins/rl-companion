@@ -12,6 +12,7 @@ pub mod collector_commands;
 pub mod collector_view;
 pub mod commands;
 pub mod config;
+pub mod covers;
 pub mod gate;
 pub mod link;
 pub mod manifest;
@@ -20,7 +21,9 @@ pub mod preview;
 pub mod registry;
 pub mod runtime;
 pub mod scope;
+pub mod server_config;
 pub mod state;
+pub mod tiles;
 pub mod token;
 pub mod tray;
 pub mod tray_promote;
@@ -65,7 +68,8 @@ pub fn run() {
             app.manage(rt.clone());
             let kick = rt.clone();
             app.listen(tray::UPLOAD_NOW_EVENT, move |_| kick.kick());
-            runtime::start(app.handle().clone(), rt);
+            runtime::start(app.handle().clone(), rt.clone());
+            server_config::start(app.handle().clone(), rt);
             autostart::init_default(app.handle());
             // The window starts hidden (tauri.conf.json); a login-item launch
             // leaves it in the tray, any other launch shows it.
@@ -99,6 +103,7 @@ pub fn run() {
             collector_commands::pick_collector_root,
             collector_commands::confirm_first_upload,
             collector_commands::skip_first_upload,
+            collector_commands::refresh_server_config,
         ])
         .build(tauri::generate_context!())
         .expect("error while building RL Companion")

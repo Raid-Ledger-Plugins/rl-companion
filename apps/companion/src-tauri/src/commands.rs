@@ -118,8 +118,24 @@ pub fn set_server_url(
 ) -> Result<String, String> {
     let url = normalise_server_url(&url)?;
     state.set_link_task(None);
-    let cfg = state.update_config(|c| c.server_url = url).map_err(s)?;
-    let linked = state.token().map_err(s)?.is_some();
+    let changed = state.config().server_url != url;
+    let cfg = state
+        .update_config(|c| {
+            if c.server_url != url {
+                // Another server's `/config` says nothing about this one.
+                c.last_server_config = None;
+                c.fetched_at = None;
+            }
+            c.server_url = url;
+        })
+        .map_err(s)?;
+    // Reset the old server's state even when the keychain read fails.
+    let token = state.token();
+    if changed {
+        let linked = token.as_ref().is_ok_and(Option::is_some);
+        app.state::<Arc<Runtime>>().server_changed(linked);
+    }
+    let linked = token.map_err(s)?.is_some();
     tray::set_status(&app, if linked { "Linked" } else { "Not linked" });
     Ok(cfg.server_url)
 }

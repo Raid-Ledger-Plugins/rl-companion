@@ -69,10 +69,36 @@ fn config_round_trips_and_defaults_to_prod() {
         legacy_ledgerlink_enabled: None,
         autostart_initialized: true,
         tray_promoted_once: true,
+        last_server_config: None,
+        fetched_at: None,
     };
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);
     let raw = std::fs::read_to_string(&file).expect("read");
     assert!(!raw.contains("rlcd_"), "config never holds a token");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_failed_save_leaves_the_old_settings_intact() {
+    let dir = super::temp_dir("cfg-atomic");
+    let file = dir.join("config.json");
+    let mut cfg = AppConfig {
+        device_name: Some("Old".into()),
+        ..AppConfig::default()
+    };
+    cfg.save(&file).expect("first save");
+    assert!(
+        !crate::config::tmp_path(&file).exists(),
+        "the temp file is renamed away"
+    );
+    // The write fails before the rename (the temp path is a directory).
+    std::fs::create_dir_all(crate::config::tmp_path(&file)).expect("block tmp");
+    cfg.device_name = Some("New".into());
+    assert!(cfg.save(&file).is_err(), "the blocked write is reported");
+    assert_eq!(
+        AppConfig::load(&file).device_name.as_deref(),
+        Some("Old"),
+        "the settings file was overwritten in place"
+    );
 }

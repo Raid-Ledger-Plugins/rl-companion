@@ -10,9 +10,11 @@ use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
 use crate::preview::Held;
 use crate::registry::{CollectorRegistry, Entry};
+use crate::server_config::ServerState;
 use crate::state::Shared;
+use crate::tiles::{apply_plugin_off_copy, last_checked, tiles, TileDto, TileInputs};
 use crate::tray;
-use crate::upload::{UploadOutcome, Uploader};
+use crate::upload::{is_unknown_contract, UploadOutcome, Uploader};
 use crate::watch::{start_watcher, SettleSet};
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
@@ -31,6 +33,9 @@ const LOG_LINES: usize = 50;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CharResult {
+    /// The collector that produced it (ROK-2067 D12): each game view shows
+    /// only its own results.
+    pub collector_id: String,
     pub label: String,
     pub result: String,
     pub ok: bool,
@@ -42,6 +47,8 @@ pub struct CharResult {
 pub struct LogLine {
     pub at: String,
     pub text: String,
+    /// The collector it is about; `None` = a device-level line (D12).
+    pub collector_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -59,6 +66,11 @@ pub struct CollectorStatusDto {
     pub relink: bool,
     /// One row per registered collector.
     pub collectors: Vec<CollectorRowDto>,
+    /// One tile per game (ROK-2067 D6/D7).
+    pub tiles: Vec<TileDto>,
+    /// When the cached `/config` was fetched, set only while the server is
+    /// unreachable and a cache is shown (D7 "Last checked").
+    pub last_checked: Option<String>,
 }
 
 /// What to do after one upload ended.
@@ -126,9 +138,10 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
 
 struct Inner {
     status: String,
-    /// Keyed by `(scope, item)`: every BG3 save shares the item `save`, so the
-    /// scope (one per save file) keeps one save's result from overwriting another's.
-    results: BTreeMap<(String, String), CharResult>,
+    /// Keyed by `(collector_id, scope, item)`: every BG3 save shares the item
+    /// `save`, so the scope (one per save file) keeps one save's result from
+    /// overwriting another's, and the collector keeps games apart (D12).
+    results: BTreeMap<(String, String, String), CharResult>,
     log: VecDeque<LogLine>,
     sent: SentState,
     /// No uploads before this (a 429's `Retry-After`).
@@ -143,12 +156,16 @@ struct Inner {
     relink: bool,
     /// Batches waiting on the user's first-upload confirmation.
     held: BTreeMap<String, Held>,
+    /// `/config` fetch state and cached covers (ROK-2067).
+    server: ServerState,
 }
 
 pub struct Runtime {
     sent_path: PathBuf,
     inner: Mutex<Inner>,
     kick: Notify,
+    /// Wakes the `/config` refresh task (after link, on a deferral).
+    pub config_kick: Notify,
 }
 
 impl Runtime {
@@ -167,8 +184,10 @@ impl Runtime {
                 linked: Ok(true),
                 relink: false,
                 held: BTreeMap::new(),
+                server: ServerState::default(),
             }),
             kick: Notify::new(),
+            config_kick: Notify::new(),
         }
     }
 
@@ -185,11 +204,22 @@ impl Runtime {
         self.lock().sent.clone()
     }
 
+    /// A device-level activity line.
     pub fn log(&self, text: impl Into<String>) {
+        self.push_log(None, text.into());
+    }
+
+    /// An activity line about one collector (D12).
+    pub fn log_for(&self, collector_id: &str, text: impl Into<String>) {
+        self.push_log(Some(collector_id.to_owned()), text.into());
+    }
+
+    fn push_log(&self, collector_id: Option<String>, text: String) {
         let mut inner = self.lock();
         inner.log.push_front(LogLine {
             at: now(),
-            text: text.into(),
+            text,
+            collector_id,
         });
         inner.log.truncate(LOG_LINES);
     }
@@ -219,9 +249,15 @@ impl Runtime {
     pub fn finish(&self, pending: &PendingUpload, fx: &Effect) {
         let mut inner = self.lock();
         let at = now();
+        let collector_id = pending.contract.to_owned();
         inner.results.insert(
-            (pending.scope.clone(), pending.item.clone()),
+            (
+                collector_id.clone(),
+                pending.scope.clone(),
+                pending.item.clone(),
+            ),
             CharResult {
+                collector_id,
                 label: pending.label.clone(),
                 result: shown_text(fx).to_owned(),
                 ok: fx.ok,
@@ -236,6 +272,7 @@ impl Runtime {
                 inner.log.push_front(LogLine {
                     at: now(),
                     text: format!("Could not save upload state ({e})"),
+                    collector_id: None,
                 });
             }
         }
@@ -263,10 +300,51 @@ impl Runtime {
     }
 
     /// The device linked (or re-linked): the old 401 no longer applies, and a
-    /// scan runs now so the waiting exports go up with the new token.
+    /// scan runs now so the waiting exports go up with the new token. The
+    /// server's `/config` is fetched again too (ROK-2067 D5).
     pub fn linked(&self) {
         self.lock().relink = false;
         self.kick();
+        self.config_kick.notify_one();
+    }
+
+    /// The server URL changed: forget the old server's reachability and
+    /// covers, take the new server's link state (`linked` = it has a token)
+    /// without waiting for a scan, and fetch its `/config` now (ROK-2067 D5).
+    pub fn server_changed(&self, linked: bool) {
+        let mut inner = self.lock();
+        inner.server.reset();
+        inner.linked = Ok(linked);
+        inner.relink = false;
+        drop(inner);
+        self.config_kick.notify_one();
+    }
+
+    /// `/config` answered 401: the token was cleared, so the tiles show the
+    /// unlinked state and the window asks for a re-link.
+    pub fn config_unauthorized(&self) {
+        let mut inner = self.lock();
+        inner.relink = true;
+        inner.linked = Ok(false);
+    }
+
+    /// The `/config` fetch state (reachability, covers, debounce).
+    pub fn server(&self) -> ServerState {
+        self.lock().server.clone()
+    }
+
+    pub fn update_server<R>(&self, f: impl FnOnce(&mut ServerState) -> R) -> R {
+        f(&mut self.lock().server)
+    }
+
+    /// An upload hit `unknown_contract`: refetch `/config`, at most once a
+    /// minute (D5). Returns whether a refresh was requested.
+    pub fn deferred_unknown_contract(&self) -> bool {
+        let due = self.lock().server.take_defer_slot(Instant::now());
+        if due {
+            self.config_kick.notify_one();
+        }
+        due
     }
 
     /// Hold `id`'s batch behind its first-upload preview (replaces any
@@ -300,6 +378,7 @@ impl Runtime {
             inner.log.push_front(LogLine {
                 at: now(),
                 text: format!("Could not save upload state ({e})"),
+                collector_id: None,
             });
         }
         held.keys.len()
@@ -314,11 +393,21 @@ impl Runtime {
             .map(|(id, h)| (id.clone(), h.preview.clone()))
             .collect();
         let env = |k: &str| std::env::var(k).ok();
+        let mut collectors = rows(cfg, Platform::current(), &env, &inner.lines, &previews);
+        let mut results: Vec<CharResult> = inner.results.values().cloned().collect();
+        let linked = matches!(inner.linked, Ok(true));
+        apply_plugin_off_copy(cfg, linked, &mut collectors, &mut results);
+        let view = TileInputs {
+            cfg,
+            linked,
+            rows: &collectors,
+            covers: &inner.server.covers,
+        };
         CollectorStatusDto {
             enabled: cfg.collector_enabled(m.id, m.default_enabled),
             wow_dir: cfg.wow_dir.clone(),
             status: inner.status.clone(),
-            results: inner.results.values().cloned().collect(),
+            results,
             log: inner.log.iter().cloned().collect(),
             device: device_state(
                 inner.paused,
@@ -326,7 +415,9 @@ impl Runtime {
                 inner.linked.clone(),
             ),
             relink: inner.relink,
-            collectors: rows(cfg, Platform::current(), &env, &inner.lines, &previews),
+            tiles: tiles(&view),
+            last_checked: last_checked(cfg, linked, inner.server.reachable),
+            collectors,
         }
     }
 }
@@ -522,7 +613,9 @@ async fn scan_and_upload_one(
         let name = entry.manifest.display_name;
         return (format!("{name} uploads are off"), false);
     };
-    scan.notes.iter().for_each(|n| rt.log(n.clone()));
+    scan.notes
+        .iter()
+        .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
     let waiting = scan.pending.len();
     let id = entry.manifest.id;
     match gate(entry.manifest, cfg.consented(id), scan.files, &scan.pending) {
@@ -572,7 +665,10 @@ async fn upload_all(
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         let fx = effect(&outcome);
-        rt.log(format!("{}: {}", p.label, fx.text));
+        rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));
+        if is_unknown_contract(&outcome) {
+            rt.deferred_unknown_contract();
+        }
         rt.finish(p, &fx);
         if fx.ok {
             sent += 1;

@@ -1,5 +1,6 @@
 //! App settings persisted as JSON in the OS app-config dir. Never holds the token.
 
+use crate::server_config::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -43,6 +44,13 @@ pub struct AppConfig {
     /// The Windows 11 tray icon was promoted out of the overflow once
     /// (ROK-2065). Never promoted again, so a user's "hide" sticks.
     pub tray_promoted_once: bool,
+    /// The linked server's last `/config` answer (ROK-2067 D5), shown while
+    /// it is unreachable. Cleared when the server URL changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_server_config: Option<ServerConfig>,
+    /// When `last_server_config` was fetched (RFC 3339, UTC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
@@ -60,6 +68,8 @@ impl Default for AppConfig {
             legacy_ledgerlink_enabled: None,
             autostart_initialized: false,
             tray_promoted_once: false,
+            last_server_config: None,
+            fetched_at: None,
         }
     }
 }
@@ -127,8 +137,31 @@ impl AppConfig {
             std::fs::create_dir_all(dir)?;
         }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        // Write beside the file, then rename over it: a crash mid-write leaves
+        // the old settings intact instead of a truncated file that loads as
+        // defaults (the `/config` cache rewrites this file every 15 min).
+        let tmp = tmp_path(path);
+        let written =
+            write_synced(&tmp, json.as_bytes()).and_then(|()| std::fs::rename(&tmp, path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        written
     }
+}
+
+/// The temp file [`AppConfig::save`] writes before the rename.
+pub fn tmp_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    path.with_file_name(name)
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
 /// Reduce user input to a bare origin. `https` only, except plain `http` for

@@ -33,6 +33,8 @@ const row: CollectorRow = {
 function props(over: Partial<GameCollectorPanelProps> = {}): GameCollectorPanelProps {
   return {
     row,
+    results: [],
+    log: [],
     dirDraft: "",
     saveError: null,
     onDirDraft: vi.fn(),
@@ -67,10 +69,10 @@ describe("GameCollectorPanel — per-game toggle", () => {
     const onToggle = vi.fn();
     const status: CollectorStatus = {
       enabled: true, wowDir: "D:\\WoW", status: "Paused — uploads resume when you unpause · Up to date",
-      results: [], log: [], device: "Paused — uploads resume when you unpause", relink: false,
+      results: [], log: [], device: "Paused — uploads resume when you unpause", relink: false, tiles: [], lastChecked: null,
       collectors: [{ ...row, id: "wow-ledgerlink", displayName: "LedgerLink", status: "Up to date" }],
     };
-    const p = { status, dirDraft: "D:\\WoW", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle, onUploadNow: vi.fn() };
+    const p = { status, results: [], log: [], dirDraft: "D:\\WoW", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle, onUploadNow: vi.fn() };
     const els = hosts(<CollectorPanel {...p} />);
     (checkbox(els).props.onChange as (e: unknown) => void)({ target: { checked: false } });
     expect(onToggle).toHaveBeenCalledWith(false);

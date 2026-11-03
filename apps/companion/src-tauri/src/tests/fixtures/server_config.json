@@ -1,0 +1,41 @@
+{
+  "configVersion": 1,
+  "minAppVersion": "0.1.0",
+  "limits": {
+    "messageMaxBytes": 262144,
+    "webpMaxBytes": 262144,
+    "imageEdgeMax": 1024,
+    "capturedAtMaxFutureMs": 300000
+  },
+  "rate": { "messagesPerMin": 60, "blobsPerMin": 30 },
+  "contracts": [
+    {
+      "id": "bg3-save",
+      "enabled": false,
+      "versions": [{ "version": 1, "status": "current" }],
+      "maxBytes": 65536,
+      "blobSlots": ["thumbnail"],
+      "cadence": { "minIntervalSec": 60 },
+      "plugin": { "id": "bg3", "name": "Baldur's Gate 3", "state": "not_installed" },
+      "game": {
+        "slug": "baldurs-gate-iii",
+        "name": "Baldur's Gate 3",
+        "coverUrl": "//images.igdb.com/igdb/image/upload/t_cover_big/co670h.jpg"
+      }
+    },
+    {
+      "id": "wow-ledgerlink",
+      "enabled": true,
+      "versions": [{ "version": 1, "status": "current" }],
+      "maxBytes": 262144,
+      "blobSlots": [],
+      "cadence": { "minIntervalSec": 60 },
+      "plugin": { "id": "blizzard", "name": "World of Warcraft (Blizzard)", "state": "active" },
+      "game": {
+        "slug": "world-of-warcraft-forever",
+        "name": "World of Warcraft: Forever",
+        "coverUrl": "//images.igdb.com/igdb/image/upload/t_cover_big/co2l7z.jpg"
+      }
+    }
+  ]
+}

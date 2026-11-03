@@ -72,11 +72,14 @@ pub fn set_ledgerlink_enabled(
     state
         .update_config(|c| c.set_collector_enabled(WOW_LEDGERLINK.id, enabled))
         .map_err(|e| format!("Could not save settings: {e}"))?;
-    rt.log(if enabled {
-        "LedgerLink uploads turned on"
-    } else {
-        "LedgerLink uploads turned off"
-    });
+    rt.log_for(
+        WOW_LEDGERLINK.id,
+        if enabled {
+            "LedgerLink uploads turned on"
+        } else {
+            "LedgerLink uploads turned off"
+        },
+    );
     rt.kick();
     Ok(status(&app, &rt))
 }
@@ -105,7 +108,7 @@ pub fn set_collector_enabled(
     let m = known(&id)?;
     save(&state, |c| c.set_collector_enabled(m.id, enabled))?;
     let verb = if enabled { "on" } else { "off" };
-    rt.log(format!("{} uploads turned {verb}", m.display_name));
+    rt.log_for(m.id, format!("{} uploads turned {verb}", m.display_name));
     rt.kick();
     Ok(status(&app, &rt))
 }
@@ -162,7 +165,7 @@ pub fn confirm_first_upload(
     let m = known(&id)?;
     save(&state, |c| c.set_consented(m.id))?;
     rt.set_held(m.id, None);
-    rt.log(format!("{}: first upload confirmed", m.display_name));
+    rt.log_for(m.id, format!("{}: first upload confirmed", m.display_name));
     rt.kick();
     Ok(status(&app, &rt))
 }
@@ -178,11 +181,22 @@ pub fn skip_first_upload(
     let m = known(&id)?;
     let n = rt.skip_held(m.id);
     if n > 0 {
-        rt.log(format!(
-            "{}: skipped {n} save(s), nothing uploaded",
-            m.display_name
-        ));
+        rt.log_for(
+            m.id,
+            format!("{}: skipped {n} save(s), nothing uploaded", m.display_name),
+        );
     }
     rt.kick();
+    Ok(status(&app, &rt))
+}
+
+/// Fetch the server's `/config` now (ROK-2067 D5) and return the fresh
+/// status, tiles included.
+#[tauri::command]
+pub async fn refresh_server_config(
+    app: AppHandle,
+    rt: State<'_, Arc<Runtime>>,
+) -> Result<CollectorStatusDto, String> {
+    crate::server_config::refresh(&app, &rt).await;
     Ok(status(&app, &rt))
 }
