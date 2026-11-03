@@ -64,15 +64,36 @@ function emphasize(text: string, plugin: string | null): ReactNode {
   );
 }
 
-/** One game's settings: back button, cover + name, the D7 banner, and that game's panel. */
+interface PartProps extends Pick<GameViewProps, "status" | "wow" | "game"> {
+  id: string;
+  /** Device-level log lines (`collectorId: null`) show in the first part only. */
+  deviceLog: boolean;
+}
+
+/** One collector's panel, with only its own results and log (D12). */
+function Part({ status, id, deviceLog, wow, game }: PartProps) {
+  const row = status.collectors.find((c) => c.id === id);
+  const results = status.results.filter((r) => r.collectorId === id);
+  const log = status.log.filter((l) => l.collectorId === id || (deviceLog && l.collectorId === null));
+  if (id === LEDGERLINK_ID) return <CollectorPanel status={status} results={results} log={log} {...wow} />;
+  return row ? <GamePanel row={row} results={results} log={log} game={game} /> : null;
+}
+
+function Banner({ text, plugin }: { text: string | null; plugin: string | null }) {
+  return text ? <div className="banner" role="alert">{emphasize(text, plugin)}</div> : null;
+}
+
+/**
+ * One game's settings: back button, cover + name, then each of the game's
+ * collectors (ROK-2073: BG3 saves + screenshots share one view, each under
+ * its own heading with its own banner and controls).
+ */
 export function GameView(p: GameViewProps) {
   const { status, id } = p;
-  const tile = status.tiles.find((t) => t.collectorId === id);
+  const tile = status.tiles.find((t) => t.collectorId === id || t.lines.some((l) => l.collectorId === id));
   const row = status.collectors.find((c) => c.id === id);
-  // D12: only this collector's results; its own log lines plus device-level ones.
-  const results = status.results.filter((r) => r.collectorId === id);
-  const log = status.log.filter((l) => l.collectorId === id || l.collectorId === null);
   const title = tile ? [tile.title, tile.subtitle].filter(Boolean).join(" · ") : (row?.displayName ?? id);
+  const parts = tile && tile.lines.length > 1 ? tile.lines : null;
   return (
     <>
       <button type="button" className="back" onClick={p.onBack}>← All games</button>
@@ -80,12 +101,20 @@ export function GameView(p: GameViewProps) {
         {tile && <span className="art"><Cover tile={tile} /></span>}
         <h2>{title}</h2>
       </div>
-      {tile?.banner && <div className="banner" role="alert">{emphasize(tile.banner, tile.pluginName)}</div>}
-      {id === LEDGERLINK_ID ? (
-        <CollectorPanel status={status} results={results} log={log} {...p.wow} />
-      ) : row ? (
-        <GamePanel row={row} results={results} log={log} game={p.game} />
-      ) : null}
+      {parts ? (
+        parts.map((l, i) => (
+          <section key={l.collectorId} aria-label={l.label}>
+            <h3 className="gv-part">{l.label}</h3>
+            <Banner text={l.banner} plugin={l.pluginName} />
+            <Part status={status} id={l.collectorId} deviceLog={i === 0} wow={p.wow} game={p.game} />
+          </section>
+        ))
+      ) : (
+        <>
+          <Banner text={tile?.banner ?? null} plugin={tile?.pluginName ?? null} />
+          <Part status={status} id={id} deviceLog wow={p.wow} game={p.game} />
+        </>
+      )}
     </>
   );
 }

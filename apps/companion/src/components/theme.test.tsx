@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import css from "../styles.css?raw";
 import type { CollectorRow } from "../api";
 import { hosts } from "../test/elements";
-import { bg3Tile, mixedStatus, tile, wowTile } from "../test/fixtures";
+import { bg3GroupTile, bg3Tile, mixedStatus, tile, wowTile } from "../test/fixtures";
 import { Bg3CampaignPicker } from "./Bg3CampaignPicker";
 import { GameCollectorPanel } from "./GameCollectorPanel";
 import { GameTiles } from "./GameTiles";
@@ -33,7 +33,7 @@ const campaigns = Array.from({ length: 10 }, (_, i) => camp(i));
 const handlers = { dirDraft: "", saveError: null, onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle: vi.fn(), onUpload: vi.fn(), onSkip: vi.fn() };
 const wow = { dirDraft: "", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle: vi.fn(), onUploadNow: vi.fn() };
 const allTiles = [
-  wowTile, bg3Tile,
+  wowTile, bg3Tile, bg3GroupTile,
   tile({ id: "a", state: "not_on_server", chip: "Not on this server" }),
   tile({ id: "b", state: "app_too_old", collectorId: null, clickable: false, chip: "Update the Companion", cover: null, fallback: true }),
 ];
@@ -65,7 +65,7 @@ describe("theme tokens — light and dark", () => {
       expect(classes).toEqual(expect.arrayContaining([
         "preview", "thumb", "facts", "error", "muted", "device",
         "tiles", "tile", "warn", "off", "old", "art", "cover", "fallback", "initials", "scrim",
-        "ov-title", "ov-chip", "ov-label", "tl", "gv-head", "back", "banner", "between", "small",
+        "ov-title", "ov-chip", "ov-label", "tl", "tls", "gv-head", "back", "banner", "between", "small",
         "camps", "camps-box", "camps-more", "toggle",
       ]));
       for (const cls of classes) {

@@ -1,4 +1,4 @@
-import type { Tile, TileState } from "../api";
+import type { Tile, TileLine, TileState } from "../api";
 
 /** Extra class per state; `supported` and `unknown` look the same (full colour, no chip). */
 export const TILE_CLASS: Record<TileState, string> = {
@@ -52,12 +52,29 @@ function Art({ tile }: { tile: Tile }) {
   );
 }
 
+/** One collector's line inside a shared tile: "Saves · Up to date" (ROK-2073). */
+function CollectorLine({ line }: { line: TileLine }) {
+  return <span className={`tl ${TILE_CLASS[line.state]}`.trim()}>{line.label} · {line.line}</span>;
+}
+
+/** The status under the art: the tile's line, or one per collector when it has several. */
+function Lines({ tile }: { tile: Tile }) {
+  if (tile.lines.length < 2) return <span className="tl">{tile.line}</span>;
+  return (
+    <span className="tls">
+      {tile.lines.map((l) => (
+        <CollectorLine key={l.collectorId} line={l} />
+      ))}
+    </span>
+  );
+}
+
 function GameTile({ tile, onOpen }: { tile: Tile; onOpen: (id: string) => void }) {
   const className = `tile ${TILE_CLASS[tile.state]}`.trim();
   const body = (
     <>
       <Art tile={tile} />
-      <span className="tl">{tile.line}</span>
+      <Lines tile={tile} />
     </>
   );
   const target = tile.collectorId;
@@ -91,7 +108,7 @@ export interface GameTilesProps {
   onOpen: (collectorId: string) => void;
 }
 
-/** Home screen: one portrait art card per game (D6 order comes from Rust). */
+/** Home screen: one portrait art card per game, not per collector (D6 order and ROK-2073 grouping come from Rust). */
 export function GameTiles(p: GameTilesProps) {
   const server = host(p.serverUrl);
   return (

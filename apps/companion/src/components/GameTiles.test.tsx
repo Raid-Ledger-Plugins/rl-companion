@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { hosts, must, text, type Host } from "../test/elements";
-import { bg3Tile, tile, wowTile } from "../test/fixtures";
+import { bg3GroupTile, bg3Tile, tile, tileLine, wowTile } from "../test/fixtures";
 import css from "../styles.css?raw";
 import { Cover, GameTiles, type GameTilesProps } from "./GameTiles";
 
@@ -81,6 +81,48 @@ describe("GameTiles — one portrait card per game", () => {
     expect(fresh).not.toContain("Last checked");
     const stale = renderToStaticMarkup(<GameTiles {...props({ lastChecked: "2026-11-02T18:00:00Z" })} />);
     expect(stale).toMatch(/<span class="muted small">Last checked [^<]+<\/span>/);
+  });
+});
+
+describe("GameTiles — ROK-2073: one tile per game, one line per collector", () => {
+  it("AC1: BG3 saves + screenshots are ONE card with a labelled line each", () => {
+    const p = props({ tiles: [wowTile, bg3GroupTile] });
+    expect(cards(p)).toHaveLength(2);
+    const html = renderToStaticMarkup(<GameTiles {...p} />);
+    expect(html).toContain('<span class="tls"><span class="tl">Saves · Up to date</span><span class="tl off">Screenshots · Not supported on this server</span></span>');
+  });
+
+  it("AC2: an unsupported collector greys only its line; the card keeps the headline state", () => {
+    const html = renderToStaticMarkup(<GameTiles {...props({ tiles: [bg3GroupTile] })} />);
+    expect(html).toContain('<button type="button" class="tile">');
+    expect(html).not.toMatch(/ov-chip|ov-label/);
+  });
+
+  it("chip precedence: the card shows the headline Rust picked, each line its own state", () => {
+    const warn = tile({
+      id: "bg3-save", state: "plugin_off", chip: "Plugin not installed", line: "Plugin not installed", title: "Baldur's Gate 3",
+      lines: [
+        tileLine({ collectorId: "bg3-save", state: "supported", label: "Saves" }),
+        tileLine({ collectorId: "bg3-screenshot", state: "plugin_off", label: "Screenshots", line: "Plugin not installed" }),
+      ],
+    });
+    const html = renderToStaticMarkup(<GameTiles {...props({ tiles: [warn] })} />);
+    expect(html).toContain('<button type="button" class="tile warn">');
+    expect(html).toContain('<span class="ov-chip">⚠ Plugin not installed</span>');
+    expect(html).toContain('<span class="tl">Saves · Up to date</span><span class="tl warn">Screenshots · Plugin not installed</span>');
+  });
+
+  it("AC4: a single-collector game (WoW) keeps its one plain line", () => {
+    const one = { ...wowTile, lines: [tileLine({ collectorId: "wow-ledgerlink", state: "supported", label: "LedgerLink addon" })] };
+    const html = renderToStaticMarkup(<GameTiles {...props({ tiles: [one] })} />);
+    expect(html).toContain('<span class="tl">Up to date</span>');
+    expect(html).not.toContain("tls");
+  });
+
+  it("clicking the shared card opens the game by its first collector", () => {
+    const p = props({ tiles: [bg3GroupTile] });
+    (must(cards(p)[0], "bg3 card").props.onClick as () => void)();
+    expect(p.onOpen).toHaveBeenCalledWith("bg3-save");
   });
 });
 

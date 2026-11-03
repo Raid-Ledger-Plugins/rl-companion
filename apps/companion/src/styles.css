@@ -84,6 +84,12 @@ img.cover:not([hidden]) + .fallback, img.cover[hidden] { display: none; }
 .tl { font-size: 12px; color: var(--muted); padding: 0 2px; }
 .tile.warn .art { border: 2px solid var(--overlay-warn); }
 .tile.warn .tl { color: var(--warn); font-weight: 600; }
+/* ROK-2073: one line per collector inside a shared game tile; each carries its own state. */
+.tls { display: grid; gap: 2px; }
+.tile.warn .tls .tl { color: var(--muted); font-weight: 400; }
+.tile .tls .tl.warn { color: var(--warn); font-weight: 600; }
+.tls .tl.off { font-style: italic; }
+.gv-part { color: var(--text); font-size: 13px; margin: 6px 0 0; }
 .tile.off .cover { filter: grayscale(1) brightness(0.55); }
 .tile.off .art::after { content: ""; position: absolute; inset: 0; background: var(--tile-dim); }
 .tile.off .ov-label, .tile.off .ov-title { z-index: 2; }
