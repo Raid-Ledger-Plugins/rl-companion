@@ -34,7 +34,11 @@ describe("Bg3ScreenshotHubPicker — states", () => {
   it("hubs listed: the default (latest save) hub is preselected and labelled", () => {
     const els = hosts(<Bg3ScreenshotHubPicker hubs={listed} onPick={vi.fn()} />);
     expect(select(els).props.value).toBe("9");
-    expect(options(els)).toEqual([["3", "Tuesday party"], ["9", "Honour run (your latest save)"]]);
+    expect(options(els)).toEqual([
+      ["", "Follow my latest save (Honour run)"],
+      ["3", "Tuesday party"],
+      ["9", "Honour run (your latest save)"],
+    ]);
     expect(html(listed)).not.toContain("Pick a hub to start");
   });
 
@@ -44,6 +48,25 @@ describe("Bg3ScreenshotHubPicker — states", () => {
     expect(select(els).props.value).toBe("");
     expect(options(els)[0]).toEqual(["", "Choose a hub…"]);
     expect(html(none)).toContain("Pick a hub to start sending screenshots.");
+  });
+
+  it("after a manual pick, the first option follows the latest save again (m6)", () => {
+    const onPick = vi.fn();
+    const picked = { ...listed, selected: 3 };
+    const els = hosts(<Bg3ScreenshotHubPicker hubs={picked} onPick={onPick} />);
+    const def = must(listed.targets.find((t) => t.isDefault), "default hub");
+    expect(options(els)[0]).toEqual(["", `Follow my latest save (${def.name})`]);
+    (select(els).props.onChange as (e: unknown) => void)({ target: { value: "" } });
+    expect(onPick).toHaveBeenCalledWith(null);
+  });
+
+  it("a pick the server no longer lists is shown as such, never as another hub (M3)", () => {
+    const stale = { ...listed, selected: 777 };
+    const els = hosts(<Bg3ScreenshotHubPicker hubs={stale} onPick={vi.fn()} />);
+    expect(select(els).props.value).toBe("777");
+    expect(options(els)).toContainEqual(["777", "A hub you're no longer in"]);
+    expect(html(stale)).toContain("no longer in the hub you picked");
+    expect(html(listed)).not.toContain("no longer in the hub you picked");
   });
 
   it("listed but empty: tells the user to join a hub", () => {

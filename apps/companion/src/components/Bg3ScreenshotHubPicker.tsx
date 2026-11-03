@@ -11,6 +11,17 @@ function waitingLine(n: number): string | null {
   return n === 1 ? "1 screenshot is waiting for a hub." : `${n} screenshots are waiting for a hub.`;
 }
 
+/** A pick the server no longer lists (left hub, deleted hub): shown as such, never as another hub. */
+export function isStale(hubs: Bg3ScreenshotHubs): boolean {
+  return hubs.selected !== null && !hubs.targets.some((t) => t.hubGuildId === hubs.selected);
+}
+
+/** The first option: follow the latest save's hub (m6), or a placeholder when there is none. */
+function firstLabel(hubs: Bg3ScreenshotHubs): string {
+  const def = hubs.targets.find((t) => t.isDefault);
+  return def ? `Follow my latest save (${def.name})` : "Choose a hub…";
+}
+
 function HubSelect({ hubs, onPick }: { hubs: Bg3ScreenshotHubs; onPick: Bg3ScreenshotHubPickerProps["onPick"] }) {
   return (
     <label>
@@ -19,7 +30,12 @@ function HubSelect({ hubs, onPick }: { hubs: Bg3ScreenshotHubs; onPick: Bg3Scree
         value={hubs.selected === null ? "" : String(hubs.selected)}
         onChange={(e) => onPick(e.target.value === "" ? null : Number(e.target.value))}
       >
-        {hubs.selected === null && <option value="">Choose a hub…</option>}
+        <option value="">{firstLabel(hubs)}</option>
+        {isStale(hubs) && (
+          <option value={String(hubs.selected)} disabled>
+            A hub you're no longer in
+          </option>
+        )}
         {hubs.targets.map((t) => (
           <option key={t.hubGuildId} value={String(t.hubGuildId)}>
             {t.isDefault ? `${t.name} (your latest save)` : t.name}
@@ -47,6 +63,9 @@ export function Bg3ScreenshotHubPicker({ hubs, onPick }: Bg3ScreenshotHubPickerP
         <span className="muted">You're not in a Baldur's Gate 3 hub yet. Join one on Raid Ledger to send screenshots.</span>
       )}
       {listed && hubs.targets.length > 0 && <HubSelect hubs={hubs} onPick={onPick} />}
+      {listed && isStale(hubs) && (
+        <span role="alert" className="error">You're no longer in the hub you picked. Pick another to keep sending screenshots.</span>
+      )}
       {listed && hubs.targets.length > 0 && hubs.selected === null && (
         <span className="muted">Pick a hub to start sending screenshots.</span>
       )}
