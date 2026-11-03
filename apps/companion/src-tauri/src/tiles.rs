@@ -159,14 +159,13 @@ fn base(v: &TileInputs, id: &str, title: String, state: TileState, line: String)
     }
 }
 
-/// The game's name: the server's for the first collector, else the manifest's.
-fn game_title(v: &TileInputs, m: &CollectorManifest) -> String {
-    v.cfg
-        .last_server_config
-        .as_ref()
-        .and_then(|s| s.contract(m.contract_id))
-        .and_then(|c| c.game.as_ref())
-        .map_or_else(|| m.game_name.to_owned(), |g| g.name.clone())
+/// The game's name: the server's from the first of the game's collectors whose
+/// contract names one (like the cover), else the first manifest's.
+fn game_title(v: &TileInputs, ms: &[&CollectorManifest], first: &CollectorManifest) -> String {
+    let sc = v.cfg.last_server_config.as_ref();
+    ms.iter()
+        .find_map(|m| sc?.contract(m.contract_id)?.game.as_ref())
+        .map_or_else(|| first.game_name.to_owned(), |g| g.name.clone())
 }
 
 /// One collector's line inside its game's tile. `what` names its uploads in
@@ -246,7 +245,7 @@ pub fn headline(lines: &[TileLineDto]) -> Option<&TileLineDto> {
 /// One tile for a game's collectors (`ms`, non-empty, `BUILTINS` order).
 fn game_tile(v: &TileInputs, ms: &[&CollectorManifest]) -> Option<TileDto> {
     let first = ms.first()?;
-    let title = game_title(v, first);
+    let title = game_title(v, ms, first);
     let lines: Vec<TileLineDto> = ms
         .iter()
         .map(|m| {
@@ -283,19 +282,27 @@ fn game_tile(v: &TileInputs, ms: &[&CollectorManifest]) -> Option<TileDto> {
     Some(t)
 }
 
-/// The app's collectors grouped by game, in `BUILTINS` order (ROK-2073).
-fn games() -> Vec<Vec<&'static CollectorManifest>> {
-    let mut out: Vec<Vec<&'static CollectorManifest>> = Vec::new();
-    for m in BUILTINS.iter().map(|b| b.manifest) {
+/// Collectors grouped by `game_key`, in input order (ROK-2073). The key, not
+/// the display name, so rewording one manifest's copy cannot split a tile.
+pub fn group_by_game<'a>(
+    ms: impl IntoIterator<Item = &'a CollectorManifest>,
+) -> Vec<Vec<&'a CollectorManifest>> {
+    let mut out: Vec<Vec<&'a CollectorManifest>> = Vec::new();
+    for m in ms {
         match out
             .iter_mut()
-            .find(|g| g.first().is_some_and(|f| f.game_name == m.game_name))
+            .find(|g| g.first().is_some_and(|f| f.game_key == m.game_key))
         {
             Some(g) => g.push(m),
             None => out.push(vec![m]),
         }
     }
     out
+}
+
+/// The app's collectors grouped by game, in `BUILTINS` order.
+fn games() -> Vec<Vec<&'static CollectorManifest>> {
+    group_by_game(BUILTINS.iter().map(|b| b.manifest))
 }
 
 fn too_old_tile(v: &TileInputs, c: &ServerContract) -> TileDto {

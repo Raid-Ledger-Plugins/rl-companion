@@ -181,3 +181,49 @@ fn headline_precedence_plugin_off_then_unknown_then_supported_ties_go_first() {
     }
     assert_eq!(headline(&[]), None);
 }
+
+#[test]
+fn minor1_grouping_keys_on_game_key_not_the_display_name() {
+    use crate::manifest::{CollectorManifest, BG3_SAVE, BG3_SCREENSHOT};
+    use crate::tiles::group_by_game;
+    let reworded = CollectorManifest {
+        game_name: "Baldur's Gate III",
+        ..BG3_SCREENSHOT
+    };
+    let other = CollectorManifest {
+        id: "other",
+        game_key: "other-game",
+        ..BG3_SAVE
+    };
+    let ids = |ms: &[&CollectorManifest]| -> Vec<Vec<&str>> {
+        group_by_game(ms.iter().copied())
+            .iter()
+            .map(|g| g.iter().map(|m| m.id).collect())
+            .collect()
+    };
+    assert_eq!(
+        ids(&[&BG3_SAVE, &reworded]),
+        [vec!["bg3-save", "bg3-screenshot"]],
+        "a reworded name keeps one tile"
+    );
+    assert_eq!(
+        ids(&[&BG3_SAVE, &other]),
+        [vec!["bg3-save"], vec!["other"]],
+        "the same name with another key is another game"
+    );
+    assert_eq!(BG3_SAVE.game_key, BG3_SCREENSHOT.game_key);
+}
+
+#[test]
+fn minor2_the_title_comes_from_any_collector_the_server_names_a_game_for() {
+    let cfg = with(json!([{ "id": "bg3-screenshot", "enabled": true,
+        "game": { "slug": "baldurs-gate-iii", "name": "Baldur's Gate III", "coverUrl": null } }]));
+    let t = all(&cfg)
+        .into_iter()
+        .find(|t| t.id == "bg3-save")
+        .expect("bg3 tile");
+    assert_eq!(
+        t.title, "Baldur's Gate III",
+        "screenshots' server title, though saves are not on the server"
+    );
+}

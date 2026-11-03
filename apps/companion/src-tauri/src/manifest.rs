@@ -38,6 +38,9 @@ pub struct CollectorManifest {
     pub id: &'static str,
     /// Name the window shows ("turn on {display_name} uploads").
     pub display_name: &'static str,
+    /// Stable game identity: collectors with the same key share one tile
+    /// (ROK-2073). Matches the server's `ServerGame.slug` where one is known.
+    pub game_key: &'static str,
     /// The game's name for its tile when the server sends none (ROK-2067).
     pub game_name: &'static str,
     /// A second line under the tile title ("LedgerLink addon"), if any.
@@ -241,6 +244,7 @@ pub fn glob_match(pattern: &str, name: &str) -> bool {
 pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
     id: "wow-ledgerlink",
     display_name: "LedgerLink",
+    game_key: "world-of-warcraft",
     game_name: "World of Warcraft",
     game_subtitle: Some("LedgerLink addon"),
     line_label: "LedgerLink addon",
@@ -268,6 +272,7 @@ pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
 pub const BG3_SAVE: CollectorManifest = CollectorManifest {
     id: "bg3-save",
     display_name: "Baldur's Gate 3",
+    game_key: "baldurs-gate-iii",
     game_name: "Baldur's Gate 3",
     game_subtitle: None,
     line_label: "Saves",
@@ -301,6 +306,7 @@ pub const BG3_SAVE: CollectorManifest = CollectorManifest {
 pub const BG3_SCREENSHOT: CollectorManifest = CollectorManifest {
     id: "bg3-screenshot",
     display_name: "BG3 screenshots",
+    game_key: "baldurs-gate-iii",
     game_name: "Baldur's Gate 3",
     game_subtitle: Some("Screenshots"),
     line_label: "Screenshots",
