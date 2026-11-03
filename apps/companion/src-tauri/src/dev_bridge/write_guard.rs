@@ -150,3 +150,52 @@ fn write_new_then_rename(target: &Path, bytes: &[u8], mode: Option<u32>) -> std:
     }
     renamed
 }
+
+/// The dev snapshot cache file (ROK-2072 §6): `<root>/<flavor>/<key>.jsonl`,
+/// where `flavor` is a contract flavor folder name and `key` 64 lower hex.
+/// Neither ever comes from request text unchecked.
+pub fn cache_file(root: &Path, flavor: &str, key: &str) -> Result<PathBuf, WriteGuardError> {
+    if !is_flavor(flavor) {
+        return Err(WriteGuardError::BadFlavor(flavor.to_owned()));
+    }
+    let hex = key.len() == 64
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let target = root.join(flavor).join(format!("{key}.jsonl"));
+    if hex {
+        Ok(target)
+    } else {
+        Err(WriteGuardError::Outside(target))
+    }
+}
+
+/// Write one cache file atomically. The flavor folder under `root` is
+/// created if missing and refused if it is a link or not a folder.
+pub fn guarded_cache_write(
+    root: &Path,
+    flavor: &str,
+    key: &str,
+    bytes: &[u8],
+) -> Result<(), WriteGuardError> {
+    let target = cache_file(root, flavor, key)?;
+    std::fs::create_dir_all(root)?;
+    let dir = root.join(flavor);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.file_type().is_symlink() || !m.is_dir() => {
+            return Err(WriteGuardError::Outside(dir))
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&dir)?,
+        Err(e) => return Err(e.into()),
+    }
+    Ok(write_new_then_rename(&target, bytes, None)?)
+}
+
+/// Delete one cache file (an emptied history); a missing file is fine.
+pub fn guarded_cache_remove(root: &Path, flavor: &str, key: &str) -> Result<(), WriteGuardError> {
+    match std::fs::remove_file(cache_file(root, flavor, key)?) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}

@@ -10,6 +10,7 @@
 //! the files in a directory listing. No filesystem access, no Lua
 //! interpreter: [`lua`] parses only the subset the client writes.
 
+mod dev;
 mod lua;
 mod paths;
 
@@ -21,6 +22,10 @@ use crate::error::WowSvError;
 use crate::extract::sha256_hex;
 use lua::{LuaKey, LuaValue, parse_assignments};
 
+pub use dev::{
+    DEV_SNAPSHOT_MAX_BYTES, DevSnapshotEntry, DevSnapshots, is_player_guid,
+    parse_ledgerlink_dev_snapshots,
+};
 pub use paths::{
     LEDGERLINK_SV_FILE, SvCandidate, is_flavor_folder, ledgerlink_sv_candidates, ledgerlink_sv_path,
 };
@@ -68,6 +73,12 @@ pub enum SkipReason {
     TextTooLarge { size: usize },
     /// Token `index` (0-based) does not match `ADDON_IMPORT_PAGE_RE`.
     InvalidToken { index: usize },
+    /// `dev.snapshots`: the key is not a player GUID (`^Player-\d{1,5}-[0-9A-F]{8}$`).
+    BadGuid,
+    /// `dev.snapshots`: the value is not a string.
+    NotAString,
+    /// `dev.snapshots`: the string is over [`DEV_SNAPSHOT_MAX_BYTES`].
+    SnapshotTooLarge { size: usize },
 }
 
 /// An outbox entry that was dropped (log it locally; never upload it).
@@ -175,7 +186,7 @@ fn whole_seconds(n: f64) -> Option<i64> {
     (n.fract() == 0.0 && n.abs() < LIMIT).then_some(n as i64)
 }
 
-fn key_text(key: &LuaKey) -> String {
+pub(crate) fn key_text(key: &LuaKey) -> String {
     match key {
         LuaKey::Str(s) => s.clone(),
         LuaKey::Num(n) => format!("[{n}]"),

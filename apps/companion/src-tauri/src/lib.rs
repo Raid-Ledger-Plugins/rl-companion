@@ -71,6 +71,7 @@ pub fn run() {
             // Dev bridge (ROK-2055): reconcile opens nothing while it is off.
             let bridge = Arc::new(dev_bridge::DevBridge::new(
                 config_dir.join(dev_bridge::TLS_FILE),
+                app.path().app_data_dir().ok().as_deref(),
             ));
             app.manage(bridge.clone());
             tray::build(app.handle())?;

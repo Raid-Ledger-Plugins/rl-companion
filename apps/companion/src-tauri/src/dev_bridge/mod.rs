@@ -16,6 +16,9 @@ pub mod paging;
 pub mod routes;
 pub mod server;
 pub mod settings;
+pub mod snapshot_cache;
+pub mod snapshot_routes;
+pub mod snapshot_validate;
 pub mod sv;
 pub mod tls;
 pub mod token;
@@ -25,8 +28,9 @@ use crate::config::AppConfig;
 use serde::Serialize;
 use server::{ServerCtx, Snapshot};
 use settings::DevBridgeConfig;
+use snapshot_cache::SnapshotCache;
 use std::net::SocketAddrV4;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -40,6 +44,8 @@ struct Running {
     fingerprint: String,
     stop: oneshot::Sender<()>,
     task: JoinHandle<()>,
+    /// The 30 s dev snapshot poll (ROK-2072 D9), aborted with the listener.
+    poll: JoinHandle<()>,
 }
 
 /// What the panel shows about the listener.
@@ -77,6 +83,7 @@ pub fn snapshot(cfg: &AppConfig) -> Snapshot {
         },
         wow_dir: cfg.wow_dir.clone(),
         probes_enabled: b.probes_enabled,
+        snapshot_cache: None,
     }
 }
 
@@ -84,14 +91,17 @@ pub struct DevBridge {
     tls_path: PathBuf,
     ctx: Arc<ServerCtx>,
     running: Mutex<Option<Running>>,
+    /// `<app_data_dir>/dev-bridge/snapshots` (ROK-2072); served only while listening.
+    cache: Option<Arc<SnapshotCache>>,
 }
 
 impl DevBridge {
-    pub fn new(tls_path: PathBuf) -> Self {
+    pub fn new(tls_path: PathBuf, app_data_dir: Option<&Path>) -> Self {
         Self {
             tls_path,
             ctx: Arc::new(ServerCtx::default()),
             running: Mutex::new(None),
+            cache: app_data_dir.map(|d| Arc::new(SnapshotCache::in_app_data(d))),
         }
     }
 
@@ -102,7 +112,20 @@ impl DevBridge {
             tls_path,
             ctx: Arc::new(ctx),
             running: Mutex::new(None),
+            cache: None,
         }
+    }
+
+    /// The served slice of `cfg`; the snapshot cache only while `on`, so
+    /// nothing is ingested while the listener is off (AC-9).
+    fn served(&self, cfg: &AppConfig, on: bool) -> Snapshot {
+        let mut snap = snapshot(cfg);
+        if on {
+            snap.snapshot_cache = self.cache.clone();
+        } else {
+            snap.policy = auth::AuthPolicy::default();
+        }
+        snap
     }
 
     /// Bring the listener in line with `cfg`: start, move, keep or stop it.
@@ -110,11 +133,8 @@ impl DevBridge {
     /// request racing the close is refused rather than answered.
     pub async fn reconcile(&self, cfg: &AppConfig) -> ListenerStatus {
         let want = desired(&cfg.dev_bridge);
-        let mut snap = snapshot(cfg);
-        if !matches!(want, Ok(Some(_))) {
-            snap.policy = auth::AuthPolicy::default();
-        }
-        self.ctx.set_snapshot(snap);
+        self.ctx
+            .set_snapshot(self.served(cfg, matches!(want, Ok(Some(_)))));
         match want {
             Ok(Some(addr)) => match self.listen(addr).await {
                 Ok(()) => self.status().await,
@@ -166,12 +186,14 @@ impl DevBridge {
         let (stop, rx) = oneshot::channel();
         self.ctx.set_closed_reason(None);
         let task = tokio::spawn(server::serve(listener, acceptor, self.ctx.clone(), rx));
+        let poll = tokio::spawn(snapshot_routes::poll_loop(self.ctx.clone()));
         *running = Some(Running {
             requested: addr,
             bound,
             fingerprint: material.fingerprint(),
             stop,
             task,
+            poll,
         });
         Ok(())
     }
@@ -206,7 +228,11 @@ impl DevBridge {
 
     /// Refresh the served snapshot only (e.g. the WoW folder changed).
     pub fn refresh(&self, cfg: &AppConfig) {
-        self.ctx.set_snapshot(snapshot(cfg));
+        let mut snap = snapshot(cfg);
+        if desired(&cfg.dev_bridge).is_ok_and(|w| w.is_some()) {
+            snap.snapshot_cache = self.cache.clone();
+        }
+        self.ctx.set_snapshot(snap);
     }
 
     /// Where `/dev/v1/collectors` reads the runtime's state from.
@@ -231,6 +257,7 @@ pub fn on_wow_dir_changed(bridge: Option<&DevBridge>, cfg: &AppConfig) {
 /// Stop accepting, then wait while `serve` closes every accepted connection
 /// and pending handshake (bounded by its drain timeout).
 async fn shut(r: Running) {
+    r.poll.abort();
     let _ = r.stop.send(());
     let _ = r.task.await;
 }

@@ -1,12 +1,12 @@
 //! The read endpoints behind admission (spec §6, AC-6): addons, LedgerLink
-//! SavedVariables raw + parsed, logs, collectors. `/health` stays in server.rs;
+//! SavedVariables raw + parsed, dev snapshots (`snapshot_routes`), logs, collectors. `/health` stays in server.rs;
 //! the probe endpoints arrive with C4.
 
 use super::health::discover_flavors;
 use super::logbuf::{is_level, parse_utc, LogBuffer};
 use super::paging::{decode_cursor, encode_cursor, invalid, page, wrap_next, Query};
 use super::server::Snapshot;
-use super::{addons, sv};
+use super::{addons, snapshot_routes, sv};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
@@ -36,6 +36,12 @@ pub fn get(
         "/dev/v1/addons" => addons_ep(snap, q),
         "/dev/v1/ledgerlink/sv" => sv_raw_ep(snap, q),
         "/dev/v1/ledgerlink/sv/parsed" => sv_parsed_ep(snap, q),
+        "/dev/v1/ledgerlink/snapshot" => {
+            flavor(snap, q).and_then(|f| snapshot_routes::page_ep(snap, &f, q))
+        }
+        "/dev/v1/ledgerlink/snapshot/history" => {
+            flavor(snap, q).and_then(|f| snapshot_routes::history_ep(snap, &f, q))
+        }
         "/dev/v1/logs" => logs_ep(logs, q),
         "/dev/v1/collectors" => Ok(collectors.map_or_else(|| json!({ "collectors": [] }), |f| f())),
         _ => return None,

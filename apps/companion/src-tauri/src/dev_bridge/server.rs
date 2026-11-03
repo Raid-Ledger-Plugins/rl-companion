@@ -8,6 +8,7 @@ use super::health::{health, HealthInput};
 use super::logbuf::{self, LogBuffer};
 use super::paging::parse_query;
 use super::routes::{self, CollectorsFn};
+use super::snapshot_cache::SnapshotCache;
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response};
@@ -49,6 +50,8 @@ pub struct Snapshot {
     pub policy: AuthPolicy,
     pub wow_dir: String,
     pub probes_enabled: bool,
+    /// The dev snapshot cache (ROK-2072); `None` while the listener is off.
+    pub snapshot_cache: Option<Arc<SnapshotCache>>,
 }
 
 pub struct ServerCtx {
@@ -164,7 +167,7 @@ impl ServerCtx {
         }
     }
 
-    fn snapshot(&self) -> Snapshot {
+    pub(crate) fn snapshot(&self) -> Snapshot {
         self.snapshot
             .read()
             .unwrap_or_else(|p| p.into_inner())
@@ -311,18 +314,22 @@ async fn respond(
         let (c, m, p) = job;
         c.route_audited(peer.ip(), &m, &p, query.as_deref(), auth.as_deref())
     })
-    .await
-    .inspect_err(|_| {
-        // The contract has no 500 body: hyper closes the connection without
-        // a response. Logged as a refusal would be — never with the path.
-        ctx.log(
-            "warn",
-            &format!(
-                "request from {} failed inside the bridge; connection closed (path not logged)",
-                peer.ip()
-            ),
-        );
-    })?;
+    .await;
+    let routed = match routed {
+        Ok(r) => r,
+        Err(_) => {
+            // A route panicked: v1's `500 {"error":"internal"}`, then close.
+            // Logged as a refusal would be — never with the path.
+            ctx.log(
+                "warn",
+                &format!(
+                    "request from {} failed inside the bridge; answered 500 (path not logged)",
+                    peer.ip()
+                ),
+            );
+            return Ok(internal_error());
+        }
+    };
     let bytes = serde_json::to_vec(&routed.body).unwrap_or_default();
     ctx.audit(peer.ip(), &method, &path, &routed, bytes.len());
     let mut res = Response::new(Full::new(Bytes::from(bytes)));
@@ -340,6 +347,23 @@ async fn respond(
         );
     }
     Ok(res)
+}
+
+/// `500 {"error":"internal"}` with `Connection: close`.
+fn internal_error() -> Response<Full<Bytes>> {
+    let body = serde_json::to_vec(&serde_json::json!({ "error": "internal" })).unwrap_or_default();
+    let mut res = Response::new(Full::new(Bytes::from(body)));
+    *res.status_mut() = hyper::StatusCode::INTERNAL_SERVER_ERROR;
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    h.insert(
+        header::CONNECTION,
+        header::HeaderValue::from_static("close"),
+    );
+    res
 }
 
 /// Serve one connection until it ends or `shutdown` flips: a pending TLS

@@ -26,6 +26,7 @@ mod robustness_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod schema_tests;
 mod settle_tests;
+mod wow_sv_dev_tests;
 mod wow_sv_paths_tests;
 mod wow_sv_robustness_tests;
 mod wow_sv_tests;
