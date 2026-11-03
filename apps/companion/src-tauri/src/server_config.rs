@@ -175,6 +175,19 @@ fn cover_ids(cfg: &crate::config::AppConfig) -> Vec<(String, Option<String>)> {
     ids.into_iter().collect()
 }
 
+/// `/config` answered 401 to `sent` at `origin`. Same as an upload's 401:
+/// drop the dead token so no later refresh sends it, and show the unlinked
+/// state instead of cached tiles — unless the device was re-linked or the
+/// server switched while the request was out, in which case the current
+/// token is not the one refused. Returns whether the device was unlinked.
+pub fn revoke_after_401(shared: &Shared, rt: &Runtime, origin: &str, sent: &DeviceToken) -> bool {
+    let cleared = shared.clear_token_if(origin, sent).unwrap_or(false);
+    if cleared {
+        rt.config_unauthorized();
+    }
+    cleared
+}
+
 /// Fetch `/config`, cache it, refresh the covers and tell the window. An
 /// unlinked device or a failed fetch keeps the last-known cache and covers.
 pub async fn refresh(app: &AppHandle, rt: &Runtime) {
@@ -186,16 +199,12 @@ pub async fn refresh(app: &AppHandle, rt: &Runtime) {
         .map(|d| d.join(COVERS_DIR))
         .unwrap_or_default();
     let token = shared.token().ok().flatten();
-    let fetched = match token {
-        Some(t) => Some(fetch(&before.server_url, &t).await),
+    let fetched = match &token {
+        Some(t) => Some(fetch(&before.server_url, t).await),
         None => None,
     };
-    let same_server = shared.config().server_url == before.server_url;
-    if let (Some(Err(FetchError::Unauthorized)), true) = (&fetched, same_server) {
-        // Same as an upload's 401: drop the dead token so no later refresh
-        // sends it, and show the unlinked state instead of cached tiles.
-        let _ = shared.clear_token();
-        rt.config_unauthorized();
+    if let (Some(Err(FetchError::Unauthorized)), Some(t)) = (&fetched, &token) {
+        revoke_after_401(&shared, rt, &before.server_url, t);
     }
     let reachable = fetched.as_ref().map(Result::is_ok);
     if let Some(Ok(sc)) = fetched {

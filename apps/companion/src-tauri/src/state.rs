@@ -14,6 +14,9 @@ pub struct Shared {
     config: Mutex<AppConfig>,
     tokens: Box<dyn TokenStore>,
     link_task: Mutex<Option<JoinHandle<()>>>,
+    /// Serialises token writes so a compare-and-clear can't interleave with a
+    /// re-link's save.
+    token_write: Mutex<()>,
     /// Tray Pause/Resume. C-3's uploader must check this before sending.
     paused: AtomicBool,
 }
@@ -30,6 +33,7 @@ impl Shared {
             config: Mutex::new(config),
             tokens,
             link_task: Mutex::new(None),
+            token_write: Mutex::new(()),
             paused: AtomicBool::new(false),
         }
     }
@@ -53,7 +57,22 @@ impl Shared {
     }
 
     pub fn save_token(&self, origin: &str, token: &DeviceToken) -> Result<(), TokenError> {
+        let _w = lock(&self.token_write);
         self.tokens.save(origin, token)
+    }
+
+    /// Forget `sent` after it drew a 401 — but only while `origin` is still
+    /// the current server and `sent` is still its stored token. A re-link (or
+    /// a server switch) between the request and its 401 keeps the new
+    /// credential. Returns whether the token was cleared.
+    pub fn clear_token_if(&self, origin: &str, sent: &DeviceToken) -> Result<bool, TokenError> {
+        let _w = lock(&self.token_write);
+        let cfg = lock(&self.config);
+        if cfg.server_url != origin || self.tokens.load(origin)?.as_ref() != Some(sent) {
+            return Ok(false);
+        }
+        self.tokens.clear(origin)?;
+        Ok(true)
     }
 
     /// Forget the token for the current origin (401 or user "Unlink").

@@ -218,3 +218,73 @@ fn the_cache_round_trips_and_an_old_config_file_still_loads() {
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);
 }
+
+/// A `Shared` on `origin` with an in-memory token store.
+fn shared_on(name: &str, origin: &str) -> crate::state::Shared {
+    let dir = super::temp_dir(name);
+    let shared = crate::state::Shared::new(
+        dir.join("config.json"),
+        Box::new(crate::token::MemoryStore::default()),
+    );
+    shared
+        .update_config(|c| c.server_url = origin.to_owned())
+        .expect("save config");
+    shared
+}
+
+#[test]
+fn a_relink_between_a_config_request_and_its_401_keeps_the_new_token() {
+    let origin = "https://raid.example";
+    let shared = shared_on("config-401-relink", origin);
+    let rt = crate::runtime::Runtime::new(super::temp_dir("config-401-relink-rt").join("s.json"));
+    let old = DeviceToken::parse(TOKEN).expect("token");
+    let new = DeviceToken::parse(&format!("rlcd_{}", "N".repeat(43))).expect("token");
+    shared.save_token(origin, &old).expect("save");
+    // The request went out with `old`; the user re-linked before its 401.
+    shared.save_token(origin, &new).expect("re-link");
+    let unlinked = crate::server_config::revoke_after_401(&shared, &rt, origin, &old);
+    assert_eq!(
+        (
+            unlinked,
+            shared.token().expect("load").map(|t| t.hint().to_owned())
+        ),
+        (false, Some(new.hint().to_owned())),
+        "a late 401 for the old token deleted the re-linked one"
+    );
+    assert!(
+        !rt.snapshot(&shared.config()).relink,
+        "re-link asked after a good link"
+    );
+    // The 401 for the token still stored does revoke it.
+    assert!(crate::server_config::revoke_after_401(
+        &shared, &rt, origin, &new
+    ));
+    assert!(
+        shared.token().expect("load").is_none(),
+        "the refused token is kept"
+    );
+}
+
+#[test]
+fn a_server_switch_between_a_config_request_and_its_401_keeps_the_token() {
+    let shared = shared_on("config-401-switch", "https://a.example");
+    let rt = crate::runtime::Runtime::new(super::temp_dir("config-401-switch-rt").join("s.json"));
+    let t = DeviceToken::parse(TOKEN).expect("token");
+    shared.save_token("https://a.example", &t).expect("save");
+    shared
+        .update_config(|c| c.server_url = "https://b.example".into())
+        .expect("switch");
+    assert!(!crate::server_config::revoke_after_401(
+        &shared,
+        &rt,
+        "https://a.example",
+        &t
+    ));
+    shared
+        .update_config(|c| c.server_url = "https://a.example".into())
+        .expect("switch back");
+    assert!(
+        shared.token().expect("load").is_some(),
+        "the old server's token was cleared"
+    );
+}
