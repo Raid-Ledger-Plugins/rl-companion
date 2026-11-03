@@ -46,7 +46,7 @@ describe("GameView — AC11(b): each game shows only its own results", () => {
 describe("GameView — header, banner, back, D15 slot", () => {
   it("shows the cover thumbnail beside the name, and the plugin_off banner naming the plugin in bold", () => {
     const out = html("bg3-save");
-    expect(out).toMatch(/<div class="gv-head"><span class="art"><img class="cover"[^>]*\/><\/span><h2>Baldur&#x27;s Gate 3<\/h2><\/div>/);
+    expect(out).toMatch(/<div class="gv-head"><span class="art"><img class="cover"[^>]*\/><span class="cover fallback" aria-hidden="true"><span class="initials">BG<\/span><\/span><\/span><h2>Baldur&#x27;s Gate 3<\/h2><\/div>/);
     expect(out).toContain('<div class="banner" role="alert"><strong>Uploads are paused.</strong>');
     expect(out).toContain("<strong>Baldur&#x27;s Gate 3</strong>");
     expect(out).toContain("Ask your Raid Ledger admin to install it.");
