@@ -46,7 +46,7 @@ fn make_bg3_screenshot(
     Box::new(
         Bg3ScreenshotCollector::scoped(roots, scope)
             .with_opt_in(cfg.opted_in_at(BG3_SCREENSHOT.id))
-            .with_hub(cfg.bg3_screenshot_hub)
+            .with_hub(crate::screenshot_commands::effective_hub(cfg))
             .reporting(&crate::bg3_screenshot::WAITING),
     )
 }

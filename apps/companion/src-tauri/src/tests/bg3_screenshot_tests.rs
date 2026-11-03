@@ -8,7 +8,7 @@ use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SCREENSHOT};
 use crate::registry::{CollectorRegistry, BUILTINS};
 use crate::scope::WatchScope;
-use crate::screenshot_commands::{hubs_view, valid_hub};
+use crate::screenshot_commands::{effective_hub, hubs_view, valid_hub};
 use crate::screenshot_encode::{encode_screenshot, fit_under, WEBP_MAX_BYTES};
 use crate::server_config::ServerConfig;
 use image::{ImageFormat, RgbImage};
@@ -321,4 +321,51 @@ fn hub_picker_reads_hub_targets_and_handles_an_older_server() {
     assert_eq!((view.selected, view.waiting), (Some(7), 3));
     assert!(valid_hub(1) && valid_hub(2_147_483_647));
     assert!(!valid_hub(0) && !valid_hub(2_147_483_648));
+}
+
+fn with_targets(targets: serde_json::Value) -> AppConfig {
+    let sc: ServerConfig = serde_json::from_value(json!({ "contracts": [
+        { "id": "bg3-screenshot", "enabled": true, "hubTargets": targets }
+    ]}))
+    .expect("config parses");
+    AppConfig {
+        last_server_config: Some(sc),
+        ..AppConfig::default()
+    }
+}
+
+#[test]
+fn hub_defaults_to_the_latest_saves_hub_until_the_user_picks() {
+    let mut cfg = with_targets(json!([
+        { "hubGuildId": 3, "name": "Old party", "isDefault": false },
+        { "hubGuildId": 9, "name": "Latest save", "isDefault": true }
+    ]));
+    assert_eq!(
+        effective_hub(&cfg),
+        Some(9),
+        "no pick: the isDefault target"
+    );
+    assert_eq!(hubs_view(&cfg, 0).selected, Some(9), "the picker shows it");
+    cfg.bg3_screenshot_hub = Some(3);
+    assert_eq!(effective_hub(&cfg), Some(3), "the user's pick wins");
+    assert_eq!(hubs_view(&cfg, 0).selected, Some(3));
+}
+
+#[test]
+fn hub_stays_unpicked_without_a_default_or_a_hub_list() {
+    let no_default = with_targets(json!([{ "hubGuildId": 3, "name": "A", "isDefault": false }]));
+    assert_eq!(
+        effective_hub(&no_default),
+        None,
+        "no isDefault: nothing uploads"
+    );
+    assert_eq!(
+        effective_hub(&with_targets(json!([]))),
+        None,
+        "no hubs listed"
+    );
+    let older = AppConfig::default();
+    assert_eq!(effective_hub(&older), None, "older server: no hubTargets");
+    assert!(!hubs_view(&older, 2).server_lists_hubs);
+    assert_eq!(hubs_view(&older, 2).waiting, 2, "still counted as waiting");
 }

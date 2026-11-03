@@ -20,7 +20,8 @@ pub struct Bg3ScreenshotHubsDto {
     pub targets: Vec<HubTarget>,
     /// `false` when the last `/config` had no `hubTargets` (older server).
     pub server_lists_hubs: bool,
-    /// The user's pick; `None` = not picked (nothing uploads).
+    /// The effective pick ([`effective_hub`]): the user's own, else the
+    /// server's default target; `None` = nothing to send to (nothing uploads).
     pub selected: Option<i64>,
     /// New screenshots held back for want of a pick.
     pub waiting: usize,
@@ -31,17 +32,33 @@ pub fn valid_hub(id: i64) -> bool {
     (1..=i64::from(i32::MAX)).contains(&id)
 }
 
-/// The picker's view of `cfg`.
-pub fn hubs_view(cfg: &AppConfig, waiting: usize) -> Bg3ScreenshotHubsDto {
-    let targets = cfg
-        .last_server_config
+/// The server's `hubTargets` for `bg3-screenshot`; `None` = it sent none.
+fn hub_targets(cfg: &AppConfig) -> Option<&Vec<HubTarget>> {
+    cfg.last_server_config
         .as_ref()
         .and_then(|sc| sc.contract(BG3_SCREENSHOT.contract_id))
-        .and_then(|c| c.hub_targets.clone());
+        .and_then(|c| c.hub_targets.as_ref())
+}
+
+/// The hub screenshots go to (Q3): the user's own pick, else the target the
+/// server marks `isDefault` (the hub of their latest save). Resolved on every
+/// read, so the default follows the latest save until the user picks one.
+pub fn effective_hub(cfg: &AppConfig) -> Option<i64> {
+    cfg.bg3_screenshot_hub.or_else(|| {
+        hub_targets(cfg)?
+            .iter()
+            .find(|t| t.is_default)
+            .map(|t| t.hub_guild_id)
+    })
+}
+
+/// The picker's view of `cfg`.
+pub fn hubs_view(cfg: &AppConfig, waiting: usize) -> Bg3ScreenshotHubsDto {
+    let targets = hub_targets(cfg).cloned();
     Bg3ScreenshotHubsDto {
         server_lists_hubs: targets.is_some(),
         targets: targets.unwrap_or_default(),
-        selected: cfg.bg3_screenshot_hub,
+        selected: effective_hub(cfg),
         waiting,
     }
 }
