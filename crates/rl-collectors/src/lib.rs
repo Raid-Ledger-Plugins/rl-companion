@@ -44,7 +44,10 @@ pub use extract::{
     campaign_key_from_package, campaign_key_from_save_folder, extract_save_info,
     extract_thumbnail_webp, game_id_from_package, sha256_hex, thumbnail_ref,
 };
-pub use lsf::{LSF_MAGIC, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION, read_lsf_attribute};
+pub use lsf::{
+    LSF_MAGIC, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION, LZ4_FRAME_MAX_BLOCKS,
+    read_lsf_attribute,
+};
 pub use lspk::{
     CompressionMethod, DEFAULT_MAX_ENTRY_BYTES, Entry, LSPK_VERSION, MAX_FILES, Package, read_lspk,
 };

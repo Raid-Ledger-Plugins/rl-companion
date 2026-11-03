@@ -16,6 +16,7 @@ macro_rules! rl_test {
 mod extract_tests;
 mod fixtures;
 mod lsf_fixture_tests;
+mod lsf_frame_tests;
 mod lsf_tests;
 mod lsf_writer;
 mod lspk_tests;

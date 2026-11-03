@@ -55,6 +55,8 @@ const METADATA_START: usize = 16;
 const SECTION_NAMES: [&str; 5] = ["strings", "keys", "nodes", "attributes", "values"];
 const SECTIONS_START: usize = 64;
 const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
+/// Most blocks one LZ4 frame may hold (a 1 MiB section in 64 KiB blocks is 16).
+pub const LZ4_FRAME_MAX_BLOCKS: usize = 1024;
 const UUID_TYPE: u32 = 31;
 const STRING_TYPES: [u32; 6] = [20, 21, 22, 23, 29, 30];
 
@@ -86,7 +88,8 @@ pub fn read_lsf_attribute(bytes: &[u8], name: &str) -> Result<Option<String>, Ls
         on_disk: le_u32(head, METADATA_START + i * 8 + 4),
     });
     let flags = head[56];
-    let v3 = le_u32(head, 60) & 1 != 0;
+    // MetadataFormat 1 = KeysAndAdjacency (LSLib), the 16-byte V3 records.
+    let v3 = le_u32(head, 60) == 1;
     let mut at = SECTIONS_START;
     let names = read_strings(&section(bytes, &mut at, strings, flags)?)?;
     skip(bytes, &mut at, nodes, flags)?;
@@ -150,6 +153,9 @@ fn section(bytes: &[u8], at: &mut usize, s: Sizes, flags: u8) -> Result<Vec<u8>,
 
 /// Decode an LZ4 frame (lz4 frame format 1.6). Checksums are skipped, not
 /// verified (no xxhash dependency); output is capped at `expected` bytes.
+/// Decodes into one buffer allocated once, refuses blocks that yield no
+/// bytes and caps the block count, so a hostile frame of many empty blocks
+/// costs neither a per-block allocation nor an unbounded loop.
 fn lz4_frame(raw: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     let short = || "LZ4 frame is truncated".to_owned();
     let flg = *raw.get(4).ok_or_else(short)?;
@@ -159,30 +165,39 @@ fn lz4_frame(raw: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     let block_checksum = if flg & 0x10 != 0 { 4 } else { 0 };
     // magic 4 + FLG + BD + optional content size 8 + header checksum.
     let mut at = 7 + if flg & 0x08 != 0 { 8 } else { 0 };
-    let mut out: Vec<u8> = Vec::with_capacity(expected);
-    loop {
+    let mut out = vec![0u8; expected];
+    let mut filled = 0usize;
+    for _ in 0..LZ4_FRAME_MAX_BLOCKS {
         let word = le_u32(raw.get(at..at + 4).ok_or_else(short)?, 0);
         at += 4;
         if word == 0 {
+            out.truncate(filled);
             return Ok(out);
         }
         let len = (word & 0x7FFF_FFFF) as usize;
-        let block = raw.get(at..at + len).ok_or_else(short)?;
-        at += len + block_checksum;
-        let room = expected - out.len();
-        if word & 0x8000_0000 != 0 {
-            if len > room {
-                return Err(format!("LZ4 frame holds more than {expected} bytes"));
-            }
-            out.extend_from_slice(block);
-            continue;
+        let end = at.checked_add(len).ok_or_else(short)?;
+        let block = raw.get(at..end).ok_or_else(short)?;
+        at = end + block_checksum;
+        let (done, rest) = out.split_at_mut(filled);
+        let n = if word & 0x8000_0000 != 0 {
+            let dest = rest
+                .get_mut(..len)
+                .ok_or_else(|| format!("LZ4 frame holds more than {expected} bytes"))?;
+            dest.copy_from_slice(block);
+            len
+        } else {
+            let dict = &done[filled.saturating_sub(65_536)..];
+            lz4_flex::block::decompress_into_with_dict(block, rest, dict)
+                .map_err(|e| e.to_string())?
+        };
+        if n == 0 {
+            return Err("LZ4 frame block decoded to 0 bytes".to_owned());
         }
-        let mut buf = vec![0u8; room];
-        let dict = &out[out.len().saturating_sub(65_536)..];
-        let n = lz4_flex::block::decompress_into_with_dict(block, &mut buf, dict)
-            .map_err(|e| e.to_string())?;
-        out.extend_from_slice(&buf[..n]);
+        filled += n;
     }
+    Err(format!(
+        "LZ4 frame has more than {LZ4_FRAME_MAX_BLOCKS} blocks"
+    ))
 }
 
 /// Parse the string table into buckets of names.
