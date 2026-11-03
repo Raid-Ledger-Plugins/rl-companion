@@ -4,8 +4,9 @@
 use sha2::{Digest, Sha256};
 
 use crate::error::{ExtractError, WebpError};
+use crate::lsf::read_lsf_attribute;
 use crate::lspk::{Entry, Package};
-use crate::normalise::ThumbnailRef;
+use crate::normalise::{CampaignKeySource, ThumbnailRef};
 use crate::webp::webp_dimensions;
 
 /// Name of the save summary entry at the package root.
@@ -14,6 +15,14 @@ pub const SAVE_INFO_NAME: &str = "SaveInfo.json";
 pub const SAVE_INFO_MAX_BYTES: u64 = 1024 * 1024;
 /// Cap on the thumbnail: the contract's `COMPANION_WEBP_MAX_BYTES`.
 pub const WEBP_MAX_BYTES: u64 = 1_048_576;
+/// Name of the save metadata resource at the package root.
+pub const META_LSF_NAME: &str = "meta.lsf";
+/// Cap on `meta.lsf` (the real one is ~1.7 KB; spec D4).
+pub const META_LSF_MAX_BYTES: u64 = 64 * 1024;
+/// The `meta.lsf` attribute that names one playthrough.
+const GAME_ID_ATTRIBUTE: &str = "GameID";
+/// Longest GameID text accepted (spec D4).
+const GAME_ID_MAX_BYTES: usize = 128;
 
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -70,6 +79,33 @@ pub fn thumbnail_ref(webp: &[u8]) -> Result<ThumbnailRef, WebpError> {
 /// lowercase hex SHA-256 of the folder's own name (no path), UTF-8.
 pub fn campaign_key_from_save_folder(folder_name: &str) -> String {
     sha256_hex(folder_name.as_bytes())
+}
+
+/// The save's GameID text (contract §3.3, ROK-2070 D3): `None` when
+/// `meta.lsf` is missing, over [`META_LSF_MAX_BYTES`], unreadable, has no
+/// GameID, or the GameID is not 1 to 128 printable ASCII bytes.
+pub fn game_id_from_package(package: &Package<'_>) -> Option<String> {
+    let entry = package.find(META_LSF_NAME)?;
+    let bytes = package.read_entry_limited(entry, META_LSF_MAX_BYTES).ok()?;
+    let id = read_lsf_attribute(&bytes, GAME_ID_ATTRIBUTE).ok()??;
+    let printable = id.bytes().all(|b| (0x20..=0x7E).contains(&b));
+    (printable && (1..=GAME_ID_MAX_BYTES).contains(&id.len())).then_some(id)
+}
+
+/// `campaignKey` and its source for one save (ROK-2070 D2): the SHA-256 of
+/// the GameID (`game-id`) when it can be read, else the folder-name hash
+/// (`save-folder`). Infallible: an unreadable `meta.lsf` never fails an upload.
+pub fn campaign_key_from_package(
+    package: &Package<'_>,
+    folder_name: &str,
+) -> (String, CampaignKeySource) {
+    match game_id_from_package(package) {
+        Some(id) => (sha256_hex(id.as_bytes()), CampaignKeySource::GameId),
+        None => (
+            campaign_key_from_save_folder(folder_name),
+            CampaignKeySource::SaveFolder,
+        ),
+    }
 }
 
 /// Lowercase hex SHA-256.

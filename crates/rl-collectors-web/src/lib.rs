@@ -2,7 +2,9 @@
 //!
 //! One export, `inspectBg3Save(bytes)`, wraps [`rl_collectors`]: it reads the
 //! `.lsv` package and returns the raw `SaveInfo.json` text plus the WebP
-//! thumbnail and its blob ref. Normalising into `bg3-save/v1` stays in the
+//! thumbnail and its blob ref, plus `gameIdKey`: the SHA-256 of `meta.lsf`'s
+//! GameID, hashed here so the raw GameID never reaches JS (ROK-2070), or
+//! `null` when it cannot be read. Normalising into `bg3-save/v1` stays in the
 //! web app (the contract's TypeScript reference normaliser). A failure
 //! throws an `Error` named `Bg3SaveError` whose `code` is one of
 //! [`ErrorCode::as_str`].
@@ -16,8 +18,8 @@
 
 use js_sys::{Error, Object, Reflect, Uint8Array};
 use rl_collectors::{
-    ExtractError, LspkError, ThumbnailRef, extract_save_info, extract_thumbnail_webp, read_lspk,
-    thumbnail_ref,
+    CampaignKeySource, ExtractError, LspkError, Package, ThumbnailRef, campaign_key_from_package,
+    extract_save_info, extract_thumbnail_webp, read_lspk, thumbnail_ref,
 };
 use wasm_bindgen::prelude::*;
 
@@ -51,6 +53,7 @@ export interface Bg3SaveInspection {
   saveInfo: string;
   webp: Uint8Array | null;
   thumbnail: Bg3SaveThumbnail | null;
+  gameIdKey: string | null;
 }
 "#;
 
@@ -94,6 +97,10 @@ pub struct Inspection {
     pub save_info: String,
     /// The thumbnail bytes and ref; `None` when absent or unusable.
     pub thumbnail: Option<(Vec<u8>, ThumbnailRef)>,
+    /// `sha256_hex(GameID)` (64 lowercase hex) when `meta.lsf` yields one;
+    /// `None` otherwise. Never an error: the upload falls back to its
+    /// folder or file-name key.
+    pub game_id_key: Option<String>,
 }
 
 /// Read a `.lsv`. A missing or broken thumbnail is not an error.
@@ -106,7 +113,16 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection, (ErrorCode, String)> {
     Ok(Inspection {
         save_info: info.to_string(),
         thumbnail,
+        game_id_key: game_id_key(&package),
     })
+}
+
+/// The `game-id` key, through the same rule the Companion uses (D2/D3).
+fn game_id_key(package: &Package) -> Option<String> {
+    match campaign_key_from_package(package, "") {
+        (key, CampaignKeySource::GameId) => Some(key),
+        _ => None,
+    }
 }
 
 fn lspk_code(err: &LspkError) -> ErrorCode {
@@ -146,6 +162,11 @@ pub fn inspect_bg3_save(bytes: &[u8]) -> Result<JsValue, JsValue> {
     set(&out, "saveInfo", &JsValue::from_str(&inspection.save_info))?;
     set(&out, "webp", &webp)?;
     set(&out, "thumbnail", &thumbnail)?;
+    let game_id_key = inspection
+        .game_id_key
+        .as_deref()
+        .map_or(JsValue::NULL, JsValue::from_str);
+    set(&out, "gameIdKey", &game_id_key)?;
     Ok(out.into())
 }
 

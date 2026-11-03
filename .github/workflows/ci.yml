@@ -94,6 +94,8 @@ jobs:
           RL_FIXTURE_OUT="$out" cargo test -p rl-collectors-web export_synthetic_fixture_for_raid_ledger
           test -s "$out/synthetic-act2.lsv"
           test -s "$out/synthetic-act2.expected.json"
+          test -s "$out/synthetic-act2-game-id.lsv"
+          test -s "$out/synthetic-act2-game-id.expected.json"
           sha256sum "$out"/* | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report .wasm size
         run: |

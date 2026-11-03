@@ -19,6 +19,12 @@ const GOLDEN: &str =
 const WEBP: &[u8] =
     include_bytes!("../../../../../contracts/bg3-save/v1/fixtures/placeholder-thumbnail.webp");
 const FOLDER: &str = "QuickSave_1-1234567890";
+/// The anonymised real-shape `meta.lsf` (ROK-2070 L2): a FixedString GameID
+/// replaced by [`SYNTHETIC_GAME_ID`], every other string zeroed or filler.
+const META_LSF: &[u8] = include_bytes!(
+    "../../../../../crates/rl-collectors/tests/fixtures/meta/real-shape-string.meta.lsf"
+);
+const SYNTHETIC_GAME_ID: &str = "00000000-2070-4000-8000-000000000001";
 
 /// A synthetic LSPK v18 package of stored entries (the layout `read_lspk`
 /// parses: header, data, LZ4 file table last). Never a real user save.
@@ -54,6 +60,15 @@ fn save_bytes() -> Vec<u8> {
     lspk(&[
         ("SaveInfo.json", SAVE_INFO.as_bytes()),
         ("QuickSave_1.WebP", WEBP),
+    ])
+}
+
+/// [`save_bytes`] plus the anonymised `meta.lsf`, as a real save carries it.
+fn save_bytes_with_meta(meta: &[u8]) -> Vec<u8> {
+    lspk(&[
+        ("SaveInfo.json", SAVE_INFO.as_bytes()),
+        ("QuickSave_1.WebP", WEBP),
+        ("meta.lsf", meta),
     ])
 }
 
@@ -98,6 +113,43 @@ fn a_save_normalises_to_the_golden_payload_without_the_raw_folder_name() {
         !body.to_string().contains(FOLDER),
         "the raw save-folder name never leaves the machine"
     );
+}
+
+#[test]
+fn a_save_without_a_readable_game_id_keys_on_the_save_folder() {
+    // The placeholder save has no meta.lsf; a broken one must not fail either.
+    for bytes in [save_bytes(), save_bytes_with_meta(b"LSOF not really")] {
+        let (body, _, _) = build(&bytes, FOLDER, None).expect("an upload never fails on meta.lsf");
+        let payload = &body["payload"];
+        assert_eq!(payload["campaignKeySource"], "save-folder");
+        assert_eq!(payload["campaignKey"], sha256_hex(FOLDER.as_bytes()));
+    }
+}
+
+#[test]
+fn a_save_with_a_game_id_keys_on_its_hash() {
+    let bytes = save_bytes_with_meta(META_LSF);
+    let (body, _, label) = build(&bytes, FOLDER, None).expect("parses");
+    let payload = &body["payload"];
+    assert_eq!(
+        (&payload["campaignKeySource"], &payload["campaignKey"]),
+        (
+            &Value::from("game-id"),
+            &Value::from(sha256_hex(SYNTHETIC_GAME_ID.as_bytes()))
+        ),
+        "the key is sha256(GameID) with source game-id, not the folder hash"
+    );
+    assert_eq!(label, "QuickSave_1");
+    let text = body.to_string();
+    assert!(
+        !text.contains(SYNTHETIC_GAME_ID) && !text.contains(FOLDER),
+        "neither the raw GameID nor the folder name leaves the machine"
+    );
+    let mut golden: Value = serde_json::from_str(GOLDEN).expect("golden");
+    golden["payload"]["savedAt"] = payload["savedAt"].clone();
+    golden["payload"]["campaignKey"] = payload["campaignKey"].clone();
+    golden["payload"]["campaignKeySource"] = Value::from("game-id");
+    assert_eq!(payload, &golden["payload"], "otherwise the same payload");
 }
 
 #[test]
