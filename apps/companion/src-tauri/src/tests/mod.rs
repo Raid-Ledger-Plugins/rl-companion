@@ -15,6 +15,7 @@ mod dev_bridge_lifecycle_tests;
 mod dev_bridge_routes_tests;
 mod dev_bridge_server_tests;
 mod dev_bridge_snapshot_fixture_tests;
+mod dev_bridge_snapshot_route_tests;
 mod dev_bridge_snapshot_tests;
 mod dev_bridge_unit_tests;
 mod gate_tests;
