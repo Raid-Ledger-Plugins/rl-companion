@@ -98,7 +98,11 @@ fn shot_pending() -> PendingUpload {
     }
 }
 
-async fn send(server: &MockServer, blob: ResponseTemplate, post: ResponseTemplate) -> UploadOutcome {
+async fn send(
+    server: &MockServer,
+    blob: ResponseTemplate,
+    post: ResponseTemplate,
+) -> UploadOutcome {
     let blob_path = format!("/api/companion/v1/blobs/{SHA}");
     Mock::given(method("PUT"))
         .and(path(blob_path))
@@ -115,7 +119,8 @@ async fn send(server: &MockServer, blob: ResponseTemplate, post: ResponseTemplat
 }
 
 fn quota() -> ResponseTemplate {
-    ResponseTemplate::new(413).set_body_json(json!({ "code": "blob_quota_exceeded", "message": "x" }))
+    ResponseTemplate::new(413)
+        .set_body_json(json!({ "code": "blob_quota_exceeded", "message": "x" }))
 }
 
 #[tokio::test]
@@ -150,7 +155,10 @@ fn consent_is_rechecked_against_the_live_switch_and_opt_in() {
     let mut again = off.clone();
     again.set_collector_enabled_at(BG3_SCREENSHOT.id, true, 3_000);
     assert!(!still_opted_in(&scanned, &again), "off then on: new opt-in");
-    assert!(!still_opted_in(&AppConfig::default(), &AppConfig::default()));
+    assert!(!still_opted_in(
+        &AppConfig::default(),
+        &AppConfig::default()
+    ));
 }
 
 fn steam_dir(userdata: &Path, user: &str, app: &str) -> PathBuf {
@@ -171,9 +179,15 @@ fn a_bg3_folder_aliased_to_another_game_is_refused() {
     std::os::unix::fs::symlink(&other, bg3.join("screenshots")).expect("symlink");
     let roots = vec![userdata.clone()];
     let c = Bg3ScreenshotCollector::scoped(&roots, WatchScope::new(&roots));
-    assert_eq!(c.folders(), Vec::<PathBuf>::new(), "alias must not be a folder");
+    assert_eq!(
+        c.folders(),
+        Vec::<PathBuf>::new(),
+        "alias must not be a folder"
+    );
     assert!(c.files().is_empty());
-    let real = STEAM_SUBPATH.iter().fold(userdata.join("456"), |p, s| p.join(s));
+    let real = STEAM_SUBPATH
+        .iter()
+        .fold(userdata.join("456"), |p, s| p.join(s));
     std::fs::create_dir_all(&real).expect("mkdir");
     assert!(is_bg3_folder(&userdata, &real));
     assert_eq!(c.folders(), vec![real]);
@@ -184,7 +198,7 @@ fn the_send_time_reread_is_capped() {
     let dir = temp_dir("shot-capped");
     let file = dir.join("a.png");
     std::fs::write(&file, [7u8; 11]).expect("write");
-    let scope = WatchScope::new(&[dir.clone()]);
+    let scope = WatchScope::new(std::slice::from_ref(&dir));
     assert!(matches!(
         read_capped(&scope, &file, 10),
         Err(Unready::Retry(e)) if e.contains("over 64 MiB")
