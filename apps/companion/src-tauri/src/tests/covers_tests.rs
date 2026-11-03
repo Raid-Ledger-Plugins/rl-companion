@@ -138,3 +138,65 @@ async fn offline_uses_the_cached_file_and_nothing_gives_the_fallback() {
         "no cover anywhere → fallback"
     );
 }
+
+/// Every file under `dir`, recursively, as paths relative to it.
+fn tree(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            out.push(p.strip_prefix(dir).unwrap_or(&p).display().to_string());
+            if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[tokio::test]
+async fn a_hostile_contract_id_never_reads_or_writes_outside_the_covers_dir() {
+    let parent = super::temp_dir("covers-traversal");
+    let dir = parent.join("covers");
+    std::fs::create_dir_all(&dir).expect("covers dir");
+    // Files a traversal would read or overwrite.
+    std::fs::write(parent.join("x.jpg"), b"secret").expect("plant");
+    std::fs::write(parent.join("abs.jpg"), b"secret").expect("plant");
+    let abs = parent.join("abs").display().to_string();
+    let long = "a".repeat(65);
+    let before = tree(&parent);
+    let n = Arc::new(AtomicUsize::new(0));
+    for id in [
+        "../x",
+        abs.as_str(),
+        "a/b",
+        "..",
+        "",
+        long.as_str(),
+        "X",
+        "-x",
+    ] {
+        let art = Ok(img("image/jpeg", b"server bytes"));
+        let got = cover(&dir, id, Some(B), counting(&n, art)).await;
+        assert_eq!(got, None, "id {id:?} must get the fallback");
+        assert_eq!(
+            cover(&dir, id, None, counting(&n, Err("x".into()))).await,
+            None
+        );
+        assert_eq!(
+            crate::covers::cached(&dir, id),
+            None,
+            "id {id:?} read a file"
+        );
+    }
+    assert_eq!(n.load(Ordering::SeqCst), 0, "no fetch for a hostile id");
+    assert_eq!(tree(&parent), before, "nothing written or removed");
+    assert_eq!(
+        std::fs::read(parent.join("x.jpg")).ok().as_deref(),
+        Some(&b"secret"[..])
+    );
+    // A kebab-case id is still accepted.
+    assert!(crate::covers::safe_id("wow-ledgerlink") && crate::covers::safe_id(&"a".repeat(64)));
+}

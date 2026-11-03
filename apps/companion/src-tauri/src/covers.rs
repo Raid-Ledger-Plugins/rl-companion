@@ -72,12 +72,24 @@ fn data_url(ext: &str, bytes: &[u8]) -> String {
     )
 }
 
+/// A contract id safe to use as a file name: kebab-case, `^[a-z0-9][a-z0-9-]{0,63}$`.
+/// The id comes from the server, so anything else (`..`, `a/b`, an absolute
+/// path, an empty string) never touches the filesystem and gets the fallback.
+pub fn safe_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    let ok = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    matches!(b.first(), Some(c) if ok(c)) && b.len() <= 64 && b.iter().all(|c| ok(c) || *c == b'-')
+}
+
 fn src_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.src"))
 }
 
 /// The cached cover for `id` as a `data:` URL, if any.
 pub fn cached(dir: &Path, id: &str) -> Option<String> {
+    if !safe_id(id) {
+        return None;
+    }
     EXTS.iter().find_map(|ext| {
         let bytes = std::fs::read(dir.join(format!("{id}.{ext}"))).ok()?;
         Some(data_url(ext, &bytes))
@@ -85,6 +97,9 @@ pub fn cached(dir: &Path, id: &str) -> Option<String> {
 }
 
 fn store(dir: &Path, id: &str, url: &str, ext: &str, bytes: &[u8]) -> std::io::Result<()> {
+    if !safe_id(id) {
+        return Err(std::io::Error::other("unsafe cover id"));
+    }
     std::fs::create_dir_all(dir)?;
     for old in EXTS {
         let _ = std::fs::remove_file(dir.join(format!("{id}.{old}")));
@@ -100,6 +115,9 @@ where
     F: FnOnce(url::Url) -> Fut,
     Fut: Future<Output = Result<Fetched, String>>,
 {
+    if !safe_id(id) {
+        return None;
+    }
     let Some(url) = url.and_then(resolve) else {
         return cached(dir, id);
     };
