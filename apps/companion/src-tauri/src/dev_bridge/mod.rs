@@ -16,6 +16,8 @@ pub mod paging;
 pub mod routes;
 pub mod server;
 pub mod settings;
+pub mod snapshot_cache;
+pub mod snapshot_validate;
 pub mod sv;
 pub mod tls;
 pub mod token;
