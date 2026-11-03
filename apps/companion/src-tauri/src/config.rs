@@ -1,5 +1,6 @@
 //! App settings persisted as JSON in the OS app-config dir. Never holds the token.
 
+use crate::dev_bridge::settings::DevBridgeConfig;
 use crate::server_config::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -64,6 +65,9 @@ pub struct AppConfig {
     /// not picked yet: screenshots wait, nothing uploads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg3_screenshot_hub: Option<i64>,
+    /// Developer bridge settings (ROK-2055); left out of the file while untouched.
+    #[serde(skip_serializing_if = "DevBridgeConfig::is_default")]
+    pub dev_bridge: DevBridgeConfig,
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
@@ -86,6 +90,7 @@ impl Default for AppConfig {
             bg3_campaigns: BTreeMap::new(),
             collector_opted_in_at: BTreeMap::new(),
             bg3_screenshot_hub: None,
+            dev_bridge: DevBridgeConfig::default(),
         }
     }
 }

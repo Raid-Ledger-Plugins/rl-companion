@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
 import { Collector } from "./components/Collector";
+import { DevBridge } from "./components/DevBridge";
 import { Startup } from "./components/Startup";
 import { escapeGoesBack, HOME, navigate, type NavAction, type View } from "./view";
 
@@ -152,6 +153,8 @@ export default function App() {
       </section>}
 
       {home && <Startup onError={setError} />}
+
+      {home && <DevBridge onError={setError} />}
     </main>
   );
 }

@@ -6,7 +6,7 @@ use crate::manifest::{BG3_SAVE, WOW_LEDGERLINK};
 use crate::runtime::{status, CollectorStatusDto, Runtime};
 use crate::state::Shared;
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
@@ -24,9 +24,11 @@ fn save_dir(
     if dir.is_empty() {
         return Err("Choose the World of Warcraft folder".into());
     }
-    state
+    let cfg = state
         .update_config(|c| c.wow_dir = dir.to_owned())
         .map_err(|e| format!("Could not save settings: {e}"))?;
+    let bridge = app.try_state::<Arc<crate::dev_bridge::DevBridge>>();
+    crate::dev_bridge::on_wow_dir_changed(bridge.as_deref().map(|b| &**b), &cfg);
     rt.kick();
     Ok(status(app, rt))
 }

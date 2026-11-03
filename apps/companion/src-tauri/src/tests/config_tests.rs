@@ -74,6 +74,7 @@ fn config_round_trips_and_defaults_to_prod() {
         bg3_campaigns: [("ab".repeat(32), false)].into(),
         collector_opted_in_at: [("bg3-screenshot".to_owned(), 1_800_000_000)].into(),
         bg3_screenshot_hub: Some(42),
+        dev_bridge: Default::default(),
     };
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);
