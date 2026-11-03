@@ -157,8 +157,10 @@ async fn a_server_change_forgets_the_old_covers_and_wakes_the_config_task() {
 fn a_config_401_shows_the_unlinked_tiles_not_the_cache() {
     let dir = super::temp_dir("config-401");
     let rt = crate::runtime::Runtime::new(dir.join("sent.json"));
-    let mut cfg = AppConfig::default();
-    cfg.last_server_config = Some(serde_json::from_str(FIXTURE).expect("fixture"));
+    let cfg = AppConfig {
+        last_server_config: Some(serde_json::from_str(FIXTURE).expect("fixture")),
+        ..AppConfig::default()
+    };
     let line = |rt: &crate::runtime::Runtime| {
         let s = rt.snapshot(&cfg);
         let t = s
