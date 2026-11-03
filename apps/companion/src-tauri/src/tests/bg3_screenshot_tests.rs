@@ -390,8 +390,10 @@ fn a_pick_missing_from_hub_targets_falls_back_to_the_default() {
     no_default.bg3_screenshot_hub = Some(77);
     assert_eq!(effective_hub(&no_default), None, "no default: wait");
     assert_eq!(hubs_view(&no_default, 0).selected, None);
-    let mut older = AppConfig::default();
-    older.bg3_screenshot_hub = Some(77);
+    let older = AppConfig {
+        bg3_screenshot_hub: Some(77),
+        ..AppConfig::default()
+    };
     assert_eq!(effective_hub(&older), Some(77), "no list: the pick stands");
 }
 
