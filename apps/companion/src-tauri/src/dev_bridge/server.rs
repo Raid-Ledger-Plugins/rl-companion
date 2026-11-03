@@ -13,7 +13,6 @@ use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -279,7 +278,7 @@ async fn respond(
     ctx: Arc<ServerCtx>,
     peer: SocketAddr,
     req: Request<Incoming>,
-) -> Response<Full<Bytes>> {
+) -> Result<Response<Full<Bytes>>, tokio::task::JoinError> {
     let auth = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -296,11 +295,17 @@ async fn respond(
         c.route_audited(peer.ip(), &m, &p, query.as_deref(), auth.as_deref())
     })
     .await
-    .unwrap_or_else(|_| Routed {
-        status: 500,
-        body: json!({ "error": "internal" }),
-        admitted: true,
-    });
+    .inspect_err(|_| {
+        // The contract has no 500 body: hyper closes the connection without
+        // a response. Logged as a refusal would be — never with the path.
+        ctx.log(
+            "warn",
+            &format!(
+                "request from {} failed inside the bridge; connection closed (path not logged)",
+                peer.ip()
+            ),
+        );
+    })?;
     let bytes = serde_json::to_vec(&routed.body).unwrap_or_default();
     ctx.audit(peer.ip(), &method, &path, &routed, bytes.len());
     let mut res = Response::new(Full::new(Bytes::from(bytes)));
@@ -317,7 +322,7 @@ async fn respond(
             header::HeaderValue::from_static("close"),
         );
     }
-    res
+    Ok(res)
 }
 
 /// Serve one connection until it ends or `shutdown` flips: a pending TLS
@@ -345,7 +350,7 @@ async fn serve_conn(
     };
     let svc = hyper::service::service_fn(move |req: Request<Incoming>| {
         let ctx = ctx.clone();
-        async move { Ok::<_, Infallible>(respond(ctx, peer, req).await) }
+        async move { respond(ctx, peer, req).await }
     });
     let mut builder = hyper::server::conn::http1::Builder::new();
     builder

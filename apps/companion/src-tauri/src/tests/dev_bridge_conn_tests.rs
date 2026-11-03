@@ -127,3 +127,23 @@ async fn refused_responses_close_the_connection() {
     bridge.stop().await;
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn a_handler_failure_closes_without_an_off_contract_500_body() {
+    let dir = super::temp_dir("bridge-handler-panic");
+    let token = DevToken::generate().expect("rng");
+    let (bridge, addr, client) = bridge_on(&dir, &cfg(&token, "127.0.0.1")).await;
+    bridge.set_collectors_source(std::sync::Arc::new(|| panic!("collector source blew up")));
+    let res = client
+        .get(format!("https://{addr}/dev/v1/collectors"))
+        .header("Authorization", format!("Bearer {}", token.expose()))
+        .send()
+        .await;
+    assert!(
+        res.is_err(),
+        "expected the connection to close with no response; got status {:?}",
+        res.as_ref().ok().map(|r| r.status().as_u16())
+    );
+    bridge.stop().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
