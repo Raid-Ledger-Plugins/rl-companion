@@ -3,6 +3,7 @@
 mod autostart_tests;
 mod bg3_campaigns_tests;
 mod bg3_collector_tests;
+mod bg3_screenshot_tests;
 mod blob_send_tests;
 mod collector_tests;
 mod collector_view_tests;

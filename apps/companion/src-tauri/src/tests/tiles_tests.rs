@@ -132,10 +132,16 @@ fn server_only_contracts_follow_the_app_ones_a_to_z_and_are_not_clickable() {
     let ids: Vec<&str> = all.iter().map(|t| t.id.as_str()).collect();
     assert_eq!(
         ids,
-        ["wow-ledgerlink", "bg3-save", "alpha-log", "zeta-log"],
+        [
+            "wow-ledgerlink",
+            "bg3-save",
+            "bg3-screenshot",
+            "alpha-log",
+            "zeta-log"
+        ],
         "D6 order"
     );
-    let zeta = &all[3];
+    let zeta = &all[4];
     assert_eq!(
         (zeta.state, zeta.clickable, zeta.collector_id.as_deref()),
         (TileState::AppTooOld, false, None)
@@ -144,7 +150,7 @@ fn server_only_contracts_follow_the_app_ones_a_to_z_and_are_not_clickable() {
         (zeta.title.as_str(), zeta.line.as_str()),
         ("Zeta", "Update the Companion to use this")
     );
-    assert_eq!(all[2].title, "alpha-log", "no plugin: the id");
+    assert_eq!(all[3].title, "alpha-log", "no plugin: the id");
 }
 
 #[test]
@@ -153,7 +159,7 @@ fn unlinked_and_unfetched_tiles_are_neutral() {
         json!([{ "id": "bg3-save", "enabled": false, "plugin": plugin("inactive") }, { "id": "new-one", "enabled": true }]),
     );
     let unlinked = view(&cfg, false, &BTreeMap::new());
-    assert_eq!(unlinked.len(), 2, "no server-only tiles while unlinked");
+    assert_eq!(unlinked.len(), 3, "no server-only tiles while unlinked");
     assert!(unlinked
         .iter()
         .all(|t| t.state == TileState::Unknown && t.chip.is_none()));

@@ -4,7 +4,7 @@
 use crate::collector::{Blob, PendingUpload};
 use crate::collector_view::{apply_root, device_note, device_state, rows, RETRYING};
 use crate::config::AppConfig;
-use crate::manifest::{Platform, BG3_SAVE, WOW_LEDGERLINK};
+use crate::manifest::{Platform, BG3_SAVE, BG3_SCREENSHOT, WOW_LEDGERLINK};
 use crate::preview::{base64, hold};
 use crate::runtime::{
     effect, secs_left, shown_text, stopped_line, take_expired, tick_scans, Runtime,
@@ -66,7 +66,7 @@ fn one_row_per_registered_collector_with_detected_folder() {
         &BTreeMap::new(),
     );
     let ids: Vec<&str> = r.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(ids, [WOW_LEDGERLINK.id, BG3_SAVE.id]);
+    assert_eq!(ids, [WOW_LEDGERLINK.id, BG3_SAVE.id, BG3_SCREENSHOT.id]);
     let bg3 = &r[1];
     assert!(!bg3.enabled && bg3.confirm_first_upload && !bg3.consented);
     assert_eq!(bg3.status, "Off");
