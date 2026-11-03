@@ -77,7 +77,7 @@ pub fn guarded_write(wow_dir: &Path, target: &Path, bytes: &[u8]) -> Result<(), 
         expect.push(part);
         match std::fs::symlink_metadata(&cur) {
             Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(outside()),
-            Ok(_) if std::fs::canonicalize(&cur)? != expect => return Err(outside()),
+            Ok(_) if !same_path(&std::fs::canonicalize(&cur)?, &expect) => return Err(outside()),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&cur)?,
             Err(e) => return Err(e.into()),
@@ -85,10 +85,37 @@ pub fn guarded_write(wow_dir: &Path, target: &Path, bytes: &[u8]) -> Result<(), 
     }
     let flavor = rel.components().next().ok_or_else(outside)?;
     let probe_root = probe_addon_dir(&real_root, &flavor.as_os_str().to_string_lossy())?;
-    if !std::fs::canonicalize(parent)?.starts_with(&probe_root) {
+    if !path_inside(&std::fs::canonicalize(parent)?, &probe_root) {
         return Err(outside());
     }
     Ok(write_new_then_rename(target, bytes, None)?)
+}
+
+/// Path equality as the filesystem sees it: Windows paths are
+/// case-insensitive, so an install's `Interface\Addons` matches the
+/// `Interface/AddOns` this module builds (review MINOR-D4).
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        lower_parts(a) == lower_parts(b)
+    } else {
+        a == b
+    }
+}
+
+/// `child` is `root` or under it, compared like [`same_path`].
+pub fn path_inside(child: &Path, root: &Path) -> bool {
+    if cfg!(windows) {
+        lower_parts(child).starts_with(&lower_parts(root))
+    } else {
+        child.starts_with(root)
+    }
+}
+
+/// A path's components, lower-cased (the case-insensitive compare).
+pub fn lower_parts(p: &Path) -> Vec<String> {
+    p.components()
+        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .collect()
 }
 
 /// Atomic write of a secret (the TLS key): owner-only (0600) on unix.

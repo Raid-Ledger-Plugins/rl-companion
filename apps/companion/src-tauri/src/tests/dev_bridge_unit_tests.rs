@@ -276,3 +276,43 @@ fn guarded_write_only_reaches_the_probe_addon_folder() {
     }
     let _ = std::fs::remove_dir_all(wow);
 }
+
+#[test]
+fn write_guard_compares_folder_case_like_the_filesystem() {
+    use crate::dev_bridge::write_guard::{lower_parts, path_inside, same_path};
+    use std::path::Path;
+    let built = Path::new("C:/WoW/_retail_/Interface/AddOns/LedgerLinkProbe");
+    let on_disk = Path::new("C:/WoW/_retail_/Interface/Addons/LedgerLinkProbe");
+    assert_eq!(
+        lower_parts(built),
+        lower_parts(on_disk),
+        "case-insensitive compare must match AddOns vs Addons"
+    );
+    assert!(lower_parts(built).starts_with(&lower_parts(Path::new("c:/wow/_RETAIL_/interface"))));
+    assert_ne!(
+        lower_parts(built),
+        lower_parts(Path::new("C:/WoW/_retail_/Interface/AddOns"))
+    );
+    // Windows (case-insensitive) accepts the differently-cased install; other
+    // platforms keep the exact compare.
+    assert_eq!(same_path(built, on_disk), cfg!(windows));
+    assert_eq!(
+        path_inside(on_disk, Path::new("C:/WoW/_retail_/Interface/AddOns")),
+        cfg!(windows)
+    );
+    assert!(same_path(built, built) && path_inside(built, built));
+}
+
+#[test]
+fn one_failed_bound_ip_probe_is_rechecked_two_in_a_row_close() {
+    use crate::dev_bridge::bind::{BindWatch, BIND_FAILS_TO_CLOSE};
+    assert_eq!(BIND_FAILS_TO_CLOSE, 2);
+    let mut w = BindWatch::default();
+    assert!(w.observe(false), "one miss keeps listening");
+    assert!(w.observe(true), "a good probe resets the count");
+    assert!(
+        w.observe(false),
+        "a later single miss still keeps listening"
+    );
+    assert!(!w.observe(false), "two misses in a row close");
+}

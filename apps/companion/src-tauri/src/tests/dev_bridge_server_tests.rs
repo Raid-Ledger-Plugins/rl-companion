@@ -4,7 +4,9 @@
 
 use super::dev_bridge_unit_tests::schema_errors;
 use crate::config::AppConfig;
-use crate::dev_bridge::commands::{apply_allowlist, apply_bind, apply_enabled, apply_rotate};
+use crate::dev_bridge::commands::{
+    apply_allowlist, apply_bind, apply_enabled, apply_probes_enabled, apply_rotate,
+};
 use crate::dev_bridge::settings::DevBridgeConfig;
 use crate::dev_bridge::tls::TlsMaterial;
 use crate::dev_bridge::{desired, DevBridge, ListenerStatus, TLS_FILE};
@@ -263,5 +265,25 @@ async fn token_is_stored_as_a_hash_only_and_rotate_invalidates_the_old_one() {
         "still no rlcdev_ value after Rotate"
     );
     live.bridge.stop().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn turning_the_bridge_off_clears_allow_probes() {
+    let dir = super::temp_dir("bridge-off-probes");
+    let shared = Shared::new(dir.join("config.json"), Box::new(MemoryStore::default()));
+    apply_enabled(&shared, true).expect("on");
+    apply_probes_enabled(&shared, true).expect("probes on");
+    assert!(shared.config().dev_bridge.probes_enabled);
+    apply_enabled(&shared, false).expect("off");
+    assert!(
+        !shared.config().dev_bridge.probes_enabled,
+        "turning the bridge off left Allow probes on"
+    );
+    apply_enabled(&shared, true).expect("on again");
+    assert!(
+        !shared.config().dev_bridge.probes_enabled,
+        "re-enabling silently re-armed probes"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
