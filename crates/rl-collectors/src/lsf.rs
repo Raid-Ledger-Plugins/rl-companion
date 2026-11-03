@@ -58,11 +58,11 @@ pub fn read_lsf_attribute(bytes: &[u8], name: &str) -> Result<Option<String>, Ls
     {
         return Err(LsfError::BadMagic([m[0], m[1], m[2], m[3]]));
     }
-    let head = take(bytes, 0, SECTIONS_START, "header")?;
-    let version = le_u32(head, 4);
+    let version = le_u32(take(bytes, 0, 8, "header")?, 4);
     if version != LSF_VERSION {
         return Err(LsfError::UnsupportedVersion(version));
     }
+    let head = take(bytes, 0, SECTIONS_START, "metadata")?;
     let pair = |i: usize, name| Sizes {
         name,
         size: le_u32(head, METADATA_START + i * 8),
@@ -216,7 +216,7 @@ fn find_attribute(
     wanted: &str,
 ) -> Result<Option<String>, LsfError> {
     let record = if v3 { 16 } else { 12 };
-    if attrs.len() % record != 0 {
+    if !attrs.len().is_multiple_of(record) {
         return Err(LsfError::Decode {
             section: "attributes",
             reason: format!("{} bytes is not a whole number of records", attrs.len()),
