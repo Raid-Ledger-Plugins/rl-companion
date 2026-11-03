@@ -119,6 +119,7 @@ export function Collector({ onError, ...nav }: CollectorProps) {
     onSkip: () => run({ panel: row.id }, () => api.skipFirstUpload(row.id)),
     onCampaign: (key, ticked) => run("none", () => api.setBg3Campaign(key, ticked)),
     screenshotHubs: hubs,
+    hubTargets: hubs?.targets ?? [],
     onScreenshotHub: (id) => {
       api.setBg3ScreenshotHub(id).then(setHubs).catch((e: unknown) => onError(message(e)));
     },

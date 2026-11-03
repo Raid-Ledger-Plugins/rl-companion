@@ -124,6 +124,12 @@ export interface Preview {
   party: PartyLine[];
   thumbnail: string | null;
   waiting: number;
+  /** Which variant the window shows (ROK-1966). */
+  kind: "save" | "screenshot";
+  /** Screenshots only: when the newest one was taken (RFC 3339), else "". */
+  takenAt: string;
+  /** Screenshots only: the hub the held batch is addressed to. */
+  hubGuildId: number | null;
 }
 
 /** One BG3 campaign in the upload picker (ROK-2068). */

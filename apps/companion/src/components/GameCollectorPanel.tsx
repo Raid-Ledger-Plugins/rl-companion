@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import type { CharResult, CollectorRow, LogLine } from "../api";
+import type { CharResult, CollectorRow, HubTarget, LogLine } from "../api";
+import { collectorCopy } from "./collectorCopy";
 import { ActivityLog, ResultList } from "./UploadLists";
 import { FirstUploadPreview } from "./FirstUploadPreview";
 
@@ -11,6 +12,8 @@ export interface GameCollectorPanelProps {
   log: LogLine[];
   /** Rendered below the auto-upload toggle (the BG3 campaign picker slot, D15). */
   belowToggle?: ReactNode;
+  /** BG3 screenshots: the server's hub list, so the preview names the destination. */
+  hubTargets?: HubTarget[];
   dirDraft: string;
   /** The backend's refusal of the last folder the user tried to save. */
   saveError: string | null;
@@ -22,29 +25,30 @@ export interface GameCollectorPanelProps {
   onSkip: () => void;
 }
 
-/** One game's collector (not LedgerLink): switch, save folder override, first-upload preview. */
+/** One game's collector (not LedgerLink): switch, folder override, first-upload preview. */
 export function GameCollectorPanel(p: GameCollectorPanelProps) {
   const { row } = p;
   const note = p.saveError ?? row.overrideNote;
+  const copy = collectorCopy(row);
   return (
     <section aria-label={`${row.displayName} uploads`}>
-      <h2>{row.displayName}: save uploads</h2>
+      <h2>{copy.heading}</h2>
       <p role="status" className="muted">{row.status}</p>
       <label className="toggle">
         <input type="checkbox" checked={row.enabled} onChange={(e) => p.onToggle(e.target.checked)} />
-        Upload new {row.displayName} saves automatically
+        {copy.toggle}
       </label>
       {p.belowToggle}
-      {!row.enabled && <span className="muted">Off until you turn it on. Nothing is read from your save folder while off.</span>}
+      {!row.enabled && <span className="muted">{copy.offNote}</span>}
       {row.enabled && row.confirmFirstUpload && !row.consented && !row.preview && (
         <span className="muted">You will see a preview before the first upload.</span>
       )}
       <label>
-        Save folder
+        {copy.folderLabel}
         <input
           className="path"
           value={p.dirDraft}
-          placeholder={row.detectedFolder ?? "Choose the save folder"}
+          placeholder={row.detectedFolder ?? copy.folderPlaceholder}
           onChange={(e) => p.onDirDraft(e.target.value)}
           spellCheck={false}
         />
@@ -55,8 +59,10 @@ export function GameCollectorPanel(p: GameCollectorPanelProps) {
         <button onClick={p.onPickDir}>Choose folder…</button>
         <button disabled={p.dirDraft === row.folderOverride} onClick={p.onSaveDir}>Save</button>
       </div>
-      {row.preview && <FirstUploadPreview preview={row.preview} onUpload={p.onUpload} onSkip={p.onSkip} />}
-      <ResultList heading="Last upload per save" results={p.results} />
+      {row.preview && (
+        <FirstUploadPreview preview={row.preview} hubTargets={p.hubTargets ?? []} onUpload={p.onUpload} onSkip={p.onSkip} />
+      )}
+      <ResultList heading={copy.resultsHeading} results={p.results} />
       <ActivityLog log={p.log} />
     </section>
   );

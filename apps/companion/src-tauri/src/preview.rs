@@ -32,6 +32,12 @@ pub struct PreviewDto {
     pub thumbnail: Option<String>,
     /// How many items wait behind this preview (this one included).
     pub waiting: usize,
+    /// `"save"` or `"screenshot"` (ROK-1966): which variant the window shows.
+    pub kind: String,
+    /// Screenshots only: when the newest one was taken (RFC 3339), else `""`.
+    pub taken_at: String,
+    /// Screenshots only: the hub the held batch is addressed to.
+    pub hub_guild_id: Option<i64>,
 }
 
 /// The held batch: the preview plus the dedupe keys Skip records.
@@ -67,12 +73,30 @@ fn party_line(m: &Value) -> PartyLine {
     }
 }
 
-/// Hold `pending` behind a preview of its newest item (by `savedAt`).
+const SCREENSHOT_CONTRACT: &str = "bg3-screenshot";
+
+/// The payload field that orders a batch: `takenAt` for screenshots, else `savedAt`.
+fn time_key(contract: &str) -> &'static str {
+    if contract == SCREENSHOT_CONTRACT {
+        "takenAt"
+    } else {
+        "savedAt"
+    }
+}
+
+/// Hold `pending` behind a preview of its newest item (by `savedAt`, or
+/// `takenAt` for screenshots). Ties keep the first, i.e. the newest file.
 pub fn hold(collector_id: &str, pending: &[PendingUpload]) -> Option<Held> {
-    let newest = pending
-        .iter()
-        .max_by_key(|p| text(&p.body["payload"], "savedAt"))?;
+    let newest = pending.iter().reduce(|best, p| {
+        let key = |u: &PendingUpload| text(&u.body["payload"], time_key(u.contract));
+        if key(p) > key(best) {
+            p
+        } else {
+            best
+        }
+    })?;
     let payload = &newest.body["payload"];
+    let screenshot = newest.contract == SCREENSHOT_CONTRACT;
     let party = payload
         .get("party")
         .and_then(Value::as_array)
@@ -92,6 +116,13 @@ pub fn hold(collector_id: &str, pending: &[PendingUpload]) -> Option<Held> {
             .first()
             .map(|b| format!("data:{};base64,{}", b.content_type, base64(&b.bytes))),
         waiting: pending.len(),
+        kind: if screenshot { "screenshot" } else { "save" }.to_owned(),
+        taken_at: if screenshot {
+            text(payload, "takenAt")
+        } else {
+            String::new()
+        },
+        hub_guild_id: payload["target"]["hubGuildId"].as_i64(),
     };
     let keys = pending
         .iter()

@@ -161,6 +161,49 @@ fn preview_summarises_the_newest_save_and_keeps_every_key() {
     assert!(hold(BG3_SAVE.id, &[]).is_none());
 }
 
+fn shot(taken_at: &str, sha: &str, webp: &[u8]) -> PendingUpload {
+    PendingUpload {
+        campaign: None,
+        contract: "bg3-screenshot",
+        scope: format!("https://rl.test|/shots/{sha}.jpg"),
+        item: "screenshot".into(),
+        sha256: sha.into(),
+        label: format!("Screenshot {sha}"),
+        body: json!({ "contract": "bg3-screenshot", "payload": {
+            "takenAt": taken_at, "width": 1920, "height": 1080,
+            "target": { "hubGuildId": 42 }
+        }}),
+        blobs: vec![Blob {
+            sha256: "1".repeat(64),
+            content_type: "image/webp".into(),
+            bytes: webp.to_vec(),
+        }],
+    }
+}
+
+#[test]
+fn screenshot_preview_shows_the_newest_shot_its_hub_and_no_save_fields() {
+    // `files()` lists newest first; the old `savedAt` key picked the LAST (oldest) one.
+    let batch = [
+        shot("2026-11-03T12:00:00Z", "new", b"NEW"),
+        shot("2026-11-01T08:00:00Z", "old", b"OLD"),
+    ];
+    let held = hold(BG3_SCREENSHOT.id, &batch).expect("non-empty batch is held");
+    let p = &held.preview;
+    assert_eq!(p.kind, "screenshot");
+    assert_eq!(p.taken_at, "2026-11-03T12:00:00Z", "newest by takenAt");
+    assert_eq!(
+        p.thumbnail.as_deref(),
+        Some(format!("data:image/webp;base64,{}", base64(b"NEW")).as_str()),
+        "the newest shot's encoded WebP is the image shown"
+    );
+    assert_eq!(p.hub_guild_id, Some(42));
+    assert_eq!((p.waiting, held.keys.len()), (2, 2));
+    assert!(p.save_name.is_empty() && p.party.is_empty());
+    let save = hold(BG3_SAVE.id, &[pending("A", "2026-11-01T00:00:00Z", "a")]).expect("held");
+    assert_eq!((save.preview.kind.as_str(), save.preview.hub_guild_id), ("save", None));
+}
+
 #[test]
 fn base64_matches_rfc4648_vectors() {
     let cases = [
