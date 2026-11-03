@@ -1,5 +1,6 @@
 //! App settings persisted as JSON in the OS app-config dir. Never holds the token.
 
+use crate::server_config::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -43,6 +44,13 @@ pub struct AppConfig {
     /// The Windows 11 tray icon was promoted out of the overflow once
     /// (ROK-2065). Never promoted again, so a user's "hide" sticks.
     pub tray_promoted_once: bool,
+    /// The linked server's last `/config` answer (ROK-2067 D5), shown while
+    /// it is unreachable. Cleared when the server URL changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_server_config: Option<ServerConfig>,
+    /// When `last_server_config` was fetched (RFC 3339, UTC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
@@ -60,6 +68,8 @@ impl Default for AppConfig {
             legacy_ledgerlink_enabled: None,
             autostart_initialized: false,
             tray_promoted_once: false,
+            last_server_config: None,
+            fetched_at: None,
         }
     }
 }

@@ -69,6 +69,8 @@ fn config_round_trips_and_defaults_to_prod() {
         legacy_ledgerlink_enabled: None,
         autostart_initialized: true,
         tray_promoted_once: true,
+        last_server_config: None,
+        fetched_at: None,
     };
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);

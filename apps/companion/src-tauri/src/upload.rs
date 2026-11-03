@@ -159,11 +159,18 @@ fn other_status(status: u16, body: &[u8]) -> UploadOutcome {
     }
 }
 
+/// The deferral text for `unknown_contract`/`unknown_contract_version`.
+pub const NOT_TAKEN_YET: &str = "the server does not take this upload yet";
+
+/// The server does not serve this contract (yet): its `/config` may have
+/// changed, so the app refetches it (ROK-2067 D5).
+pub fn is_unknown_contract(outcome: &UploadOutcome) -> bool {
+    matches!(outcome, UploadOutcome::Deferred { reason } if reason == NOT_TAKEN_YET)
+}
+
 fn deferred_reason(status: u16, code: &str) -> String {
     match code {
-        "unknown_contract" | "unknown_contract_version" => {
-            "the server does not take this upload yet".to_owned()
-        }
+        "unknown_contract" | "unknown_contract_version" => NOT_TAKEN_YET.to_owned(),
         "retired_contract_version" => "this app is out of date; update the Companion".to_owned(),
         "" => format!("unexpected answer {status} from the server"),
         other => format!("server answered {status} ({other})"),

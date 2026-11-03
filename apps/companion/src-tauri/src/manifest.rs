@@ -38,6 +38,10 @@ pub struct CollectorManifest {
     pub id: &'static str,
     /// Name the window shows ("turn on {display_name} uploads").
     pub display_name: &'static str,
+    /// The game's name for its tile when the server sends none (ROK-2067).
+    pub game_name: &'static str,
+    /// A second line under the tile title ("LedgerLink addon"), if any.
+    pub game_subtitle: Option<&'static str>,
     /// Raid Ledger `COMPANION_CONTRACTS` id + version this collector emits.
     pub contract_id: &'static str,
     pub contract_version: u32,
@@ -234,6 +238,8 @@ pub fn glob_match(pattern: &str, name: &str) -> bool {
 pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
     id: "wow-ledgerlink",
     display_name: "LedgerLink",
+    game_name: "World of Warcraft",
+    game_subtitle: Some("LedgerLink addon"),
     contract_id: "wow-ledgerlink",
     contract_version: 1,
     default_enabled: false,
@@ -258,6 +264,8 @@ pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
 pub const BG3_SAVE: CollectorManifest = CollectorManifest {
     id: "bg3-save",
     display_name: "Baldur's Gate 3",
+    game_name: "Baldur's Gate 3",
+    game_subtitle: None,
     contract_id: "bg3-save",
     contract_version: 1,
     default_enabled: false,
