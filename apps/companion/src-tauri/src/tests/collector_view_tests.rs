@@ -201,7 +201,10 @@ fn screenshot_preview_shows_the_newest_shot_its_hub_and_no_save_fields() {
     assert_eq!((p.waiting, held.keys.len()), (2, 2));
     assert!(p.save_name.is_empty() && p.party.is_empty());
     let save = hold(BG3_SAVE.id, &[pending("A", "2026-11-01T00:00:00Z", "a")]).expect("held");
-    assert_eq!((save.preview.kind.as_str(), save.preview.hub_guild_id), ("save", None));
+    assert_eq!(
+        (save.preview.kind.as_str(), save.preview.hub_guild_id),
+        ("save", None)
+    );
 }
 
 #[test]
