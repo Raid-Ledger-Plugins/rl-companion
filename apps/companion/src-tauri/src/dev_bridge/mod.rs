@@ -9,6 +9,7 @@ pub mod auth;
 pub mod bind;
 pub mod collectors;
 pub mod commands;
+pub mod conn_budget;
 pub mod health;
 pub mod logbuf;
 pub mod paging;

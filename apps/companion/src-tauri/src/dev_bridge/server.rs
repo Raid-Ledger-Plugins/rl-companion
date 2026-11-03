@@ -3,6 +3,7 @@
 
 use super::auth::{admit, AuthPolicy, Lockout};
 use super::bind;
+use super::conn_budget::{ConnBudget, Slot};
 use super::health::{health, HealthInput};
 use super::logbuf::{self, LogBuffer};
 use super::paging::parse_query;
@@ -22,11 +23,13 @@ use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A caller outside the allowlist gets less time to finish TLS: it only ever
+/// receives a 403, so it has no reason to hold a slot open.
+pub const OUTSIDER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 /// hyper drops a connection that hasn't sent full headers in this long
 /// (needs the `TokioTimer`); also bounds how long an idle keep-alive waits.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// Open connections (including pending TLS handshakes) served at once.
-pub const MAX_CONNECTIONS: usize = 32;
+pub use super::conn_budget::MAX_CONNECTIONS;
 /// How long in-flight requests get to finish when the listener closes.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the listener re-checks that its bound IP is still this PC's
@@ -130,6 +133,19 @@ impl ServerCtx {
             logs: Some(logs),
             ..Self::default()
         }
+    }
+
+    /// Whether `peer` is in the served allowlist (decides its connection budget).
+    pub fn is_allowlisted(&self, peer: IpAddr) -> bool {
+        let IpAddr::V4(ip) = peer else {
+            return false;
+        };
+        self.snapshot
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .policy
+            .allowlist
+            .contains(&ip)
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -294,6 +310,13 @@ async fn respond(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
     );
+    if !routed.admitted {
+        // A refused caller can't park on a keep-alive connection.
+        res.headers_mut().insert(
+            header::CONNECTION,
+            header::HeaderValue::from_static("close"),
+        );
+    }
     res
 }
 
@@ -305,10 +328,16 @@ async fn serve_conn(
     acceptor: TlsAcceptor,
     tcp: tokio::net::TcpStream,
     peer: SocketAddr,
+    slot: Slot,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let limit = if slot.is_outsider() {
+        OUTSIDER_HANDSHAKE_TIMEOUT
+    } else {
+        HANDSHAKE_TIMEOUT
+    };
     let tls = tokio::select! {
-        r = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)) => match r {
+        r = tokio::time::timeout(limit, acceptor.accept(tcp)) => match r {
             Ok(Ok(tls)) => tls,
             _ => return,
         },
@@ -331,6 +360,7 @@ async fn serve_conn(
             let _ = tokio::time::timeout(DRAIN_TIMEOUT, conn).await;
         }
     }
+    drop(slot); // held until the connection is gone
 }
 
 /// Resolves once the listener has asked its connections to close.
@@ -363,6 +393,7 @@ pub async fn serve(
 ) {
     let (shutdown, shutdown_rx) = watch::channel(false);
     let mut conns = JoinSet::new();
+    let budget = ConnBudget::default();
     let bound = listener.local_addr().ok().map(|a| a.ip());
     let mut check = tokio::time::interval(BIND_CHECK_INTERVAL);
     check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -373,10 +404,13 @@ pub async fn serve(
             _ = check.tick() => if !bound_ip_ok(&ctx, bound) { break },
             accepted = listener.accept() => {
                 let Ok((tcp, peer)) = accepted else { continue };
-                if conns.len() >= MAX_CONNECTIONS {
-                    continue; // dropping `tcp` refuses it
-                }
-                conns.spawn(serve_conn(ctx.clone(), acceptor.clone(), tcp, peer, shutdown_rx.clone()));
+                // Allowlisted callers and outsiders have separate budgets;
+                // past its budget a connection is dropped (refused) here.
+                let Some(slot) = budget.try_take(peer.ip(), ctx.is_allowlisted(peer.ip())) else {
+                    continue;
+                };
+                let (c, a, rx) = (ctx.clone(), acceptor.clone(), shutdown_rx.clone());
+                conns.spawn(serve_conn(c, a, tcp, peer, slot, rx));
             }
         }
     }

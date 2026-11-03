@@ -8,6 +8,7 @@ mod collector_tests;
 mod collector_view_tests;
 mod config_tests;
 mod covers_tests;
+mod dev_bridge_conn_tests;
 mod dev_bridge_guard_tests;
 mod dev_bridge_lifecycle_tests;
 mod dev_bridge_routes_tests;
