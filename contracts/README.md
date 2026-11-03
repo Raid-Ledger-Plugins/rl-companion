@@ -7,5 +7,5 @@ commit and updating its source line below.
 | Folder | Source | Commit |
 |---|---|---|
 | `bg3-save/v1/` | `packages/contract/companion/bg3-save/v1/` on `main` | `1199dc27e` (2026-11-03; adds ROK-1960 `file-name` key source + fixture, ROK-2070 §3.3 GameID hash-input wording) |
-| `bg3-screenshot/v1/` | `packages/contract/companion/bg3-screenshot/v1/` on the ROK-1966 branch (not yet on `main`) | `33983729a` (2026-11-03) — re-pin from `main` once ROK-1966 merges |
+| `bg3-screenshot/v1/` | `packages/contract/companion/bg3-screenshot/v1/` on the ROK-1966 branch (not yet on `main`) | `8b1829e92` (2026-11-03) — re-pin from `main` once ROK-1966 merges |
 | `wow-ledgerlink/v1/` | `packages/contract/companion/wow-ledgerlink/v1/` on the ROK-1964 branch (not yet on `main`) | `5dd3acd52` (2026-10-28) — re-pin from `main` once ROK-1964 merges |
