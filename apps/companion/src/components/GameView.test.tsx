@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { CollectorStatus } from "../api";
 import { hosts, must, text } from "../test/elements";
-import { bg3GroupTile, bg3Row, mixedStatus } from "../test/fixtures";
+import { bg3GroupTile, bg3Row, bg3Tile, mixedStatus } from "../test/fixtures";
 import { GameView, type GameHandlers, type WowHandlers } from "./GameView";
 
 const wow: WowHandlers = { dirDraft: "C:\\WoW", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle: vi.fn(), onUploadNow: vi.fn() };
@@ -94,5 +94,13 @@ describe("GameView — ROK-2073: a shared game tile opens every collector's cont
     expect(banner).toBeGreaterThan(shots);
     expect(out.match(/class="banner"/g)).toHaveLength(1);
     expect(out.match(/Rate limited for 60 s/g)).toHaveLength(1);
+  });
+
+  it("MINOR 3: one plugin off for both collectors shows the paused banner once, above the sections", () => {
+    const off = { state: "plugin_off" as const, chip: "Plugin not installed", line: "Plugin not installed", banner: must(bg3Tile.banner, "banner"), pluginName: "Baldur's Gate 3" };
+    const lines = bg3GroupTile.lines.map((l) => ({ ...l, ...off }));
+    const out = html("bg3-save", { ...grouped, tiles: [{ ...bg3GroupTile, lines }] });
+    expect(out.match(/Uploads are paused\./g)).toHaveLength(1);
+    expect(out.indexOf("Uploads are paused.")).toBeLessThan(out.indexOf('<h3 class="gv-part">Saves</h3>'));
   });
 });

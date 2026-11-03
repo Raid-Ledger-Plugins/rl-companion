@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BG3_ID, BG3_SCREENSHOT_ID, LEDGERLINK_ID, type Bg3ScreenshotHubs, type CollectorRow, type CollectorStatus } from "../api";
+import { BG3_ID, BG3_SCREENSHOT_ID, LEDGERLINK_ID, type Bg3ScreenshotHubs, type CollectorRow, type CollectorStatus, type TileLine } from "../api";
 import { CollectorPanel, type CollectorPanelProps } from "./CollectorPanel";
 import { Cover } from "./GameTiles";
 import { Bg3CampaignPicker } from "./Bg3CampaignPicker";
@@ -83,6 +83,13 @@ function Banner({ text, plugin }: { text: string | null; plugin: string | null }
   return text ? <div className="banner" role="alert">{emphasize(text, plugin)}</div> : null;
 }
 
+/** The line whose banner every part shares (one plugin off for all), so it shows once. */
+function sharedBanner(lines: TileLine[]): TileLine | null {
+  const [first, ...rest] = lines;
+  if (!first?.banner) return null;
+  return rest.every((l) => l.banner === first.banner && l.pluginName === first.pluginName) ? first : null;
+}
+
 /**
  * One game's settings: back button, cover + name, then each of the game's
  * collectors (ROK-2073: BG3 saves + screenshots share one view, each under
@@ -94,6 +101,7 @@ export function GameView(p: GameViewProps) {
   const row = status.collectors.find((c) => c.id === id);
   const title = tile ? [tile.title, tile.subtitle].filter(Boolean).join(" · ") : (row?.displayName ?? id);
   const parts = tile && tile.lines.length > 1 ? tile.lines : null;
+  const shared = parts ? sharedBanner(parts) : null;
   return (
     <>
       <button type="button" className="back" onClick={p.onBack}>← All games</button>
@@ -102,13 +110,16 @@ export function GameView(p: GameViewProps) {
         <h2>{title}</h2>
       </div>
       {parts ? (
-        parts.map((l, i) => (
-          <section key={l.collectorId} aria-label={l.label}>
-            <h3 className="gv-part">{l.label}</h3>
-            <Banner text={l.banner} plugin={l.pluginName} />
-            <Part status={status} id={l.collectorId} deviceLog={i === 0} wow={p.wow} game={p.game} />
-          </section>
-        ))
+        <>
+          {shared && <Banner text={shared.banner} plugin={shared.pluginName} />}
+          {parts.map((l, i) => (
+            <section key={l.collectorId} aria-label={l.label}>
+              <h3 className="gv-part">{l.label}</h3>
+              {!shared && <Banner text={l.banner} plugin={l.pluginName} />}
+              <Part status={status} id={l.collectorId} deviceLog={i === 0} wow={p.wow} game={p.game} />
+            </section>
+          ))}
+        </>
       ) : (
         <>
           <Banner text={tile?.banner ?? null} plugin={tile?.pluginName ?? null} />
