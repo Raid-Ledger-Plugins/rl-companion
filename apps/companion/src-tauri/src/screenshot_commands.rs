@@ -20,8 +20,9 @@ pub struct Bg3ScreenshotHubsDto {
     pub targets: Vec<HubTarget>,
     /// `false` when the last `/config` had no `hubTargets` (older server).
     pub server_lists_hubs: bool,
-    /// The effective pick ([`effective_hub`]): the user's own, else the
-    /// server's default target; `None` = nothing to send to (nothing uploads).
+    /// The effective pick ([`effective_hub`]): the user's own while the server
+    /// lists it, else the server's default target; `None` = nothing to send to
+    /// (nothing uploads).
     pub selected: Option<i64>,
     /// New screenshots held back for want of a pick.
     pub waiting: usize,
@@ -32,33 +33,54 @@ pub fn valid_hub(id: i64) -> bool {
     (1..=i64::from(i32::MAX)).contains(&id)
 }
 
-/// The server's `hubTargets` for `bg3-screenshot`; `None` = it sent none.
-fn hub_targets(cfg: &AppConfig) -> Option<&Vec<HubTarget>> {
+/// The server's `hubTargets` for `bg3-screenshot`, minus ids the schema would
+/// refuse; `None` = it sent none.
+fn hub_targets(cfg: &AppConfig) -> Option<Vec<HubTarget>> {
     cfg.last_server_config
         .as_ref()
         .and_then(|sc| sc.contract(BG3_SCREENSHOT.contract_id))
         .and_then(|c| c.hub_targets.as_ref())
+        .map(|ts| {
+            ts.iter()
+                .filter(|t| valid_hub(t.hub_guild_id))
+                .cloned()
+                .collect()
+        })
 }
 
-/// The hub screenshots go to (Q3): the user's own pick, else the target the
-/// server marks `isDefault` (the hub of their latest save). Resolved on every
-/// read, so the default follows the latest save until the user picks one.
+/// The hub screenshots go to (Q3): the user's own pick while the server still
+/// lists it, else the target the server marks `isDefault` (the hub of their
+/// latest save), else none (screenshots wait). Resolved on every read, so the
+/// default follows the latest save until the user picks one. A pick the
+/// server no longer lists (hub left, deleted or moved to another game) is
+/// ignored rather than sent and refused; when the server sends no list at
+/// all (older server) the pick is kept.
 pub fn effective_hub(cfg: &AppConfig) -> Option<i64> {
-    cfg.bg3_screenshot_hub.or_else(|| {
-        hub_targets(cfg)?
-            .iter()
-            .find(|t| t.is_default)
-            .map(|t| t.hub_guild_id)
-    })
+    resolve(cfg, hub_targets(cfg).as_deref())
+}
+
+fn resolve(cfg: &AppConfig, targets: Option<&[HubTarget]>) -> Option<i64> {
+    let Some(targets) = targets else {
+        return cfg.bg3_screenshot_hub;
+    };
+    let listed = |id: i64| targets.iter().any(|t| t.hub_guild_id == id);
+    cfg.bg3_screenshot_hub
+        .filter(|&id| listed(id))
+        .or_else(|| {
+            targets
+                .iter()
+                .find(|t| t.is_default)
+                .map(|t| t.hub_guild_id)
+        })
 }
 
 /// The picker's view of `cfg`.
 pub fn hubs_view(cfg: &AppConfig, waiting: usize) -> Bg3ScreenshotHubsDto {
-    let targets = hub_targets(cfg).cloned();
+    let targets = hub_targets(cfg);
     Bg3ScreenshotHubsDto {
         server_lists_hubs: targets.is_some(),
+        selected: resolve(cfg, targets.as_deref()),
         targets: targets.unwrap_or_default(),
-        selected: effective_hub(cfg),
         waiting,
     }
 }

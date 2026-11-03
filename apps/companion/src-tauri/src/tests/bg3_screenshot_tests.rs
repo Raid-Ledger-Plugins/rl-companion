@@ -369,3 +369,45 @@ fn hub_stays_unpicked_without_a_default_or_a_hub_list() {
     assert!(!hubs_view(&older, 2).server_lists_hubs);
     assert_eq!(hubs_view(&older, 2).waiting, 2, "still counted as waiting");
 }
+
+#[test]
+fn a_pick_missing_from_hub_targets_falls_back_to_the_default() {
+    let mut cfg = with_targets(json!([
+        { "hubGuildId": 3, "name": "Old party", "isDefault": false },
+        { "hubGuildId": 9, "name": "Latest save", "isDefault": true }
+    ]));
+    cfg.bg3_screenshot_hub = Some(77);
+    assert_eq!(
+        effective_hub(&cfg),
+        Some(9),
+        "a pick the server no longer lists must not be sent to"
+    );
+    assert_eq!(
+        hubs_view(&cfg, 0).selected,
+        Some(9),
+        "the picker shows the hub uploads actually go to"
+    );
+    let mut no_default = with_targets(json!([{ "hubGuildId": 3, "name": "A", "isDefault": false }]));
+    no_default.bg3_screenshot_hub = Some(77);
+    assert_eq!(effective_hub(&no_default), None, "no default: wait");
+    assert_eq!(hubs_view(&no_default, 0).selected, None);
+    let mut older = AppConfig::default();
+    older.bg3_screenshot_hub = Some(77);
+    assert_eq!(effective_hub(&older), Some(77), "no list: the pick stands");
+}
+
+#[test]
+fn hub_targets_with_out_of_range_ids_are_ignored() {
+    let cfg = with_targets(json!([
+        { "hubGuildId": 0, "name": "Zero", "isDefault": true },
+        { "hubGuildId": 2_147_483_648_i64, "name": "Too big", "isDefault": false },
+        { "hubGuildId": 5, "name": "Ok", "isDefault": false }
+    ]));
+    assert_eq!(effective_hub(&cfg), None, "an invalid default is not used");
+    let ids: Vec<i64> = hubs_view(&cfg, 0)
+        .targets
+        .iter()
+        .map(|t| t.hub_guild_id)
+        .collect();
+    assert_eq!(ids, vec![5]);
+}
