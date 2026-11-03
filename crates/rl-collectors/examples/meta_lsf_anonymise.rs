@@ -60,19 +60,21 @@ fn anonymise_values(raw: &lsf_raw::Raw, names: &[Vec<String>]) -> (Vec<u8>, Vec<
         let (ty, len) = (tl & 0x3F, (tl >> 6) as usize);
         let v = &mut values[offset..offset + len];
         offset += len;
-        let text_end = v.iter().position(|&b| b == 0).unwrap_or(v.len());
         let attr = name(names, u32_at(rec, 0));
+        // Strings: the whole value but a final NUL, so bytes after an
+        // embedded NUL are neither kept nor left out of the leak search.
+        let body = len - usize::from(v.last() == Some(&0));
         if attr == "GameID" {
             assert!(STRING_TYPES.contains(&ty), "GameID is not a string type");
-            assert_eq!(text_end, SYNTHETIC_GAME_ID.len(), "GameID length differs");
-            needles.push(v[..text_end].to_vec());
-            v[..text_end].copy_from_slice(SYNTHETIC_GAME_ID.as_bytes());
+            assert_eq!(body, SYNTHETIC_GAME_ID.len(), "GameID length differs");
+            needles.push(v[..body].to_vec());
+            v[..body].copy_from_slice(SYNTHETIC_GAME_ID.as_bytes());
         } else if STRING_TYPES.contains(&ty) {
-            push_needle(&mut needles, &v[..text_end]);
-            v[..text_end].fill(b'x');
+            push_needles(&mut needles, &v[..body]);
+            v[..body].fill(b'x');
         } else if ty == TRANSLATED_STRING && len >= 6 && u32_at(v, 2) as usize + 6 == len {
             // u16 version, i32 handle length, handle text + NUL.
-            push_needle(&mut needles, &v[6..len - 1]);
+            push_needles(&mut needles, &v[6..len - 1]);
             v[6..len - 1].fill(b'x');
         } else {
             if len == 16 {
@@ -92,6 +94,16 @@ fn anonymise_values(raw: &lsf_raw::Raw, names: &[Vec<String>]) -> (Vec<u8>, Vec<
 fn push_needle(needles: &mut Vec<Vec<u8>>, text: &[u8]) {
     if text.len() >= 3 && !text.iter().all(|&b| b == b'x') {
         needles.push(text.to_vec());
+    }
+}
+
+/// The whole value, plus each NUL-separated run in it, as needles.
+fn push_needles(needles: &mut Vec<Vec<u8>>, value: &[u8]) {
+    push_needle(needles, value);
+    if value.contains(&0) {
+        value
+            .split(|&b| b == 0)
+            .for_each(|run| push_needle(needles, run));
     }
 }
 
