@@ -129,10 +129,13 @@ pub fn set_server_url(
             c.server_url = url;
         })
         .map_err(s)?;
-    let linked = state.token().map_err(s)?.is_some();
+    // Reset the old server's state even when the keychain read fails.
+    let token = state.token();
     if changed {
+        let linked = token.as_ref().is_ok_and(Option::is_some);
         app.state::<Arc<Runtime>>().server_changed(linked);
     }
+    let linked = token.map_err(s)?.is_some();
     tray::set_status(&app, if linked { "Linked" } else { "Not linked" });
     Ok(cfg.server_url)
 }
