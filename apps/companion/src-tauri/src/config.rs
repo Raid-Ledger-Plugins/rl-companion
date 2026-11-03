@@ -137,8 +137,31 @@ impl AppConfig {
             std::fs::create_dir_all(dir)?;
         }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, json)
+        // Write beside the file, then rename over it: a crash mid-write leaves
+        // the old settings intact instead of a truncated file that loads as
+        // defaults (the `/config` cache rewrites this file every 15 min).
+        let tmp = tmp_path(path);
+        let written =
+            write_synced(&tmp, json.as_bytes()).and_then(|()| std::fs::rename(&tmp, path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        written
     }
+}
+
+/// The temp file [`AppConfig::save`] writes before the rename.
+pub fn tmp_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    path.with_file_name(name)
+}
+
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
 }
 
 /// Reduce user input to a bare origin. `https` only, except plain `http` for
