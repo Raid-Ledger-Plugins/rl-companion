@@ -95,6 +95,16 @@ impl DevBridge {
         }
     }
 
+    /// A bridge serving from `ctx` (tests inject the bound-IP probe).
+    #[cfg(test)]
+    pub(crate) fn with_ctx(tls_path: PathBuf, ctx: ServerCtx) -> Self {
+        Self {
+            tls_path,
+            ctx: Arc::new(ctx),
+            running: Mutex::new(None),
+        }
+    }
+
     /// Bring the listener in line with `cfg`: start, move, keep or stop it.
     /// When it should not run, the served policy is emptied first, so a
     /// request racing the close is refused rather than answered.

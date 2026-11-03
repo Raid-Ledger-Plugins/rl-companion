@@ -14,6 +14,9 @@ use hyper::{header, Method, Request, Response};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+/// Says whether an IPv4 is still an address of this PC (injectable for tests).
+pub type IpProbe = Arc<dyn Fn(Ipv4Addr) -> bool + Send + Sync>;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
@@ -56,6 +59,8 @@ pub struct ServerCtx {
     logs: Option<&'static LogBuffer>,
     denials: Mutex<DenialLog>,
     closed: Mutex<Option<String>>,
+    ip_probe: IpProbe,
+    bind_check_every: Duration,
 }
 
 /// One routed request: what to send, and whether admission let it through.
@@ -113,6 +118,8 @@ impl Default for ServerCtx {
             logs: None,
             denials: Mutex::new(DenialLog::default()),
             closed: Mutex::new(None),
+            ip_probe: Arc::new(bind::ip_is_local),
+            bind_check_every: BIND_CHECK_INTERVAL,
         }
     }
 }
@@ -145,6 +152,16 @@ impl ServerCtx {
             .policy
             .allowlist
             .contains(&ip)
+    }
+
+    /// Check the bound IP with `probe` every `every` instead of the real ones.
+    #[cfg(test)]
+    pub(crate) fn with_bind_probe(probe: IpProbe, every: Duration) -> Self {
+        Self {
+            ip_probe: probe,
+            bind_check_every: every,
+            ..Self::default()
+        }
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -374,12 +391,14 @@ async fn stopped(rx: &mut watch::Receiver<bool>) {
 }
 
 /// True while the listener may keep running on `bound`.
-fn bound_ip_ok(ctx: &ServerCtx, bound: Option<IpAddr>) -> bool {
+/// Closes only after [`bind::BIND_FAILS_TO_CLOSE`] consecutive failed probes.
+fn bound_ip_ok(ctx: &ServerCtx, bound: Option<IpAddr>, watch: &mut bind::BindWatch) -> bool {
     let Some(IpAddr::V4(ip)) = bound else {
         return true;
     };
-    match bind::bound_ip_check(ip, bind::ip_is_local) {
-        Ok(()) => true,
+    match bind::bound_ip_check(ip, |i| (ctx.ip_probe)(i)) {
+        Ok(()) => watch.observe(true),
+        Err(_) if watch.observe(false) => true, // re-checked next tick
         Err(why) => {
             ctx.log("warn", &why);
             ctx.set_closed_reason(Some(why));
@@ -400,13 +419,14 @@ pub async fn serve(
     let mut conns = JoinSet::new();
     let budget = ConnBudget::default();
     let bound = listener.local_addr().ok().map(|a| a.ip());
-    let mut check = tokio::time::interval(BIND_CHECK_INTERVAL);
+    let mut check = tokio::time::interval(ctx.bind_check_every);
+    let mut watch = bind::BindWatch::default();
     check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         while conns.try_join_next().is_some() {}
         tokio::select! {
             _ = &mut stop => break,
-            _ = check.tick() => if !bound_ip_ok(&ctx, bound) { break },
+            _ = check.tick() => if !bound_ip_ok(&ctx, bound, &mut watch) { break },
             accepted = listener.accept() => {
                 let Ok((tcp, peer)) = accepted else { continue };
                 // Allowlisted callers and outsiders have separate budgets;

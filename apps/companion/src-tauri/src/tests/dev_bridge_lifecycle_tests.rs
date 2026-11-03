@@ -240,3 +240,46 @@ fn tls_key_file_is_owner_only() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn serve_runs_the_bound_ip_check_and_reports_why_it_closed() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let dir = super::temp_dir("bridge-bind-watch");
+    let (calls, gone) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (c, g) = (calls.clone(), gone.clone());
+    // The first probe fails (a blip), later ones pass until `gone` is set.
+    let probe =
+        Arc::new(move |_| c.fetch_add(1, Ordering::SeqCst) != 0 && !g.load(Ordering::SeqCst));
+    let ctx = ServerCtx::with_bind_probe(probe, Duration::from_millis(20));
+    let bridge = DevBridge::with_ctx(dir.join(TLS_FILE), ctx);
+    bridge
+        .listen(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("listen");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        calls.load(Ordering::SeqCst) >= 3,
+        "serve never ran the probe"
+    );
+    assert!(
+        bridge.listening_addr().await.is_some(),
+        "closed after a single failed probe"
+    );
+    gone.store(true, Ordering::SeqCst);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while bridge.listening_addr().await.is_some() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let status = bridge.status().await;
+    assert_eq!(status.listening, None, "still listening after the IP left");
+    let why = status.error.unwrap_or_default();
+    assert!(
+        why.contains("no longer an address"),
+        "status error: {why:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

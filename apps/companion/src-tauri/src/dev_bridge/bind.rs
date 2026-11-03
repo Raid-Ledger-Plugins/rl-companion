@@ -90,6 +90,24 @@ pub fn ip_is_local(ip: Ipv4Addr) -> bool {
     UdpSocket::bind((ip, 0)).is_ok()
 }
 
+/// Consecutive failed bound-IP probes before the listener closes itself: one
+/// miss (resume from sleep, a Wi-Fi roam) is re-checked on the next tick.
+pub const BIND_FAILS_TO_CLOSE: u8 = 2;
+
+/// Counts consecutive failed bound-IP probes.
+#[derive(Debug, Default)]
+pub struct BindWatch {
+    fails: u8,
+}
+
+impl BindWatch {
+    /// Record one probe; `false` once the listener should close.
+    pub fn observe(&mut self, ok: bool) -> bool {
+        self.fails = if ok { 0 } else { self.fails.saturating_add(1) };
+        self.fails < BIND_FAILS_TO_CLOSE
+    }
+}
+
 /// The spec §7 fallback rule: keep listening on `ip` only while `is_local`
 /// says this PC still has it; otherwise the reason the listener closed.
 pub fn bound_ip_check(ip: Ipv4Addr, is_local: impl Fn(Ipv4Addr) -> bool) -> Result<(), String> {
