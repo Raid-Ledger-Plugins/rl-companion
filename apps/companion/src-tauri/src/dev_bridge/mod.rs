@@ -56,7 +56,9 @@ pub fn desired(cfg: &DevBridgeConfig) -> Result<Option<SocketAddrV4>, String> {
         return Err("Create a token to start the bridge".into());
     }
     let ip = cfg.bind_ip.as_deref().ok_or("Pick a network address")?;
-    bind::bind_addr(ip, cfg.port).map(Some).map_err(|e| e.to_string())
+    bind::bind_addr(ip, cfg.port)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 pub fn snapshot(cfg: &AppConfig) -> Snapshot {
@@ -92,7 +94,10 @@ impl DevBridge {
         match desired(&cfg.dev_bridge) {
             Ok(Some(addr)) => match self.listen(addr).await {
                 Ok(()) => self.status().await,
-                Err(e) => ListenerStatus { error: Some(e), ..Default::default() },
+                Err(e) => ListenerStatus {
+                    error: Some(e),
+                    ..Default::default()
+                },
             },
             Ok(None) => {
                 self.stop().await;
@@ -100,7 +105,10 @@ impl DevBridge {
             }
             Err(e) => {
                 self.stop().await;
-                ListenerStatus { error: Some(e), ..Default::default() }
+                ListenerStatus {
+                    error: Some(e),
+                    ..Default::default()
+                }
             }
         }
     }
@@ -119,15 +127,24 @@ impl DevBridge {
         let acceptor = material.acceptor()?;
         let std_listener = std::net::TcpListener::bind(addr)
             .map_err(|e| format!("could not listen on {addr}: {e}"))?;
-        std_listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        std_listener
+            .set_nonblocking(true)
+            .map_err(|e| e.to_string())?;
         let bound = match std_listener.local_addr() {
             Ok(std::net::SocketAddr::V4(a)) => a,
             _ => addr,
         };
-        let listener = tokio::net::TcpListener::from_std(std_listener).map_err(|e| e.to_string())?;
+        let listener =
+            tokio::net::TcpListener::from_std(std_listener).map_err(|e| e.to_string())?;
         let (stop, rx) = oneshot::channel();
         let task = tokio::spawn(server::serve(listener, acceptor, self.ctx.clone(), rx));
-        *running = Some(Running { requested: addr, bound, fingerprint: material.fingerprint(), stop, task });
+        *running = Some(Running {
+            requested: addr,
+            bound,
+            fingerprint: material.fingerprint(),
+            stop,
+            task,
+        });
         Ok(())
     }
 

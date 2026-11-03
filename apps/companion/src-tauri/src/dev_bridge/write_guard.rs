@@ -52,14 +52,20 @@ pub fn assert_allowed(wow_dir: &Path, target: &Path) -> Result<(), WriteGuardErr
         && parts[1] == "Interface"
         && parts[2] == "AddOns"
         && parts[3] == PROBE_ADDON;
-    if ok { Ok(()) } else { Err(outside()) }
+    if ok {
+        Ok(())
+    } else {
+        Err(outside())
+    }
 }
 
 /// Write `bytes` to `target` atomically (temp file + rename), after
 /// [`assert_allowed`] and a symlink check on the resolved parent folder.
 pub fn guarded_write(wow_dir: &Path, target: &Path, bytes: &[u8]) -> Result<(), WriteGuardError> {
     assert_allowed(wow_dir, target)?;
-    let parent = target.parent().ok_or_else(|| WriteGuardError::Outside(target.into()))?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| WriteGuardError::Outside(target.into()))?;
     std::fs::create_dir_all(parent)?;
     let real_parent = std::fs::canonicalize(parent)?;
     let real_root = std::fs::canonicalize(wow_dir)?;

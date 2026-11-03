@@ -52,7 +52,9 @@ fn io(e: std::io::Error) -> String {
 }
 
 pub fn apply_enabled(shared: &Shared, on: bool) -> Result<AppConfig, String> {
-    shared.update_config(|c| c.dev_bridge.enabled = on).map_err(io)
+    shared
+        .update_config(|c| c.dev_bridge.enabled = on)
+        .map_err(io)
 }
 
 /// "Allow probes" can only be on while the bridge is.
@@ -60,7 +62,9 @@ pub fn apply_probes_enabled(shared: &Shared, on: bool) -> Result<AppConfig, Stri
     if on && !shared.config().dev_bridge.enabled {
         return Err("Turn on the Developer bridge first".into());
     }
-    shared.update_config(|c| c.dev_bridge.probes_enabled = on).map_err(io)
+    shared
+        .update_config(|c| c.dev_bridge.probes_enabled = on)
+        .map_err(io)
 }
 
 pub fn apply_bind(shared: &Shared, ip: &str, port: u16) -> Result<AppConfig, String> {
@@ -79,12 +83,16 @@ pub fn apply_allowlist(shared: &Shared, ips: &[String]) -> Result<AppConfig, Str
     }
     let mut clean: Vec<String> = Vec::new();
     for raw in ips {
-        let ip = check_caller(raw).map_err(|e| format!("{raw}: {e}"))?.to_string();
+        let ip = check_caller(raw)
+            .map_err(|e| format!("{raw}: {e}"))?
+            .to_string();
         if !clean.contains(&ip) {
             clean.push(ip);
         }
     }
-    shared.update_config(|c| c.dev_bridge.allowlist = clean).map_err(io)
+    shared
+        .update_config(|c| c.dev_bridge.allowlist = clean)
+        .map_err(io)
 }
 
 /// Mint a token, store only its hash; the previous token stops working at
@@ -106,38 +114,63 @@ async fn settle(bridge: &DevBridge, cfg: AppConfig) -> DevBridgeStatusDto {
 }
 
 #[tauri::command]
-pub async fn get_dev_bridge_status(shared: State<'_, Shared>, bridge: Bridge<'_>) -> Result<DevBridgeStatusDto, String> {
+pub async fn get_dev_bridge_status(
+    shared: State<'_, Shared>,
+    bridge: Bridge<'_>,
+) -> Result<DevBridgeStatusDto, String> {
     Ok(settle(&bridge, shared.config()).await)
 }
 
 #[tauri::command]
-pub async fn set_dev_bridge_enabled(shared: State<'_, Shared>, bridge: Bridge<'_>, enabled: bool) -> Result<DevBridgeStatusDto, String> {
+pub async fn set_dev_bridge_enabled(
+    shared: State<'_, Shared>,
+    bridge: Bridge<'_>,
+    enabled: bool,
+) -> Result<DevBridgeStatusDto, String> {
     let cfg = apply_enabled(&shared, enabled)?;
     Ok(settle(&bridge, cfg).await)
 }
 
 #[tauri::command]
-pub async fn set_dev_bridge_probes_enabled(shared: State<'_, Shared>, bridge: Bridge<'_>, enabled: bool) -> Result<DevBridgeStatusDto, String> {
+pub async fn set_dev_bridge_probes_enabled(
+    shared: State<'_, Shared>,
+    bridge: Bridge<'_>,
+    enabled: bool,
+) -> Result<DevBridgeStatusDto, String> {
     let cfg = apply_probes_enabled(&shared, enabled)?;
     Ok(settle(&bridge, cfg).await)
 }
 
 #[tauri::command]
-pub async fn set_dev_bridge_bind(shared: State<'_, Shared>, bridge: Bridge<'_>, ip: String, port: u16) -> Result<DevBridgeStatusDto, String> {
+pub async fn set_dev_bridge_bind(
+    shared: State<'_, Shared>,
+    bridge: Bridge<'_>,
+    ip: String,
+    port: u16,
+) -> Result<DevBridgeStatusDto, String> {
     let cfg = apply_bind(&shared, &ip, port)?;
     Ok(settle(&bridge, cfg).await)
 }
 
 #[tauri::command]
-pub async fn set_dev_bridge_allowlist(shared: State<'_, Shared>, bridge: Bridge<'_>, ips: Vec<String>) -> Result<DevBridgeStatusDto, String> {
+pub async fn set_dev_bridge_allowlist(
+    shared: State<'_, Shared>,
+    bridge: Bridge<'_>,
+    ips: Vec<String>,
+) -> Result<DevBridgeStatusDto, String> {
     let cfg = apply_allowlist(&shared, &ips)?;
     Ok(settle(&bridge, cfg).await)
 }
 
 /// Create or Rotate. The window shows `token` once with a Copy button.
 #[tauri::command]
-pub async fn rotate_dev_bridge_token(shared: State<'_, Shared>, bridge: Bridge<'_>) -> Result<DevTokenDto, String> {
+pub async fn rotate_dev_bridge_token(
+    shared: State<'_, Shared>,
+    bridge: Bridge<'_>,
+) -> Result<DevTokenDto, String> {
     let (token, cfg) = apply_rotate(&shared)?;
     bridge.reconcile(&cfg).await;
-    Ok(DevTokenDto { token: token.expose().to_owned() })
+    Ok(DevTokenDto {
+        token: token.expose().to_owned(),
+    })
 }

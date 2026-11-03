@@ -48,11 +48,20 @@ impl ServerCtx {
     }
 
     fn snapshot(&self) -> Snapshot {
-        self.snapshot.read().unwrap_or_else(|p| p.into_inner()).clone()
+        self.snapshot
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Admission + routing for one request: `(status, JSON body)`.
-    pub fn route(&self, peer: IpAddr, method: &Method, path: &str, auth: Option<&str>) -> (u16, Value) {
+    pub fn route(
+        &self,
+        peer: IpAddr,
+        method: &Method,
+        path: &str,
+        auth: Option<&str>,
+    ) -> (u16, Value) {
         let snap = self.snapshot();
         let IpAddr::V4(ip) = peer else {
             return (403, json!({ "error": "forbidden" }));
@@ -107,7 +116,12 @@ fn respond(ctx: &ServerCtx, peer: SocketAddr, req: &Request<Incoming>) -> Respon
     res
 }
 
-async fn serve_conn(ctx: Arc<ServerCtx>, acceptor: TlsAcceptor, tcp: tokio::net::TcpStream, peer: SocketAddr) {
+async fn serve_conn(
+    ctx: Arc<ServerCtx>,
+    acceptor: TlsAcceptor,
+    tcp: tokio::net::TcpStream,
+    peer: SocketAddr,
+) {
     let Ok(Ok(tls)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await else {
         return;
     };

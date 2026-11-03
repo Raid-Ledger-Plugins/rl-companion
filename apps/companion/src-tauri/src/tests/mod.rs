@@ -8,6 +8,8 @@ mod collector_tests;
 mod collector_view_tests;
 mod config_tests;
 mod covers_tests;
+mod dev_bridge_server_tests;
+mod dev_bridge_unit_tests;
 mod gate_tests;
 mod link_tests;
 mod poll_tests;

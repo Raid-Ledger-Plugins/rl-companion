@@ -64,7 +64,10 @@ impl TlsMaterial {
     pub fn fingerprint(&self) -> String {
         use sha2::{Digest, Sha256};
         let der = self.cert().unwrap_or_default();
-        Sha256::digest(der).iter().map(|b| format!("{b:02x}")).collect()
+        Sha256::digest(der)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 
     pub fn acceptor(&self) -> Result<TlsAcceptor, String> {

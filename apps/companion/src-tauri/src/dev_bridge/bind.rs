@@ -63,7 +63,10 @@ pub fn check_caller(raw: &str) -> Result<Ipv4Addr, BindError> {
 
 /// Parse an allowlist, dropping entries that no longer validate.
 pub fn parse_allowlist(entries: &[String]) -> Vec<Ipv4Addr> {
-    entries.iter().filter_map(|e| check_caller(e).ok()).collect()
+    entries
+        .iter()
+        .filter_map(|e| check_caller(e).ok())
+        .collect()
 }
 
 /// This PC's private IPv4 for the panel's dropdown. Without an interface

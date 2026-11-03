@@ -16,8 +16,8 @@ pub struct HealthInput<'a> {
 
 pub fn health(input: &HealthInput<'_>) -> Value {
     let dir = input.wow_dir.trim();
-    let wow_dir = (!dir.is_empty() && dir.chars().count() <= MAX_WOW_DIR)
-        .then(|| dir.replace('\\', "/"));
+    let wow_dir =
+        (!dir.is_empty() && dir.chars().count() <= MAX_WOW_DIR).then(|| dir.replace('\\', "/"));
     let flavors = if dir.is_empty() {
         Vec::new()
     } else {
