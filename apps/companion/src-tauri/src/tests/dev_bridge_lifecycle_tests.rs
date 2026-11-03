@@ -262,12 +262,12 @@ async fn serve_runs_the_bound_ip_check_and_reports_why_it_closed() {
         .expect("listen");
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(
-        calls.load(Ordering::SeqCst) >= 3,
-        "serve never ran the probe"
-    );
-    assert!(
         bridge.listening_addr().await.is_some(),
         "closed after a single failed probe"
+    );
+    assert!(
+        calls.load(Ordering::SeqCst) >= 3,
+        "serve never ran the probe"
     );
     gone.store(true, Ordering::SeqCst);
     let deadline = Instant::now() + Duration::from_secs(3);
