@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
@@ -42,6 +43,11 @@ pub struct SnapshotCache {
     lock: Mutex<()>,
     /// Last-read mtime per `LedgerLink.lua`, so an unchanged file is not re-parsed.
     mtimes: Mutex<HashMap<PathBuf, SystemTime>>,
+    /// The mtime of each `LedgerLink.lua` whose last read failed to parse, so
+    /// a file that never parses warns once per (path, mtime), not every tick.
+    failed: Mutex<HashMap<PathBuf, Option<SystemTime>>>,
+    /// How many "read failed" warnings this cache has logged.
+    read_warns: AtomicUsize,
 }
 
 /// `characterKey`: the same hash `sv-parsed` reports as `guidHash`.
@@ -158,7 +164,27 @@ impl SnapshotCache {
             root,
             lock: Mutex::new(()),
             mtimes: Mutex::new(HashMap::new()),
+            failed: Mutex::new(HashMap::new()),
+            read_warns: AtomicUsize::new(0),
         }
+    }
+
+    /// How many "dev snapshot read failed" warnings this cache has logged.
+    pub fn read_warns(&self) -> usize {
+        self.read_warns.load(Ordering::Relaxed)
+    }
+
+    /// Warn about an unparsable file once per (path, mtime): a file that
+    /// never parses is still re-read every tick but logs only when it changes.
+    fn warn_read_failed(&self, path: &Path, mtime: Option<SystemTime>, e: &dyn std::fmt::Display) {
+        let mut f = self.failed.lock().unwrap_or_else(|p| p.into_inner());
+        if f.insert(path.to_path_buf(), mtime) == Some(mtime) {
+            return;
+        }
+        drop(f);
+        self.read_warns.fetch_add(1, Ordering::Relaxed);
+        let msg = format!("dev snapshot read failed: {e}");
+        logbuf::log("warn", "dev_bridge", &msg);
     }
 
     pub fn root(&self) -> &Path {
@@ -277,15 +303,15 @@ impl SnapshotCache {
                     let mut m = self.mtimes.lock().unwrap_or_else(|p| p.into_inner());
                     m.insert(path.to_path_buf(), t);
                 }
+                self.failed
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .remove(path);
                 log_skipped(&d.skipped);
                 self.ingest(flavor, &d.entries, now)
             }
             Err(e) => {
-                logbuf::log(
-                    "warn",
-                    "dev_bridge",
-                    &format!("dev snapshot read failed: {e}"),
-                );
+                self.warn_read_failed(path, mtime, &e);
                 0
             }
         }

@@ -108,6 +108,44 @@ fn a_file_that_failed_to_parse_is_retried_at_the_same_mtime() {
     );
 }
 
+#[test]
+fn an_unparsable_file_warns_once_per_mtime() {
+    let dir = temp_dir("snap-read-warn-once");
+    let wow = dir.join("wow");
+    let cache = SnapshotCache::new(dir.join("cache"));
+    let t0 = SystemTime::now() - Duration::from_secs(60);
+    write_sv(&wow, &variant(1), t0);
+    let path = wow
+        .join(FLAVOR)
+        .join("WTF/Account/ACCT1/SavedVariables/LedgerLink.lua");
+    let full = std::fs::read(&path).expect("read sv");
+    let truncate = |at: SystemTime| {
+        std::fs::write(&path, &full[..full.len() / 2]).expect("truncate");
+        let f = std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("open");
+        f.set_modified(at).expect("set mtime");
+    };
+    truncate(t0);
+    for _ in 0..3 {
+        assert_eq!(cache.ingest_file(FLAVOR, &path, 1_793_000_000), 0);
+    }
+    assert_eq!(
+        cache.read_warns(),
+        1,
+        "three reads of one unparsable (path, mtime) must warn once"
+    );
+
+    truncate(t0 + Duration::from_secs(5));
+    assert_eq!(cache.ingest_file(FLAVOR, &path, 1_793_000_000), 0);
+    assert_eq!(
+        cache.read_warns(),
+        2,
+        "a new mtime that still fails warns again"
+    );
+}
+
 #[tokio::test]
 async fn the_poll_ingests_a_changed_saved_variables_file() {
     let dir = temp_dir("snap-poll-change");
