@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { hosts, must, text, type Host } from "../test/elements";
 import { bg3Tile, tile, wowTile } from "../test/fixtures";
-import { GameTiles, type GameTilesProps } from "./GameTiles";
+import css from "../styles.css?raw";
+import { Cover, GameTiles, type GameTilesProps } from "./GameTiles";
 
 const notOnServer = tile({ id: "bg3-save", state: "not_on_server", chip: "Not on this server", line: "Not supported on this server" });
 const tooOld = tile({
@@ -82,3 +83,35 @@ describe("GameTiles — one portrait card per game", () => {
     expect(stale).toMatch(/<span class="muted small">Last checked [^<]+<\/span>/);
   });
 });
+
+describe("Cover — a cover that fails to load shows the fallback art", () => {
+  it("an error event on the img hides it and uncovers the gradient + initials", () => {
+    const els = hosts(<Cover tile={wowTile} />);
+    const img = must(els.find((e) => e.type === "img"), "cover img");
+    const fallback = must(els.find((e) => e.props.className === "cover fallback"), "fallback");
+    expect(text(fallback)).toBe(wowTile.initials);
+    // The fallback sits right after the img, hidden only while the img is not.
+    expect(els.indexOf(fallback)).toBe(els.indexOf(img) + 1);
+    expect(css).toContain("img.cover:not([hidden]) + .fallback");
+    const el = { hidden: false };
+    (img.props.onError as (e: { currentTarget: typeof el }) => void)({ currentTarget: el });
+    expect(el.hidden, "the broken cover is still shown").toBe(true);
+  });
+
+  it("each cover src gets its own img, so a new cover is shown again", () => {
+    const a = renderedImg(wowTile.cover);
+    const b = renderedImg("data:image/png;base64,BB==");
+    expect(a.key).toBe(wowTile.cover);
+    expect(b.key).not.toBe(a.key);
+  });
+
+  it("no cover or a fallback tile: only the gradient, no img", () => {
+    const html = renderToStaticMarkup(<Cover tile={{ ...wowTile, cover: null }} />);
+    expect(html).not.toContain("<img");
+    expect(html).toContain('class="cover fallback"');
+  });
+});
+
+function renderedImg(cover: string | null) {
+  return must(hosts(<Cover tile={{ ...wowTile, cover }} />).find((e) => e.type === "img"), "img");
+}

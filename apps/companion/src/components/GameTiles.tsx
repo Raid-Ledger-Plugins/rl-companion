@@ -9,14 +9,30 @@ export const TILE_CLASS: Record<TileState, string> = {
   app_too_old: "off old",
 };
 
+/**
+ * A cover that fails to decode (a corrupt file with an accepted MIME type)
+ * hides itself, which uncovers the fallback drawn after it (styles.css:
+ * `img.cover:not([hidden]) + .fallback`). The `key` gives each src a fresh
+ * element, so the hidden state sticks to the src that failed and resets when
+ * the cover changes. No hook: the tile tree stays renderable without a DOM.
+ */
+export function hideBrokenCover(e: { currentTarget: { hidden: boolean } }) {
+  e.currentTarget.hidden = true;
+}
+
 /** The game's art: the cached cover, or the gradient + initials fallback (D14). */
 export function Cover({ tile }: { tile: Tile }) {
-  return tile.cover && !tile.fallback ? (
-    <img className="cover" src={tile.cover} alt="" />
-  ) : (
+  const fallback = (
     <span className="cover fallback" aria-hidden="true">
       <span className="initials">{tile.initials}</span>
     </span>
+  );
+  if (!tile.cover || tile.fallback) return fallback;
+  return (
+    <>
+      <img key={tile.cover} className="cover" src={tile.cover} alt="" onError={hideBrokenCover} />
+      {fallback}
+    </>
   );
 }
 
