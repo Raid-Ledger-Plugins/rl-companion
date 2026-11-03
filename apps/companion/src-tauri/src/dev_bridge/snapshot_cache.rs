@@ -183,6 +183,9 @@ impl SnapshotCache {
     /// Validate + merge `entries` (one file's `dev.snapshots`) into the
     /// cache. Returns how many files changed; prunes when any did.
     pub fn ingest(&self, flavor: &str, entries: &[DevSnapshotEntry], now: i64) -> usize {
+        if !super::health::is_flavor(flavor) {
+            return 0;
+        }
         let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
         let mut changed = 0;
         for e in entries {
