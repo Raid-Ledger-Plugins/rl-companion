@@ -86,7 +86,7 @@ pub fn decode_fit(bytes: &[u8], max_edge: u32) -> Result<RgbImage, String> {
     let need = pipeline_bytes((w, h), color, max_edge);
     if need > PIPELINE_BUDGET {
         return Err(format!(
-            "{w}x{h} {color:?} needs {need} bytes to decode, over the {PIPELINE_BUDGET}-byte memory budget"
+            "{w}x{h} {color:?} needs {need} bytes to decode, over the {PIPELINE_BUDGET}-byte memory budget (decode limit)"
         ));
     }
     let img =
