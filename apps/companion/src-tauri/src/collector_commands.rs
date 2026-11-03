@@ -183,7 +183,7 @@ pub fn skip_first_upload(
     if n > 0 {
         rt.log_for(
             m.id,
-            format!("{}: skipped {n} save(s), nothing uploaded", m.display_name),
+            format!("{}: skipped {n} item(s), nothing uploaded", m.display_name),
         );
     }
     rt.kick();
