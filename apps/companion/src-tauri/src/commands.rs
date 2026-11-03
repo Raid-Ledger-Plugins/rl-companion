@@ -129,10 +129,10 @@ pub fn set_server_url(
             c.server_url = url;
         })
         .map_err(s)?;
-    if changed {
-        app.state::<Arc<Runtime>>().server_changed();
-    }
     let linked = state.token().map_err(s)?.is_some();
+    if changed {
+        app.state::<Arc<Runtime>>().server_changed(linked);
+    }
     tray::set_status(&app, if linked { "Linked" } else { "Not linked" });
     Ok(cfg.server_url)
 }

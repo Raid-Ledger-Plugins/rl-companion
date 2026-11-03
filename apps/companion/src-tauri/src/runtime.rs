@@ -309,9 +309,14 @@ impl Runtime {
     }
 
     /// The server URL changed: forget the old server's reachability and
-    /// covers and fetch the new one's `/config` now (ROK-2067 D5).
-    pub fn server_changed(&self) {
-        self.lock().server.reset();
+    /// covers, take the new server's link state (`linked` = it has a token)
+    /// without waiting for a scan, and fetch its `/config` now (ROK-2067 D5).
+    pub fn server_changed(&self, linked: bool) {
+        let mut inner = self.lock();
+        inner.server.reset();
+        inner.linked = Ok(linked);
+        inner.relink = false;
+        drop(inner);
         self.config_kick.notify_one();
     }
 

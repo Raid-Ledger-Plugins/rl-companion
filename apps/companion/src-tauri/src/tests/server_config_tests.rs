@@ -142,7 +142,7 @@ async fn a_server_change_forgets_the_old_covers_and_wakes_the_config_task() {
         s.reachable = Some(true);
         s.covers.insert("bg3-save".into(), Some("data:old".into()));
     });
-    rt.server_changed();
+    rt.server_changed(true);
     let s = rt.server();
     assert_eq!(
         (s.reachable, s.covers.len()),
@@ -297,7 +297,7 @@ fn one_cover(url: &str) -> std::collections::BTreeMap<String, Option<String>> {
 fn a_refresh_for_the_old_server_does_not_overwrite_the_reset_state() {
     let rt = crate::runtime::Runtime::new(super::temp_dir("stale-refresh").join("s.json"));
     let old = rt.update_server(ServerState::begin_refresh);
-    rt.server_changed();
+    rt.server_changed(true);
     let stored = rt.update_server(|s| s.publish(old, Some(true), one_cover("data:old")));
     let s = rt.server();
     assert_eq!(
@@ -323,5 +323,35 @@ fn an_older_concurrent_refresh_does_not_overwrite_a_newer_one() {
         ),
         (false, Some(true), Some("data:new".to_owned())),
         "the older refresh overwrote the newer one"
+    );
+}
+
+#[test]
+fn a_server_switch_takes_the_new_servers_link_state_at_once() {
+    let rt = crate::runtime::Runtime::new(super::temp_dir("switch-linked").join("s.json"));
+    let cfg = AppConfig::default();
+    let tile = |rt: &crate::runtime::Runtime| {
+        let s = rt.snapshot(&cfg);
+        let line = s
+            .tiles
+            .iter()
+            .find(|t| t.id == "bg3-save")
+            .map(|t| t.line.clone());
+        (s.relink, line.unwrap_or_default())
+    };
+    // Linked to the old server; switch to one with no token.
+    rt.server_changed(false);
+    let (relink, line) = tile(&rt);
+    assert!(
+        !relink && line.starts_with("Link this device"),
+        "no token on the new server: relink {relink}, tile line {line:?}"
+    );
+    // A 401 on the old server must not ask to re-link on the new one.
+    rt.config_unauthorized();
+    rt.server_changed(true);
+    let (relink, line) = tile(&rt);
+    assert!(
+        !relink && !line.starts_with("Link this device"),
+        "token on the new server: relink {relink}, tile line {line:?}"
     );
 }
