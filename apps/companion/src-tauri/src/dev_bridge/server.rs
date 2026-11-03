@@ -3,6 +3,9 @@
 
 use super::auth::{admit, AuthPolicy, Lockout};
 use super::health::{health, HealthInput};
+use super::logbuf::{self, LogBuffer};
+use super::paging::parse_query;
+use super::routes::{self, CollectorsFn};
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response};
@@ -30,6 +33,8 @@ pub struct ServerCtx {
     snapshot: RwLock<Snapshot>,
     lockout: Mutex<Lockout>,
     started: Instant,
+    collectors: RwLock<Option<CollectorsFn>>,
+    logs: Option<&'static LogBuffer>,
 }
 
 impl Default for ServerCtx {
@@ -38,6 +43,8 @@ impl Default for ServerCtx {
             snapshot: RwLock::new(Snapshot::default()),
             lockout: Mutex::new(Lockout::default()),
             started: Instant::now(),
+            collectors: RwLock::new(None),
+            logs: None,
         }
     }
 }
@@ -45,6 +52,18 @@ impl Default for ServerCtx {
 impl ServerCtx {
     pub fn set_snapshot(&self, s: Snapshot) {
         *self.snapshot.write().unwrap_or_else(|p| p.into_inner()) = s;
+    }
+
+    pub fn set_collectors(&self, f: CollectorsFn) {
+        *self.collectors.write().unwrap_or_else(|p| p.into_inner()) = Some(f);
+    }
+
+    /// Serve `/dev/v1/logs` from `logs` instead of the process-wide buffer.
+    pub fn with_logs(logs: &'static LogBuffer) -> Self {
+        Self {
+            logs: Some(logs),
+            ..Self::default()
+        }
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -60,6 +79,7 @@ impl ServerCtx {
         peer: IpAddr,
         method: &Method,
         path: &str,
+        query: Option<&str>,
         auth: Option<&str>,
     ) -> (u16, Value) {
         let snap = self.snapshot();
@@ -75,6 +95,16 @@ impl ServerCtx {
         }
         match (method, path) {
             (&Method::GET, "/dev/v1/health") => (200, self.health(&snap)),
+            (&Method::GET, _) => {
+                let collectors = self
+                    .collectors
+                    .read()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                let logs = self.logs.unwrap_or_else(logbuf::global);
+                routes::get(&snap, path, &parse_query(query), collectors.as_ref(), logs)
+                    .unwrap_or_else(|| (404, json!({ "error": "not_found" })))
+            }
             _ => (404, json!({ "error": "not_found" })),
         }
     }
@@ -98,15 +128,17 @@ fn respond(ctx: &ServerCtx, peer: SocketAddr, req: &Request<Incoming>) -> Respon
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
     let path = req.uri().path();
-    let (status, body) = ctx.route(peer.ip(), req.method(), path, auth);
+    let (status, body) = ctx.route(peer.ip(), req.method(), path, req.uri().query(), auth);
     let bytes = serde_json::to_vec(&body).unwrap_or_default();
     // Audit line (spec §7): never headers, query or bodies.
-    eprintln!(
-        "RL Companion dev bridge: {} {} {path} {status} {}B",
-        peer.ip(),
+    let level = if status >= 400 { "warn" } else { "info" };
+    let line = format!(
+        "{} {path} {status} {}B from {}",
         req.method(),
-        bytes.len()
+        bytes.len(),
+        peer.ip()
     );
+    logbuf::log(level, "dev_bridge", &line);
     let mut res = Response::new(Full::new(Bytes::from(bytes)));
     *res.status_mut() = hyper::StatusCode::from_u16(status).unwrap_or_default();
     res.headers_mut().insert(

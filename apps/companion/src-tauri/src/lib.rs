@@ -69,14 +69,22 @@ pub fn run() {
                 config_dir.join(dev_bridge::TLS_FILE),
             ));
             app.manage(bridge.clone());
-            tauri::async_runtime::spawn(async move {
-                bridge.reconcile(&start_cfg).await;
-            });
             tray::build(app.handle())?;
+            let (tray_app, start_bridge) = (app.handle().clone(), bridge.clone());
+            tauri::async_runtime::spawn(async move {
+                let s = start_bridge.reconcile(&start_cfg).await;
+                tray::set_dev_bridge(&tray_app, s.listening.is_some());
+            });
             tray_promote::start(app.handle());
             let sent_path = app.path().app_data_dir()?.join(collector::SENT_STATE_FILE);
             let rt = Arc::new(runtime::Runtime::new(sent_path));
             app.manage(rt.clone());
+            let (src_app, src_rt) = (app.handle().clone(), rt.clone());
+            bridge.set_collectors_source(Arc::new(move || {
+                let paused = src_app.state::<state::Shared>().is_paused();
+                let status = runtime::status(&src_app, &src_rt);
+                dev_bridge::collectors::collectors_body(&status, paused)
+            }));
             let kick = rt.clone();
             app.listen(tray::UPLOAD_NOW_EVENT, move |_| kick.kick());
             runtime::start(app.handle().clone(), rt.clone());

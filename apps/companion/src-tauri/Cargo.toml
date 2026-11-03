@@ -49,6 +49,8 @@ sha2 = "0.10"
 subtle = "2"
 getrandom = "0.2"
 base64 = "0.22"
+# Log redaction (AC-7); already in the lock via jsonschema.
+regex = "1"
 
 # First-run tray promotion on Windows 11 (ROK-2065, tray_promote.rs).
 [target.'cfg(windows)'.dependencies]

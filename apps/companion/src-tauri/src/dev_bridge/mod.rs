@@ -4,12 +4,18 @@
 //! Off by default: with the toggle off no socket is opened (AC-2).
 //! [`DevBridge::reconcile`] is the only place the listener starts or stops.
 
+pub mod addons;
 pub mod auth;
 pub mod bind;
+pub mod collectors;
 pub mod commands;
 pub mod health;
+pub mod logbuf;
+pub mod paging;
+pub mod routes;
 pub mod server;
 pub mod settings;
+pub mod sv;
 pub mod tls;
 pub mod token;
 pub mod write_guard;
@@ -171,6 +177,24 @@ impl DevBridge {
     /// Refresh the served snapshot only (e.g. the WoW folder changed).
     pub fn refresh(&self, cfg: &AppConfig) {
         self.ctx.set_snapshot(snapshot(cfg));
+    }
+
+    /// Where `/dev/v1/collectors` reads the runtime's state from.
+    pub fn set_collectors_source(&self, f: routes::CollectorsFn) {
+        self.ctx.set_collectors(f);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ctx(&self) -> &ServerCtx {
+        &self.ctx
+    }
+}
+
+/// The WoW folder setting changed: serve the new folder at once (flavors,
+/// addons, SavedVariables) without touching the listener.
+pub fn on_wow_dir_changed(bridge: Option<&DevBridge>, cfg: &AppConfig) {
+    if let Some(b) = bridge {
+        b.refresh(cfg);
     }
 }
 

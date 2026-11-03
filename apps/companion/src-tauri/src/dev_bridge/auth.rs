@@ -112,7 +112,11 @@ pub fn admit(
         return Ok(());
     }
     if lockout.record_failure(ip, now) {
-        eprintln!("RL Companion dev bridge: {ip} locked out for 5 minutes after {MAX_FAILS} failed sign-ins");
+        super::logbuf::log(
+            "warn",
+            "dev_bridge::auth",
+            &format!("{ip} locked out for 5 minutes after {MAX_FAILS} failed sign-ins"),
+        );
     }
     Err(Denial::Unauthorized)
 }
