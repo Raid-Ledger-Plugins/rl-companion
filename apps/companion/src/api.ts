@@ -157,6 +157,26 @@ export interface CollectorRow {
 
 export const LEDGERLINK_ID = "wow-ledgerlink";
 export const BG3_ID = "bg3-save";
+export const BG3_SCREENSHOT_ID = "bg3-screenshot";
+
+/** A hub BG3 screenshots may go to (ROK-1966). */
+export interface HubTarget {
+  hubGuildId: number;
+  name: string;
+  /** The hub of the user's latest save (the picker's default). */
+  isDefault: boolean;
+}
+
+/** The BG3 screenshot hub picker's state (`get_bg3_screenshot_hubs`). */
+export interface Bg3ScreenshotHubs {
+  targets: HubTarget[];
+  /** `false` when the server sent no hub list (an older server). */
+  serverListsHubs: boolean;
+  /** The effective pick: the user's own, else the default; `null` = none. */
+  selected: number | null;
+  /** New screenshots held back for want of a hub. */
+  waiting: number;
+}
 
 export const getCollectorStatus = () => invoke<CollectorStatus>("get_collector_status");
 export const setWowDir = (dir: string) => invoke<CollectorStatus>("set_wow_dir", { dir });
@@ -172,6 +192,9 @@ export const confirmFirstUpload = (id: string) => invoke<CollectorStatus>("confi
 export const skipFirstUpload = (id: string) => invoke<CollectorStatus>("skip_first_upload", { id });
 export const setBg3Campaign = (key: string, ticked: boolean) =>
   invoke<CollectorStatus>("set_bg3_campaign", { key, ticked });
+export const getBg3ScreenshotHubs = () => invoke<Bg3ScreenshotHubs>("get_bg3_screenshot_hubs");
+export const setBg3ScreenshotHub = (hubGuildId: number | null) =>
+  invoke<Bg3ScreenshotHubs>("set_bg3_screenshot_hub", { hubGuildId });
 export const uploadNow = () => invoke<void>("upload_now");
 export const refreshServerConfig = () => invoke<CollectorStatus>("refresh_server_config");
 

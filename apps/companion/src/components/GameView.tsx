@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
-import { BG3_ID, LEDGERLINK_ID, type CollectorRow, type CollectorStatus } from "../api";
+import { BG3_ID, BG3_SCREENSHOT_ID, LEDGERLINK_ID, type Bg3ScreenshotHubs, type CollectorRow, type CollectorStatus } from "../api";
 import { CollectorPanel, type CollectorPanelProps } from "./CollectorPanel";
 import { Cover } from "./GameTiles";
 import { Bg3CampaignPicker } from "./Bg3CampaignPicker";
+import { Bg3ScreenshotHubPicker } from "./Bg3ScreenshotHubPicker";
 import { GameCollectorPanel, type GameCollectorPanelProps } from "./GameCollectorPanel";
 
 type Own = "status" | "row" | "results" | "log" | "belowToggle";
@@ -10,6 +11,10 @@ export type WowHandlers = Omit<CollectorPanelProps, Own>;
 export type GameHandlers = Omit<GameCollectorPanelProps, Own> & {
   /** BG3 only: tick or untick one campaign in the picker (D15). */
   onCampaign?: (key: string, ticked: boolean) => void;
+  /** BG3 screenshots only: the hub picker's state; `null` until loaded (Q3). */
+  screenshotHubs?: Bg3ScreenshotHubs | null;
+  /** BG3 screenshots only: pick the hub they go to. */
+  onScreenshotHub?: (hubGuildId: number | null) => void;
 };
 
 export interface GameViewProps {
@@ -22,12 +27,22 @@ export interface GameViewProps {
 
 type GamePanelProps = Pick<GameCollectorPanelProps, "row" | "results" | "log"> & Pick<GameViewProps, "game">;
 
-/** A non-WoW game's panel; BG3 gets the campaign picker below its toggle (D15). */
+/** The slot below a game's toggle: BG3's campaign picker (D15), BG3 screenshots' hub picker (Q3). */
+function belowToggle(row: CollectorRow, h: GameHandlers): ReactNode {
+  if (row.id === BG3_ID) {
+    return <Bg3CampaignPicker campaigns={row.campaigns} enabled={row.enabled} onTick={h.onCampaign ?? (() => undefined)} />;
+  }
+  if (row.id === BG3_SCREENSHOT_ID) {
+    return <Bg3ScreenshotHubPicker hubs={h.screenshotHubs ?? null} onPick={h.onScreenshotHub ?? (() => undefined)} />;
+  }
+  return null;
+}
+
+/** A non-WoW game's panel, with its game-specific picker below the toggle. */
 function GamePanel({ row, results, log, game }: GamePanelProps) {
-  const { onCampaign, ...handlers } = game(row);
-  const picker = row.id === BG3_ID
-    ? <Bg3CampaignPicker campaigns={row.campaigns} enabled={row.enabled} onTick={onCampaign ?? (() => undefined)} />
-    : null;
+  const h = game(row);
+  const { onCampaign, screenshotHubs, onScreenshotHub, ...handlers } = h;
+  const picker = belowToggle(row, h);
   return <GameCollectorPanel row={row} results={results} log={log} belowToggle={picker} {...handlers} />;
 }
 

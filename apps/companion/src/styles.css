@@ -44,7 +44,7 @@ section { background: var(--panel); border: 1px solid var(--border); border-radi
 h1 { font-size: 18px; margin: 0; }
 h2 { font-size: 14px; margin: 0; color: var(--muted); font-weight: 600; }
 label { font-size: 13px; color: var(--muted); display: grid; gap: 4px; }
-input { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+input, select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
 button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }

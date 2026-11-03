@@ -49,6 +49,12 @@ export function Collector({ onError, ...nav }: CollectorProps) {
   const [status, setStatus] = useState<api.CollectorStatus | null>(null);
   const [drafts, setDrafts] = useState<Drafts>({ wowDir: "", roots: {} });
   const [saveErrors, setSaveErrors] = useState<Record<string, string | null>>({});
+  const [hubs, setHubs] = useState<api.Bg3ScreenshotHubs | null>(null);
+
+  /** The BG3 screenshot hub picker re-reads after every status change (Q3). */
+  const loadHubs = useCallback(() => {
+    api.getBg3ScreenshotHubs().then(setHubs).catch((e: unknown) => onError(message(e)));
+  }, [onError]);
 
   const apply = useCallback((s: api.CollectorStatus, reset: Reset) => {
     setStatus(s);
@@ -82,11 +88,15 @@ export function Collector({ onError, ...nav }: CollectorProps) {
 
   useEffect(() => {
     run("all", api.getCollectorStatus);
-    const unlisten = api.onCollectorStatus((s) => apply(s, "none"));
+    loadHubs();
+    const unlisten = api.onCollectorStatus((s) => {
+      apply(s, "none");
+      loadHubs();
+    });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [apply, run]);
+  }, [apply, run, loadHubs]);
 
   if (!status) return null;
   const ledgerlink: Reset = { panel: api.LEDGERLINK_ID };
@@ -108,6 +118,10 @@ export function Collector({ onError, ...nav }: CollectorProps) {
     onUpload: () => run({ panel: row.id }, () => api.confirmFirstUpload(row.id)),
     onSkip: () => run({ panel: row.id }, () => api.skipFirstUpload(row.id)),
     onCampaign: (key, ticked) => run("none", () => api.setBg3Campaign(key, ticked)),
+    screenshotHubs: hubs,
+    onScreenshotHub: (id) => {
+      api.setBg3ScreenshotHub(id).then(setHubs).catch((e: unknown) => onError(message(e)));
+    },
   });
   return <CollectorScreen status={status} {...nav} wow={wow} game={game} />;
 }
