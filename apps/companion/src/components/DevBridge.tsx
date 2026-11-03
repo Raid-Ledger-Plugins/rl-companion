@@ -57,6 +57,7 @@ export function DevBridge({ onError }: { onError: (message: string) => void }) {
       onSaveAllowlist={() => void apply(bridge.setDevBridgeAllowlist(bridge.parseAllowlist(drafts.allowlist)))}
       onRotate={() => void rotate()}
       onCopy={() => void navigator.clipboard.writeText(token ?? "")}
+      onCopyFingerprint={() => void navigator.clipboard.writeText(status.certFingerprint ?? "")}
       onDismissToken={() => setToken(null)}
     />
   );

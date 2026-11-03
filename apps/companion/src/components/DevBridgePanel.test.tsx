@@ -13,7 +13,7 @@ function props(over: Partial<DevBridgePanelProps> = {}): DevBridgePanelProps {
   return {
     status: OFF, drafts: { ip: "", port: "47655", allowlist: "" }, token: null,
     onDrafts: vi.fn(), onToggle: vi.fn(), onProbes: vi.fn(), onSaveBind: vi.fn(), onSaveAllowlist: vi.fn(),
-    onRotate: vi.fn(), onCopy: vi.fn(), onDismissToken: vi.fn(), ...over,
+    onRotate: vi.fn(), onCopy: vi.fn(), onCopyFingerprint: vi.fn(), onDismissToken: vi.fn(), ...over,
   };
 }
 const named = (els: Host[], name: string) => must(els.find((e) => e.props.name === name), name);
@@ -26,6 +26,11 @@ describe("DevBridgePanel", () => {
     expect(named(els, "bridge").props.checked).toBe(false);
     expect(named(els, "probes").props.disabled).toBe(true);
     expect(has(els, "ip") || has(els, "rotate")).toBe(false);
+  });
+
+  it("never shows a checked-but-disabled probes box while the bridge is off", () => {
+    const els = hosts(<DevBridgePanel {...props({ status: { ...OFF, probesEnabled: true } })} />);
+    expect(named(els, "probes").props.checked).toBe(false);
   });
 
   it("toggling calls onToggle with the new value", () => {
@@ -52,6 +57,15 @@ describe("DevBridgePanel", () => {
     expect(onCopy).toHaveBeenCalledOnce();
     const hidden = hosts(<DevBridgePanel {...props({ status: ON })} />);
     expect(hidden.some((e) => text(e).includes("rlcdev_"))).toBe(false);
+  });
+
+  it("shows the full certificate fingerprint with its own Copy button", () => {
+    const fp = "ab".repeat(32);
+    const onCopyFingerprint = vi.fn();
+    const els = hosts(<DevBridgePanel {...props({ status: { ...ON, certFingerprint: fp }, onCopyFingerprint })} />);
+    expect(els.some((e) => text(e) === fp)).toBe(true);
+    (named(els, "copy-fingerprint").props.onClick as () => void)();
+    expect(onCopyFingerprint).toHaveBeenCalledOnce();
   });
 
   it("parses the allowed-callers box", () => {

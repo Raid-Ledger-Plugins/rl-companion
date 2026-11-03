@@ -18,6 +18,7 @@ export interface DevBridgePanelProps {
   onSaveAllowlist: () => void;
   onRotate: () => void;
   onCopy: () => void;
+  onCopyFingerprint: () => void;
   onDismissToken: () => void;
 }
 
@@ -56,13 +57,17 @@ export function DevBridgePanel(p: DevBridgePanelProps) {
         {s.allowlist.length === 0 && <span className="muted">No callers yet — everyone is refused.</span>}
       </>}
       <label className="toggle">
-        <input type="checkbox" name="probes" checked={s.probesEnabled} disabled={!s.enabled}
+        <input type="checkbox" name="probes" checked={s.enabled && s.probesEnabled} disabled={!s.enabled}
           onChange={(e) => p.onProbes(e.target.checked)} />
         Allow probes
       </label>
       {s.enabled && <div className="row">
         <button name="rotate" onClick={p.onRotate}>{s.hasToken ? "Rotate token" : "Create token"}</button>
-        {s.certFingerprint && <span className="muted">Certificate {s.certFingerprint.slice(0, 16)}…</span>}
+      </div>}
+      {s.enabled && s.certFingerprint && <div className="row">
+        <span className="muted">Certificate SHA-256</span>
+        <span className="code" data-name="fingerprint">{s.certFingerprint}</span>
+        <button name="copy-fingerprint" onClick={p.onCopyFingerprint}>Copy</button>
       </div>}
       {p.token && <>
         <span className="muted">Copy this token now — it is never shown again.</span>
