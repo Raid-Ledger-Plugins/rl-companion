@@ -74,7 +74,13 @@ pub async fn poll_loop(ctx: Arc<ServerCtx>) {
         };
         let prune = std::mem::replace(&mut first, false);
         let wow = snap.wow_dir;
+        let live = ctx.clone();
         let _ = tokio::task::spawn_blocking(move || {
+            // `abort()` in `shut` cancels the await, not this closure: one
+            // that starts after the bridge went off does nothing.
+            if live.snapshot().snapshot_cache.is_none() {
+                return;
+            }
             let now = now_secs();
             if prune {
                 cache.prune(now);
@@ -236,11 +242,13 @@ pub fn history_ep(snap: &Snapshot, flavor: &str, q: &Query) -> Res {
     let start = match q.get("cursor") {
         None => 0,
         Some(raw) => {
-            let after = decode(raw, 'h').ok_or_else(|| bad("cursor", "Unknown cursor"))?;
+            let unknown = || bad("cursor", "Unknown cursor");
+            let after = decode(raw, 'h').ok_or_else(unknown)?;
             entries
                 .iter()
-                .position(|e| id(e) < after)
-                .unwrap_or(entries.len())
+                .position(|e| id(e) == after)
+                .map(|i| i + 1)
+                .ok_or_else(unknown)?
         }
     };
     let mut body = page(

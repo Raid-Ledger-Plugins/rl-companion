@@ -11,7 +11,7 @@ use super::write_guard::{cache_file, guarded_cache_remove, guarded_cache_write};
 use rl_collectors::{rfc3339_utc_from_unix_seconds, DevSnapshotEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -90,6 +90,46 @@ pub fn new_snapshot_id(now_ms: u64) -> String {
         .rev()
         .map(|i| ALPHA[((n >> (5 * i)) & 31) as usize] as char)
         .collect()
+}
+
+/// The ms time part of a [`new_snapshot_id`] (its first 10 chars).
+pub fn id_ms(id: &str) -> Option<u64> {
+    const ALPHA: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    id.get(..10)?
+        .bytes()
+        .try_fold(0u64, |n, c| {
+            let d = ALPHA.iter().position(|a| *a == c)?;
+            Some((n << 5) | d as u64)
+        })
+        .map(|n| n & 0xFFFF_FFFF_FFFF)
+}
+
+/// `now` (seconds) in ms, with the clock's current sub-second part, so rows
+/// written in the same second still sort in write order.
+fn now_ms(now: i64) -> u64 {
+    let sub = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| u64::from(d.subsec_millis()));
+    u64::try_from(now).unwrap_or(0) * 1000 + sub
+}
+
+fn row_bytes(r: &Row) -> u64 {
+    serde_json::to_string(r).map_or(0, |s| s.len() as u64 + 1)
+}
+
+/// One warn line per kind of parser rejection (never the key: it is a GUID).
+fn log_skipped(skipped: &[rl_collectors::SkippedEntry]) {
+    let mut kinds: Vec<String> = skipped.iter().map(|s| format!("{:?}", s.reason)).collect();
+    kinds.sort();
+    kinds.dedup();
+    if !kinds.is_empty() {
+        let msg = format!(
+            "dev snapshot: {} entries skipped ({})",
+            skipped.len(),
+            kinds.join(", ")
+        );
+        logbuf::log("warn", "dev_bridge", &msg);
+    }
 }
 
 fn secs(ts: &str) -> i64 {
@@ -221,20 +261,25 @@ impl SnapshotCache {
     /// moved since the last read is skipped.
     pub fn ingest_file(&self, flavor: &str, path: &Path, now: i64) -> usize {
         let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        {
-            let mut seen = self.mtimes.lock().unwrap_or_else(|p| p.into_inner());
-            if mtime.is_some() && seen.get(path) == mtime.as_ref() {
-                return 0;
-            }
-            if let Some(t) = mtime {
-                seen.insert(path.to_path_buf(), t);
-            }
+        let seen =
+            |m: &HashMap<PathBuf, SystemTime>| mtime.is_some() && m.get(path) == mtime.as_ref();
+        if seen(&self.mtimes.lock().unwrap_or_else(|p| p.into_inner())) {
+            return 0;
         }
         let Ok(bytes) = std::fs::read(path) else {
             return 0;
         };
         match rl_collectors::parse_ledgerlink_dev_snapshots(&bytes) {
-            Ok(d) => self.ingest(flavor, &d.entries, now),
+            Ok(d) => {
+                // Marked seen only once it parsed: a half-written file (WoW
+                // writes SavedVariables on logout) is retried next tick.
+                if let Some(t) = mtime {
+                    let mut m = self.mtimes.lock().unwrap_or_else(|p| p.into_inner());
+                    m.insert(path.to_path_buf(), t);
+                }
+                log_skipped(&d.skipped);
+                self.ingest(flavor, &d.entries, now)
+            }
             Err(e) => {
                 logbuf::log(
                     "warn",
@@ -265,24 +310,30 @@ impl SnapshotCache {
                 files.push((flavor.clone(), key, rows));
             }
         }
-        let size = |rows: &[Row]| {
-            rows.iter()
-                .map(|r| serde_json::to_string(r).map_or(0, |s| s.len() as u64 + 1))
-                .sum::<u64>()
-        };
-        let mut total: u64 = files.iter().map(|(_, _, r)| size(r)).sum();
-        let mut dirty = vec![false; files.len()];
+        // Each row's on-disk size, computed once (oldest first, like the rows).
+        let mut sizes: Vec<VecDeque<u64>> = files
+            .iter()
+            .map(|(_, _, rows)| rows.iter().map(row_bytes).collect())
+            .collect();
+        let mut file_bytes: Vec<u64> = sizes.iter().map(|s| s.iter().sum()).collect();
+        let mut total: u64 = file_bytes.iter().sum();
+        let mut dropped = vec![0usize; files.len()];
         while total > MAX_CACHE_BYTES {
             let Some(i) = (0..files.len())
-                .filter(|&i| files[i].2.len() > 1)
-                .max_by_key(|&i| size(&files[i].2))
+                .filter(|&i| sizes[i].len() > 1)
+                .max_by_key(|&i| file_bytes[i])
             else {
                 break;
             };
-            let dropped = files[i].2.remove(0);
-            total = total.saturating_sub(size(std::slice::from_ref(&dropped)));
-            dirty[i] = true;
+            let b = sizes[i].pop_front().unwrap_or(0);
+            file_bytes[i] -= b;
+            total = total.saturating_sub(b);
+            dropped[i] += 1;
         }
+        for (i, (_, _, rows)) in files.iter_mut().enumerate() {
+            rows.drain(..dropped[i]);
+        }
+        let dirty: Vec<bool> = dropped.iter().map(|&n| n > 0).collect();
         for (i, (flavor, key, rows)) in files.iter().enumerate() {
             if dirty[i] {
                 self.write(flavor, key, rows);
@@ -313,8 +364,12 @@ pub fn merge(rows: &mut Vec<Row>, snapshot: Value, now: i64) -> bool {
     {
         return false;
     }
+    let ms = rows
+        .last()
+        .and_then(|r| id_ms(&r.snapshot_id))
+        .map_or(now_ms(now), |last| now_ms(now).max(last + 1));
     rows.push(Row {
-        snapshot_id: new_snapshot_id(u64::try_from(now).unwrap_or(0) * 1000),
+        snapshot_id: new_snapshot_id(ms),
         received_at: rfc3339_utc_from_unix_seconds(now),
         captured_at: captured.clone(),
         last_captured_at: captured,

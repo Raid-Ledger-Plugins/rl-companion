@@ -3,8 +3,8 @@
 //! lengths) plus the refinements `schema.json` cannot express: the player-GUID
 //! guard, unique `apis[].path`, `type` iff `status: presence`, D4 (a
 //! name-bearing fn is reported as `presence` only), and the item /
-//! head / whole byte caps. String lengths count chars (Zod counts UTF-16 units;
-//! identical for the ASCII the addon writes).
+//! head / whole byte caps. String lengths count UTF-16 units, as Zod does.
+//! An error never echoes a GUID: a GUID-bearing key is reported as `<guid>`.
 
 use super::logbuf::parse_utc;
 use super::paging::json_len;
@@ -16,6 +16,8 @@ use std::sync::OnceLock;
 pub const SNAPSHOT_MAX_BYTES: usize = 49_152;
 pub const SNAPSHOT_HEAD_MAX_BYTES: usize = 4_096;
 pub const RESULT_ITEM_MAX_BYTES: usize = 3_072;
+/// Zod 4 `.int()` bounds: ±(2^53 − 1).
+const MAX_SAFE_INT: i64 = (1 << 53) - 1;
 const LUA_TYPES: &[&str] = &[
     "nil", "function", "table", "string", "number", "boolean", "userdata", "thread",
 ];
@@ -43,6 +45,12 @@ fn re(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
 fn guid_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     re(&R, r"Player-\d{1,5}-[0-9A-Fa-f]{8}")
+}
+
+/// `k` for an error path or message, any player GUID in it replaced by `<guid>`
+/// (the error is logged; a GUID must never reach a log).
+fn key_label(k: &str) -> String {
+    guid_re().replace_all(k, "<guid>").into_owned()
 }
 
 fn api_path_ok(s: &str) -> bool {
@@ -73,7 +81,7 @@ fn obj<'a>(
         .keys()
         .find(|k| !required.contains(&k.as_str()) && !optional.contains(&k.as_str()))
     {
-        return err(at, &format!("unrecognized key {k}"));
+        return err(at, &format!("unrecognized key {}", key_label(k)));
     }
     if let Some(k) = required.iter().find(|k| !m.contains_key(**k)) {
         return err(at, &format!("missing {k}"));
@@ -83,7 +91,7 @@ fn obj<'a>(
 
 fn text(m: &Map<String, Value>, k: &str, at: &str, max: usize) -> Check {
     match m.get(k).and_then(Value::as_str) {
-        Some(s) if s.chars().count() <= max => Ok(()),
+        Some(s) if s.encode_utf16().count() <= max => Ok(()),
         _ => err(
             &format!("{at}.{k}"),
             &format!("expected a string of at most {max}"),
@@ -127,18 +135,19 @@ fn is_true(m: &Map<String, Value>, k: &str) -> bool {
 }
 
 /// `DevBridgeProbeValueSchema`: scalars (strings ≤ 512) nested ≤ 3 levels in
-/// arrays (≤ 40) or objects (keys ≤ 128).
+/// arrays (≤ 40) or objects (≤ 40 keys of ≤ 128), like Zod's `tableOf`.
 fn probe_value(v: &Value, depth: usize) -> bool {
     match v {
-        Value::String(s) => s.chars().count() <= 512,
+        Value::String(s) => s.encode_utf16().count() <= 512,
         Value::Null | Value::Bool(_) | Value::Number(_) => true,
         Value::Array(a) => {
             depth < 3 && a.len() <= 40 && a.iter().all(|x| probe_value(x, depth + 1))
         }
         Value::Object(o) => {
             depth < 3
+                && o.len() <= 40
                 && o.iter()
-                    .all(|(k, x)| k.chars().count() <= 128 && probe_value(x, depth + 1))
+                    .all(|(k, x)| k.encode_utf16().count() <= 128 && probe_value(x, depth + 1))
         }
     }
 }
@@ -160,7 +169,7 @@ fn client(v: &Value) -> Check {
     text(m, "locale", "client", 8)?;
     let ok = int_in(m.get("interface"), 0, 9_999_999, false)
         && int_in(m.get("tocInterface"), 0, 9_999_999, true)
-        && int_in(m.get("region"), i64::MIN, i64::MAX, true);
+        && int_in(m.get("region"), -MAX_SAFE_INT, MAX_SAFE_INT, true);
     if ok {
         Ok(())
     } else {
@@ -216,7 +225,7 @@ fn ruleset(v: &Value) -> Check {
             .is_some_and(|s| re(&NAME, "^[A-Za-z_][A-Za-z0-9_]{0,63}$").is_match(s));
         let value_ok = match rm.get("value") {
             Some(Value::Number(_)) => true,
-            Some(Value::String(s)) => s.chars().count() <= 64,
+            Some(Value::String(s)) => s.encode_utf16().count() <= 64,
             _ => false,
         };
         let active_ok = rm
@@ -264,7 +273,7 @@ fn call(v: &Value, at: &str) -> Check {
                 && a.iter().all(|x| {
                     !x.is_array()
                         && !x.is_object()
-                        && x.as_str().is_none_or(|s| s.chars().count() <= 128)
+                        && x.as_str().is_none_or(|s| s.encode_utf16().count() <= 128)
                 })
         });
         if !ok {
@@ -334,7 +343,7 @@ fn section(v: &Value, at: &str) -> Check {
     let lines_ok = m.get("lines").and_then(Value::as_array).is_some_and(|l| {
         l.len() <= 40
             && l.iter()
-                .all(|x| x.as_str().is_some_and(|s| s.chars().count() <= 256))
+                .all(|x| x.as_str().is_some_and(|s| s.encode_utf16().count() <= 256))
     });
     if !(id_ok && lines_ok && one_of(m.get("status"), &["ok", "error", "skipped"], false)) {
         return err(at, "bad id/status/lines");
@@ -356,10 +365,11 @@ fn guid_at(v: &Value, at: &str) -> Option<String> {
             .enumerate()
             .find_map(|(i, x)| guid_at(x, &format!("{at}.{i}"))),
         Value::Object(o) => o.iter().find_map(|(k, x)| {
+            let label = key_label(k);
             let here = if at.is_empty() {
-                k.clone()
+                label
             } else {
-                format!("{at}.{k}")
+                format!("{at}.{label}")
             };
             if guid_re().is_match(k) {
                 Some(here)
@@ -395,7 +405,7 @@ fn check(v: &Value, slice: bool) -> Check {
     if !m
         .get("addonVersion")
         .and_then(Value::as_str)
-        .is_some_and(|s| (1..=64).contains(&s.chars().count()))
+        .is_some_and(|s| (1..=64).contains(&s.encode_utf16().count()))
     {
         return err("addonVersion", "expected 1–64 chars");
     }

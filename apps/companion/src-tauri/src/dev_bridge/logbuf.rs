@@ -1,7 +1,7 @@
 //! The companion's own log for `/dev/v1/logs` (AC-7): a ring buffer whose
 //! lines are redacted BEFORE they are stored, with the contract's patterns
 //! (`(?i)bearer\s+\S+`, `(?i)rlcd(ev)?_…`) plus user-home paths and
-//! `secret=`-style pairs.
+//! `secret=`-style pairs and player GUIDs (`Player-<realm>-<8 hex>`).
 
 use super::paging::clip;
 use regex::Regex;
@@ -25,12 +25,14 @@ pub struct LogBuffer {
     inner: Mutex<(usize, VecDeque<Line>)>,
 }
 
-fn patterns() -> &'static [(Regex, &'static str); 4] {
-    static P: OnceLock<[(Regex, &'static str); 4]> = OnceLock::new();
+fn patterns() -> &'static [(Regex, &'static str); 5] {
+    static P: OnceLock<[(Regex, &'static str); 5]> = OnceLock::new();
     P.get_or_init(|| {
         let re = |s: &str| Regex::new(s).unwrap_or_else(|_| unreachable!("static pattern"));
         [
             (re(r"(?i)rlcd(ev)?_[A-Za-z0-9_-]*"), "<redacted>"),
+            // A player GUID (ROK-2072): a character identifier, never logged.
+            (re(r"Player-\d{1,5}-[0-9A-Fa-f]{8}"), "<guid>"),
             (re(r"(?i)(bearer)\s+\S+"), "$1 <redacted>"),
             (
                 re(r"(?i)\b(token|secret|password|passwd|api[_-]?key)(\s*[=:]\s*)[^\s,;&]+"),
