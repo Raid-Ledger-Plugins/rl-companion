@@ -3,11 +3,15 @@
 //! Steam's own `thumbnails/<same name>` when it sits inside the scanned folder,
 //! else a small JPEG downscaled off the async runtime. Either is capped at
 //! [`PREVIEW_MAX_BYTES`]; past that no image is shown (the copy still stands).
+//! Steam's thumbnail is used as is only when its header says it is already
+//! inside [`PREVIEW_EDGE_MAX`] — a few compressed bytes can declare a huge
+//! canvas the WebView would then decode with no limit — else the original is
+//! downscaled through the budgeted decoder instead.
 
-use crate::bg3_screenshot::CONTRACT;
+use crate::bg3_screenshot::{CONTRACT, MAX_SOURCE_BYTES};
 use crate::collector::{Blob, Scan};
 use crate::scope::WatchScope;
-use crate::screenshot_encode::{decode_rgb, fit};
+use crate::screenshot_encode::{decode_fit, read_capped, source_dimensions};
 use image::codecs::jpeg::JpegEncoder;
 use rl_collectors::sha256_hex;
 use std::collections::BTreeMap;
@@ -49,6 +53,10 @@ pub fn ready(sha: &str, path: &Path, scope: &WatchScope) -> Option<Blob> {
         return None;
     }
     let bytes = scope.read(&thumb).ok()?;
+    let (tw, th) = source_dimensions(&bytes).ok()?;
+    if tw == 0 || th == 0 || tw > PREVIEW_EDGE_MAX || th > PREVIEW_EDGE_MAX {
+        return None;
+    }
     let blob = image_blob(bytes)?;
     store(sha, &blob);
     Some(blob)
@@ -85,11 +93,13 @@ pub async fn attach(scan: &mut Scan) {
     }
 }
 
-/// Read the original through its scope and shrink it to a JPEG whose longest
-/// side is at most [`PREVIEW_EDGE_MAX`]. Blocking.
+/// Read the original through its scope (at most [`MAX_SOURCE_BYTES`]: it may
+/// have grown since the scan) and shrink it to a JPEG whose longest side is
+/// at most [`PREVIEW_EDGE_MAX`]. Blocking.
 pub fn downscale(w: &Wanted) -> Result<Blob, String> {
-    let bytes = w.scope.read(&w.path).map_err(|e| e.to_string())?;
-    let img = fit(decode_rgb(&bytes)?, PREVIEW_EDGE_MAX);
+    let real = w.scope.check(&w.path).map_err(|e| e.to_string())?;
+    let bytes = read_capped(&real, MAX_SOURCE_BYTES)?;
+    let img = decode_fit(&bytes, PREVIEW_EDGE_MAX)?;
     let mut out = Vec::new();
     JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY)
         .encode_image(&img)

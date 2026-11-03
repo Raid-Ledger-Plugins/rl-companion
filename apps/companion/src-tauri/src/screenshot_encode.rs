@@ -3,9 +3,10 @@
 //! Quality steps down first, then the size, until it fits; past that the
 //! screenshot is refused for good.
 
-use image::imageops::FilterType;
-use image::{ImageReader, Limits, RgbImage};
-use std::io::Cursor;
+use image::{ColorType, DynamicImage, ImageDecoder, ImageReader, Limits, RgbImage};
+use std::fs::File;
+use std::io::{Cursor, Read};
+use std::path::Path;
 
 /// `COMPANION_WEBP_MAX_BYTES`: the blob store's per-WebP cap.
 pub const WEBP_MAX_BYTES: usize = 1_048_576;
@@ -13,13 +14,14 @@ pub const WEBP_MAX_BYTES: usize = 1_048_576;
 pub const IMAGE_EDGE_MAX: u32 = 4096;
 /// `BG3_SCREENSHOT_SOURCE_EDGE_MAX`: the longest original side the contract takes.
 pub const SOURCE_EDGE_MAX: u32 = 16_384;
-/// The decoder's allocation budget. A source inside [`SOURCE_EDGE_MAX`] whose
-/// decoded pixels need more than this is refused before any pixel buffer is
-/// allocated: RGBA up to 8192 x 8192 (RGB about 9450 x 9450) fits, so every
-/// real 4K/8K capture does, while a 16384 x 16384 header does not. The RGBA
-/// to RGB copy afterwards adds at most 3/4 of it, so peak memory stays under
-/// about 450 MiB.
-pub const DECODE_ALLOC_MAX: u64 = 256 * 1024 * 1024;
+/// The memory budget of the whole decode pipeline, checked from the header
+/// before any pixel buffer is allocated: the decoded original in its own
+/// colour type, its downscaled copy, and the RGB copy that is encoded. The
+/// downscale is an area average straight into the output buffer (no
+/// full-size float intermediate), so these three buffers are the peak. Every
+/// real capture fits (8K RGB is about 160 MiB); a 16384 x 16384 header, even
+/// grayscale, does not.
+pub const PIPELINE_BUDGET: u64 = 256 * 1024 * 1024;
 /// Total WebP encodes one screenshot may cost before it is refused.
 pub const MAX_ENCODES: usize = 8;
 /// Qualities tried at each size, best first.
@@ -55,8 +57,7 @@ pub fn encode_screenshot(bytes: &[u8]) -> Result<Encoded, String> {
     if sw == 0 || sh == 0 || sw > SOURCE_EDGE_MAX || sh > SOURCE_EDGE_MAX {
         return Err(format!("{sw}x{sh} is outside 1-{SOURCE_EDGE_MAX} px"));
     }
-    let decoded = decode_rgb(bytes)?;
-    let webp = fit_under(fit(decoded, IMAGE_EDGE_MAX), WEBP_MAX_BYTES)?;
+    let webp = fit_under(decode_fit(bytes, IMAGE_EDGE_MAX)?, WEBP_MAX_BYTES)?;
     Ok(Encoded {
         width: webp.1,
         height: webp.2,
@@ -66,21 +67,64 @@ pub fn encode_screenshot(bytes: &[u8]) -> Result<Encoded, String> {
     })
 }
 
-/// Decode `bytes` (JPEG or PNG) to RGB inside [`SOURCE_EDGE_MAX`] and
-/// [`DECODE_ALLOC_MAX`].
-pub fn decode_rgb(bytes: &[u8]) -> Result<RgbImage, String> {
+/// Decode `bytes` (JPEG or PNG) to RGB with its longest side at most
+/// `max_edge`, refusing up front when [`pipeline_bytes`] is over
+/// [`PIPELINE_BUDGET`]. The decoder carries the same limits as a backstop.
+pub fn decode_fit(bytes: &[u8], max_edge: u32) -> Result<RgbImage, String> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(SOURCE_EDGE_MAX);
     limits.max_image_height = Some(SOURCE_EDGE_MAX);
-    limits.max_alloc = Some(DECODE_ALLOC_MAX);
+    limits.max_alloc = Some(PIPELINE_BUDGET);
     let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|e| format!("not an image ({e})"))?;
     reader.limits(limits);
-    Ok(reader
-        .decode()
-        .map_err(|e| format!("not a readable image ({e})"))?
-        .into_rgb8())
+    let decoder = reader
+        .into_decoder()
+        .map_err(|e| format!("not a readable image ({e})"))?;
+    let ((w, h), color) = (decoder.dimensions(), decoder.color_type());
+    let need = pipeline_bytes((w, h), color, max_edge);
+    if need > PIPELINE_BUDGET {
+        return Err(format!(
+            "{w}x{h} {color:?} needs {need} bytes to decode, over the {PIPELINE_BUDGET}-byte memory budget"
+        ));
+    }
+    let img =
+        DynamicImage::from_decoder(decoder).map_err(|e| format!("not a readable image ({e})"))?;
+    let edge = w.max(h);
+    if edge <= max_edge {
+        return Ok(img.into_rgb8());
+    }
+    let (tw, th) = scaled((w, h), f64::from(max_edge) / f64::from(edge));
+    Ok(img.thumbnail_exact(tw, th).into_rgb8())
+}
+
+/// Peak bytes [`decode_fit`] holds for a `w` x `h` original of `color`
+/// fitted inside `max_edge`: the decoded original, its downscaled copy in
+/// the same colour type, and the RGB copy.
+pub fn pipeline_bytes((w, h): (u32, u32), color: ColorType, max_edge: u32) -> u64 {
+    let bpp = u64::from(color.bytes_per_pixel());
+    let area = |(a, b): (u32, u32)| u64::from(a) * u64::from(b);
+    let edge = w.max(h);
+    if edge <= max_edge {
+        return area((w, h)) * (bpp + 3);
+    }
+    let small = area(scaled((w, h), f64::from(max_edge) / f64::from(edge)));
+    area((w, h)) * bpp + small * (bpp + 3)
+}
+
+/// Read at most `cap` bytes of `path`; a longer file is refused without
+/// reading past `cap + 1` bytes (it may have grown since it was measured).
+pub fn read_capped(path: &Path, cap: u64) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    file.take(cap.saturating_add(1))
+        .read_to_end(&mut out)
+        .map_err(|e| e.to_string())?;
+    if out.len() as u64 > cap {
+        return Err(format!("{} is over the {cap}-byte cap", path.display()));
+    }
+    Ok(out)
 }
 
 /// Encode `img`, stepping quality then size down until it is ≤ `max` bytes,
@@ -106,19 +150,10 @@ pub fn fit_under(mut img: RgbImage, max: usize) -> Result<(Vec<u8>, u32, u32), S
         if w < MIN_EDGE || h < MIN_EDGE {
             break;
         }
-        img = image::imageops::resize(&img, w, h, FilterType::Triangle);
+        // Area average into the output buffer: no full-size float copy.
+        img = image::imageops::thumbnail(&img, w, h);
     }
     Err(format!("could not fit a WebP under {max} bytes"))
-}
-
-/// `img` scaled down so its longest side is at most `max` (never up).
-pub fn fit(img: RgbImage, max: u32) -> RgbImage {
-    let edge = img.width().max(img.height());
-    if edge <= max {
-        return img;
-    }
-    let (w, h) = scaled(img.dimensions(), f64::from(max) / f64::from(edge));
-    image::imageops::resize(&img, w, h, FilterType::Triangle)
 }
 
 /// `(w, h) × factor`, rounded down, at least 1 px.
@@ -133,3 +168,7 @@ fn webp_lossy(img: &RgbImage, quality: f32) -> Result<Vec<u8>, String> {
         .map(|m| m.to_vec())
         .map_err(|e| format!("WebP encode failed ({e:?})"))
 }
+
+#[cfg(test)]
+#[path = "tests/screenshot_image_budget_tests.rs"]
+mod budget_tests;
