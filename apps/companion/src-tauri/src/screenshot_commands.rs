@@ -24,6 +24,13 @@ pub struct Bg3ScreenshotHubsDto {
     /// lists it, else the server's default target; `None` = nothing to send to
     /// (nothing uploads).
     pub selected: Option<i64>,
+    /// The user's own pick when the server no longer lists it (hub left,
+    /// deleted or moved to another game): uploads go to `selected` instead,
+    /// and the picker says so.
+    pub stale_pick: Option<i64>,
+    /// `true` when the user has no pick: uploads follow the hub of their
+    /// latest save (the server's `isDefault` target) as it changes.
+    pub following_latest_save: bool,
     /// New screenshots held back for want of a pick.
     pub waiting: usize,
 }
@@ -75,9 +82,16 @@ fn resolve(cfg: &AppConfig, targets: Option<&[HubTarget]>) -> Option<i64> {
 /// The picker's view of `cfg`.
 pub fn hubs_view(cfg: &AppConfig, waiting: usize) -> Bg3ScreenshotHubsDto {
     let targets = hub_targets(cfg);
+    let listed = |id: i64| {
+        targets
+            .as_ref()
+            .is_none_or(|ts| ts.iter().any(|t| t.hub_guild_id == id))
+    };
     Bg3ScreenshotHubsDto {
         server_lists_hubs: targets.is_some(),
         selected: resolve(cfg, targets.as_deref()),
+        stale_pick: cfg.bg3_screenshot_hub.filter(|&id| !listed(id)),
+        following_latest_save: cfg.bg3_screenshot_hub.is_none(),
         targets: targets.unwrap_or_default(),
         waiting,
     }
@@ -103,7 +117,7 @@ pub fn set_bg3_screenshot_hub(
         .map_err(|e| format!("Could not save settings: {e}"))?;
     let line = match hub_guild_id {
         Some(id) => format!("BG3 screenshots now go to hub {id}"),
-        None => "BG3 screenshots: hub cleared, nothing uploads".to_owned(),
+        None => "BG3 screenshots now follow your latest save's hub".to_owned(),
     };
     rt.log_for(BG3_SCREENSHOT.id, line);
     rt.kick();

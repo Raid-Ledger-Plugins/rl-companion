@@ -343,10 +343,16 @@ fn hub_defaults_to_the_latest_saves_hub_until_the_user_picks() {
         Some(9),
         "no pick: the isDefault target"
     );
-    assert_eq!(hubs_view(&cfg, 0).selected, Some(9), "the picker shows it");
+    let view = hubs_view(&cfg, 0);
+    assert_eq!(view.selected, Some(9), "the picker shows it");
+    assert!(view.following_latest_save, "no pick: following");
+    assert_eq!(view.stale_pick, None);
     cfg.bg3_screenshot_hub = Some(3);
     assert_eq!(effective_hub(&cfg), Some(3), "the user's pick wins");
-    assert_eq!(hubs_view(&cfg, 0).selected, Some(3));
+    let view = hubs_view(&cfg, 0);
+    assert_eq!(view.selected, Some(3));
+    assert!(!view.following_latest_save, "a pick pins the hub");
+    assert_eq!(view.stale_pick, None, "a listed pick is not stale");
 }
 
 #[test]
@@ -380,10 +386,16 @@ fn a_pick_missing_from_hub_targets_falls_back_to_the_default() {
         Some(9),
         "a pick the server no longer lists must not be sent to"
     );
+    let view = hubs_view(&cfg, 0);
     assert_eq!(
-        hubs_view(&cfg, 0).selected,
+        view.selected,
         Some(9),
         "the picker shows the hub uploads actually go to"
+    );
+    assert_eq!(view.stale_pick, Some(77), "and says the pick is stale");
+    assert!(
+        !view.following_latest_save,
+        "the stale pick is still a pick"
     );
     let mut no_default =
         with_targets(json!([{ "hubGuildId": 3, "name": "A", "isDefault": false }]));
@@ -395,6 +407,11 @@ fn a_pick_missing_from_hub_targets_falls_back_to_the_default() {
         ..AppConfig::default()
     };
     assert_eq!(effective_hub(&older), Some(77), "no list: the pick stands");
+    assert_eq!(
+        hubs_view(&older, 0).stale_pick,
+        None,
+        "no list: nothing to call stale"
+    );
 }
 
 #[test]

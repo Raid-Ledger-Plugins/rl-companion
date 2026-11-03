@@ -180,6 +180,10 @@ export interface Bg3ScreenshotHubs {
   serverListsHubs: boolean;
   /** The effective pick: the user's own, else the default; `null` = none. */
   selected: number | null;
+  /** The user's pick when the server no longer lists it (uploads go to `selected`); else `null`. */
+  stalePick: number | null;
+  /** `true` when the user has no pick: uploads follow the hub of their latest save. */
+  followingLatestSave: boolean;
   /** New screenshots held back for want of a hub. */
   waiting: number;
 }

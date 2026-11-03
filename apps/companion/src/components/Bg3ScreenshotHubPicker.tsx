@@ -11,9 +11,18 @@ function waitingLine(n: number): string | null {
   return n === 1 ? "1 screenshot is waiting for a hub." : `${n} screenshots are waiting for a hub.`;
 }
 
-/** A pick the server no longer lists (left hub, deleted hub): shown as such, never as another hub. */
+/** A pick the server no longer lists (left hub, deleted hub): the backend reports it as `stalePick`. */
 export function isStale(hubs: Bg3ScreenshotHubs): boolean {
-  return hubs.selected !== null && !hubs.targets.some((t) => t.hubGuildId === hubs.selected);
+  return hubs.stalePick !== null;
+}
+
+/**
+ * The select's value: the pinned hub, or "" (the first option) while following
+ * the latest save — or while a stale pick routes uploads to that default (r2-m2).
+ */
+function selectValue(hubs: Bg3ScreenshotHubs): string {
+  if (hubs.followingLatestSave || isStale(hubs) || hubs.selected === null) return "";
+  return String(hubs.selected);
 }
 
 /** The first option: follow the latest save's hub (m6), or a placeholder when there is none. */
@@ -27,15 +36,10 @@ function HubSelect({ hubs, onPick }: { hubs: Bg3ScreenshotHubs; onPick: Bg3Scree
     <label>
       Send screenshots to
       <select
-        value={hubs.selected === null ? "" : String(hubs.selected)}
+        value={selectValue(hubs)}
         onChange={(e) => onPick(e.target.value === "" ? null : Number(e.target.value))}
       >
         <option value="">{firstLabel(hubs)}</option>
-        {isStale(hubs) && (
-          <option value={String(hubs.selected)} disabled>
-            A hub you're no longer in
-          </option>
-        )}
         {hubs.targets.map((t) => (
           <option key={t.hubGuildId} value={String(t.hubGuildId)}>
             {t.isDefault ? `${t.name} (your latest save)` : t.name}
@@ -47,8 +51,9 @@ function HubSelect({ hubs, onPick }: { hubs: Bg3ScreenshotHubs; onPick: Bg3Scree
 }
 
 /**
- * ROK-1966 Q3: which BG3 hub screenshots go to. Defaults to the hub of the
- * user's latest save (the backend resolves it). Hook-free.
+ * ROK-1966 Q3: which BG3 hub screenshots go to. Defaults to following the hub
+ * of the user's latest save (the backend resolves it); picking a hub pins it,
+ * picking "Follow my latest save" clears the pin. Hook-free.
  */
 export function Bg3ScreenshotHubPicker({ hubs, onPick }: Bg3ScreenshotHubPickerProps) {
   const waiting = hubs ? waitingLine(hubs.waiting) : null;
