@@ -30,8 +30,19 @@ const SAVEINFO: &str = include_str!(
 const WEBP: &[u8] =
     include_bytes!("../../../../contracts/bg3-save/v1/fixtures/placeholder-thumbnail.webp");
 
+/// The anonymised real-shape `meta.lsf` (ROK-2070 L2): its FixedString
+/// GameID is [`SYNTHETIC_GAME_ID`]; every other string is zeroed or filler.
+const META_LSF: &[u8] =
+    include_bytes!("../../../rl-collectors/tests/fixtures/meta/real-shape-string.meta.lsf");
+const SYNTHETIC_GAME_ID: &str = "00000000-2070-4000-8000-000000000001";
+
 /// A save with `SaveInfo.json` (LZ4) and, optionally, a root thumbnail.
 fn save(info: &[u8], webp: Option<&[u8]>) -> Vec<u8> {
+    save_with_meta(info, webp, None)
+}
+
+/// [`save`] plus, optionally, a root `meta.lsf` (LZ4, as real saves pack it).
+fn save_with_meta(info: &[u8], webp: Option<&[u8]>, meta: Option<&[u8]>) -> Vec<u8> {
     let mut files = vec![FileSpec {
         name: "SaveInfo.json",
         data: info,
@@ -42,6 +53,13 @@ fn save(info: &[u8], webp: Option<&[u8]>) -> Vec<u8> {
             name: "Synthetic.WebP",
             data,
             method: Method::Stored,
+        });
+    }
+    if let Some(data) = meta {
+        files.push(FileSpec {
+            name: "meta.lsf",
+            data,
+            method: Method::Lz4,
         });
     }
     write_lspk(&files)
@@ -77,6 +95,21 @@ rl_test! {
         assert!(none.thumbnail.is_none(), "absent thumbnail must be None");
         let junk = inspect(&save(SAVEINFO.as_bytes(), Some(b"not a webp"))).expect("bad webp");
         assert!(junk.thumbnail.is_none(), "unreadable thumbnail must be None");
+    }
+}
+
+rl_test! {
+    fn game_id_key_is_the_hash_of_a_readable_game_id_else_null() {
+        let plain = inspect(&save(SAVEINFO.as_bytes(), Some(WEBP))).expect("synthetic act2");
+        assert_eq!(plain.game_id_key, None, "no meta.lsf → no gameIdKey");
+        let broken = inspect(&save_with_meta(SAVEINFO.as_bytes(), None, Some(b"LSOF junk")))
+            .expect("a broken meta.lsf never fails the inspection");
+        assert_eq!(broken.game_id_key, None, "unreadable meta.lsf → no gameIdKey");
+        let real = inspect(&save_with_meta(SAVEINFO.as_bytes(), Some(WEBP), Some(META_LSF)))
+            .expect("save with the anonymised meta.lsf");
+        let want = sha256_hex(SYNTHETIC_GAME_ID.as_bytes());
+        assert_eq!(real.game_id_key.as_deref(), Some(want.as_str()), "gameIdKey = sha256(GameID)");
+        assert_eq!(want.len(), 64, "64 lowercase hex");
     }
 }
 
@@ -133,9 +166,11 @@ rl_test! {
     }
 }
 
-/// CI writes the synthetic save Raid Ledger vendors into `pkg/fixtures/`
-/// (`RL_FIXTURE_OUT`): the `.lsv` plus what `inspectBg3Save` must return
+/// CI writes the synthetic saves Raid Ledger vendors into `pkg/fixtures/`
+/// (`RL_FIXTURE_OUT`): each `.lsv` plus what `inspectBg3Save` must return
 /// for it (minus the `webp` bytes, which are the contract's placeholder).
+/// `synthetic-act2` has no `meta.lsf` (`gameIdKey: null`);
+/// `synthetic-act2-game-id` adds the anonymised one (ROK-2070).
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn export_synthetic_fixture_for_raid_ledger() {
@@ -143,8 +178,22 @@ fn export_synthetic_fixture_for_raid_ledger() {
         return;
     };
     let dir = std::path::PathBuf::from(dir);
-    let bytes = save(&with_bom(SAVEINFO), Some(WEBP));
-    let got = inspect(&bytes).expect("fixture inspects");
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    let info = with_bom(SAVEINFO);
+    let plain = save(&info, Some(WEBP));
+    export_fixture(&dir, "synthetic-act2", &plain, false);
+    let game_id = save_with_meta(&info, Some(WEBP), Some(META_LSF));
+    export_fixture(&dir, "synthetic-act2-game-id", &game_id, true);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn export_fixture(dir: &std::path::Path, name: &str, bytes: &[u8], has_game_id: bool) {
+    let got = inspect(bytes).expect("fixture inspects");
+    assert_eq!(
+        got.game_id_key.is_some(),
+        has_game_id,
+        "{name}: gameIdKey presence"
+    );
     let (_, r) = got.thumbnail.expect("fixture has a thumbnail");
     let expected = serde_json::json!({
         "saveInfo": got.save_info,
@@ -154,11 +203,11 @@ fn export_synthetic_fixture_for_raid_ledger() {
             "width": r.width,
             "height": r.height,
         },
+        "gameIdKey": got.game_id_key,
     });
     let text = serde_json::to_string_pretty(&expected).expect("serialise expected");
-    std::fs::create_dir_all(&dir).expect("create fixture dir");
-    std::fs::write(dir.join("synthetic-act2.lsv"), &bytes).expect("write .lsv");
-    std::fs::write(dir.join("synthetic-act2.expected.json"), text + "\n").expect("write expected");
+    std::fs::write(dir.join(format!("{name}.lsv")), bytes).expect("write .lsv");
+    std::fs::write(dir.join(format!("{name}.expected.json")), text + "\n").expect("write expected");
 }
 
 rl_test! {
@@ -193,6 +242,14 @@ rl_test! {
         let bare = crate::inspect_bg3_save(&save(SAVEINFO.as_bytes(), None)).expect("ok");
         assert!(get(&bare, "webp").is_null(), "webp must be null without a thumbnail");
         assert!(get(&bare, "thumbnail").is_null(), "thumbnail must be null");
+        assert!(get(&bare, "gameIdKey").is_null(), "gameIdKey must be null without meta.lsf");
+        let keyed = crate::inspect_bg3_save(&save_with_meta(SAVEINFO.as_bytes(), None, Some(META_LSF)))
+            .expect("ok");
+        assert_eq!(
+            get(&keyed, "gameIdKey").as_string(),
+            Some(sha256_hex(SYNTHETIC_GAME_ID.as_bytes())),
+            "gameIdKey must be sha256(GameID)"
+        );
         let err = crate::inspect_bg3_save(b"nope").expect_err("throws");
         assert_eq!(get(&err, "code").as_string().as_deref(), Some("not_lspk"));
         assert_eq!(get(&err, "name").as_string().as_deref(), Some("Bg3SaveError"));
