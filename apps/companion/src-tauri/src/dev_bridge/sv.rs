@@ -95,8 +95,10 @@ fn mtime(p: &Path) -> (String, i64) {
     (rfc3339_utc_from_unix_seconds(secs), secs)
 }
 
-/// `(len, mtime ns)` of `p`: what an sv-raw cursor is tied to.
-fn version(p: &Path) -> (u64, u128) {
+/// `(len, mtime ns)` of a file: what an sv-raw cursor is tied to.
+type FileVersion = (u64, u128);
+
+fn version(p: &Path) -> FileVersion {
     let m = std::fs::metadata(p).ok();
     let len = m.as_ref().map_or(0, std::fs::Metadata::len);
     let ns = m
@@ -107,7 +109,7 @@ fn version(p: &Path) -> (u64, u128) {
 }
 
 /// An sv-raw cursor: `o<offset>v<len>m<mtime ns>`, base64url (≤ 128 chars).
-fn raw_cursor(offset: usize, (len, ns): (u64, u128)) -> String {
+fn raw_cursor(offset: usize, (len, ns): FileVersion) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!("o{offset}v{len}m{ns}"))
 }
@@ -124,7 +126,7 @@ pub enum RawError {
 }
 
 /// `?cursor=` → `(offset, version)`; `None` cursor = first page.
-fn parse_raw_cursor(raw: Option<&str>) -> Result<Option<(usize, (u64, u128))>, RawError> {
+fn parse_raw_cursor(raw: Option<&str>) -> Result<Option<(usize, FileVersion)>, RawError> {
     use base64::Engine;
     let Some(raw) = raw else { return Ok(None) };
     let text = base64::engine::general_purpose::URL_SAFE_NO_PAD
