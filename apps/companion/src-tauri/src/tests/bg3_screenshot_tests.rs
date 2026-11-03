@@ -2,7 +2,10 @@
 //! never a real screenshot.
 
 use super::temp_dir;
-use crate::bg3_screenshot::{build, Bg3ScreenshotCollector, STEAM_SUBPATH};
+use crate::bg3_screenshot::{
+    build, encode_for_send, needs_encode, off_thread, refused, Bg3ScreenshotCollector, Unready,
+    STEAM_SUBPATH,
+};
 use crate::collector::{scope_key, Collector, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SCREENSHOT};
@@ -148,11 +151,6 @@ fn dedupes_by_the_original_bytes_sha256() {
     assert_eq!(p.item, original);
     assert_eq!(p.sha256, original);
     assert_eq!(p.scope, scope_key(ORIGIN, BG3_SCREENSHOT.id));
-    assert_ne!(
-        p.body["payload"]["image"]["sha256"],
-        json!(original),
-        "WebP hash differs"
-    );
     let mut sent = SentState::default();
     sent.record(&p.scope, &p.item, &p.sha256);
     let again = c.scan(ORIGIN, &sent);
@@ -160,7 +158,7 @@ fn dedupes_by_the_original_bytes_sha256() {
         again.pending.is_empty(),
         "a settled original is never re-sent"
     );
-    assert_eq!(c.encodes(), 1, "the settled original is not re-encoded");
+    assert_eq!(c.reads(), 1, "the settled original is not re-read");
 }
 
 #[test]
@@ -171,7 +169,7 @@ fn no_hub_picked_holds_screenshots_back() {
     let scan = c.scan(ORIGIN, &SentState::default());
     assert!(scan.pending.is_empty(), "nothing uploads without a hub");
     assert_eq!(c.waiting(), 1);
-    assert_eq!(c.encodes(), 0, "nothing is encoded either");
+    assert!(scan.pending.iter().all(needs_encode), "nothing is encoded");
     assert!(
         scan.notes.iter().any(|n| n.contains("pick a hub")),
         "{:?}",
@@ -387,7 +385,8 @@ fn a_pick_missing_from_hub_targets_falls_back_to_the_default() {
         Some(9),
         "the picker shows the hub uploads actually go to"
     );
-    let mut no_default = with_targets(json!([{ "hubGuildId": 3, "name": "A", "isDefault": false }]));
+    let mut no_default =
+        with_targets(json!([{ "hubGuildId": 3, "name": "A", "isDefault": false }]));
     no_default.bg3_screenshot_hub = Some(77);
     assert_eq!(effective_hub(&no_default), None, "no default: wait");
     assert_eq!(hubs_view(&no_default, 0).selected, None);
@@ -410,4 +409,178 @@ fn hub_targets_with_out_of_range_ids_are_ignored() {
         .map(|t| t.hub_guild_id)
         .collect();
     assert_eq!(ids, vec![5]);
+}
+
+#[test]
+fn a_rescan_of_unchanged_files_neither_rereads_nor_encodes() {
+    let dir = temp_dir("shot-memo");
+    shot(&dir, "a.png", &png(40, 30, 11), OPT_IN + 1);
+    shot(&dir, "b.png", &png(40, 30, 12), OPT_IN + 2);
+    let first = collector(&dir, Some(HUB));
+    let scan = first.scan(ORIGIN, &SentState::default());
+    assert_eq!((scan.pending.len(), first.reads()), (2, 2));
+    assert!(
+        scan.pending
+            .iter()
+            .all(|p| needs_encode(p) && p.blobs.is_empty()),
+        "a scan never encodes: held, paused or unlinked uploads cost nothing"
+    );
+    // The registry builds a fresh collector per scan; the memo outlives it.
+    let second = collector(&dir, Some(HUB));
+    let again = second.scan(ORIGIN, &SentState::default());
+    assert_eq!(again.pending.len(), 2);
+    assert_eq!(again.files, 2, "still counted as files for the gate");
+    assert_eq!(
+        second.reads(),
+        0,
+        "unchanged (path, len, mtime): not re-read"
+    );
+    shot(&dir, "b.png", &png(40, 30, 13), OPT_IN + 3);
+    let third = collector(&dir, Some(HUB));
+    third.scan(ORIGIN, &SentState::default());
+    assert_eq!(third.reads(), 1, "a changed file is read again");
+}
+
+#[test]
+fn the_preview_carries_only_the_newest_original() {
+    let dir = temp_dir("shot-preview");
+    shot(&dir, "old.png", &png(20, 20, 14), OPT_IN + 1);
+    let newest = png(20, 20, 15);
+    shot(&dir, "new.png", &newest, OPT_IN + 2);
+    let c = collector(&dir, Some(HUB)).previewing(true);
+    let scan = c.scan(ORIGIN, &SentState::default());
+    let blobs: Vec<usize> = scan.pending.iter().map(|p| p.blobs.len()).collect();
+    assert_eq!(blobs, vec![1, 0]);
+    let b = scan
+        .pending
+        .first()
+        .and_then(|p| p.blobs.first())
+        .expect("preview blob");
+    assert_eq!((b.content_type.as_str(), &b.bytes), ("image/png", &newest));
+    assert!(scan.pending.iter().all(needs_encode));
+}
+
+#[tokio::test]
+async fn encode_for_send_builds_a_valid_message_from_the_original() {
+    let dir = temp_dir("shot-send");
+    shot(&dir, "a.png", &png(320, 180, 16), OPT_IN + 1);
+    let scan = collector(&dir, Some(HUB)).scan(ORIGIN, &SentState::default());
+    let p = scan.pending.first().expect("pending");
+    let ready = encode_for_send(p).await.expect("encodes");
+    assert!(!needs_encode(&ready));
+    assert_eq!(errors(&ready.body), Vec::<String>::new());
+    assert_eq!(
+        (ready.item.as_str(), ready.sha256.as_str()),
+        (p.item.as_str(), p.sha256.as_str())
+    );
+    let blob = ready.blobs.first().expect("webp blob");
+    assert_eq!(blob.content_type, "image/webp");
+    assert_eq!(ready.body["payload"]["image"]["sha256"], json!(blob.sha256));
+    assert_eq!(
+        ready.body["payload"]["takenAt"],
+        p.body["payload"]["takenAt"]
+    );
+}
+
+#[tokio::test]
+async fn a_corrupt_screenshot_is_refused_at_send_and_skipped_after() {
+    let dir = temp_dir("shot-corrupt");
+    let mut bytes = png(64, 64, 17);
+    bytes.truncate(60);
+    shot(&dir, "bad.png", &bytes, OPT_IN + 1);
+    let scan = collector(&dir, Some(HUB)).scan(ORIGIN, &SentState::default());
+    let p = scan.pending.first().expect("pending");
+    let err = encode_for_send(p).await.expect_err("refused");
+    assert!(err.starts_with("not uploaded, "), "{err}");
+    assert!(refused(&p.sha256));
+    let again = collector(&dir, Some(HUB)).scan(ORIGIN, &SentState::default());
+    assert!(
+        again.pending.is_empty(),
+        "a refused original is not retried"
+    );
+}
+
+#[tokio::test]
+async fn an_encoder_panic_refuses_the_file_without_unwinding_the_caller() {
+    let sha = "panicking-encoder-sha";
+    let out = off_thread::<(), _>(sha, || panic!("libwebp blew up")).await;
+    let err = out.expect_err("a panic is an error, not an unwind");
+    assert!(err.contains("encoder crashed"), "{err}");
+    assert!(refused(sha), "the panicking file is refused for the run");
+    let next = off_thread::<u8, _>("next-sha", || Ok(7)).await;
+    assert_eq!(next.ok(), Some(7), "later files still encode");
+    let retry = off_thread::<(), _>("retry-sha", || Err(Unready::Retry("moved".into()))).await;
+    assert_eq!(retry.err().as_deref(), Some("moved"));
+    assert!(!refused("retry-sha"), "a transient miss is not a refusal");
+}
+
+#[test]
+fn a_default_root_without_a_bg3_folder_has_no_folders() {
+    let base = temp_dir("shot-default-root");
+    let userdata = base.join("userdata");
+    std::fs::create_dir_all(userdata.join("123")).expect("mkdir");
+    shot(&userdata, "stray.png", &png(8, 8, 18), OPT_IN + 1);
+    let roots = vec![userdata.clone()];
+    let c = Bg3ScreenshotCollector::scoped(&roots, WatchScope::new(&roots))
+        .with_default_roots(true)
+        .with_opt_in(Some(OPT_IN))
+        .with_hub(Some(HUB));
+    assert_eq!(c.folders(), Vec::<PathBuf>::new());
+    let scan = c.scan(ORIGIN, &SentState::default());
+    assert_eq!(
+        (scan.files, c.reads()),
+        (0, 0),
+        "userdata itself is not read"
+    );
+    let manual = collector(&userdata, Some(HUB));
+    assert_eq!(
+        manual.folders(),
+        vec![userdata],
+        "an override still may be the folder"
+    );
+}
+
+/// A PNG with no pixel data: an IHDR claiming `w` x `h` RGBA, an empty
+/// IDAT and IEND.
+fn png_header(w: u32, h: u32) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut c = 0xFFFF_FFFF_u32;
+        for &b in bytes {
+            c ^= u32::from(b);
+            for _ in 0..8 {
+                c = if c & 1 == 1 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
+            }
+        }
+        !c
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        let body: Vec<u8> = kind.iter().chain(data).copied().collect();
+        out.extend(u32::try_from(data.len()).expect("small").to_be_bytes());
+        out.extend(&body);
+        out.extend(crc32(&body).to_be_bytes());
+    };
+    let mut ihdr = w.to_be_bytes().to_vec();
+    ihdr.extend(h.to_be_bytes());
+    ihdr.extend([8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(b"IDAT", &[]);
+    chunk(b"IEND", &[]);
+    out
+}
+
+#[test]
+fn a_source_over_the_decode_budget_is_refused_before_decoding() {
+    let header = png_header(16_384, 16_384);
+    assert_eq!(
+        crate::screenshot_encode::source_dimensions(&header).ok(),
+        Some((16_384, 16_384)),
+        "a well-formed header inside SOURCE_EDGE_MAX"
+    );
+    let err = encode_screenshot(&header).expect_err("over the 256 MiB budget");
+    assert!(err.to_lowercase().contains("limit"), "{err}");
 }

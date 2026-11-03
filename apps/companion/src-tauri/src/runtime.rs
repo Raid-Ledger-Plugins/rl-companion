@@ -566,6 +566,9 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     for entry in registry.entries() {
         if !entry.enabled {
             rt.set_held(entry.manifest.id, None);
+            if entry.manifest.id == crate::manifest::BG3_SCREENSHOT.id {
+                crate::bg3_screenshot::clear_waiting();
+            }
             continue;
         }
         let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry, token.as_ref()).await;
@@ -664,6 +667,23 @@ async fn upload_all(
                 false,
             );
         }
+        let ready;
+        let p = if crate::bg3_screenshot::needs_encode(p) {
+            // Decode + WebP encode off the async runtime; a crash refuses
+            // only this file and the loop carries on.
+            match crate::bg3_screenshot::encode_for_send(p).await {
+                Ok(done) => {
+                    ready = done;
+                    &ready
+                }
+                Err(line) => {
+                    rt.log_for(p.contract, format!("{}: {line}", p.label));
+                    continue;
+                }
+            }
+        } else {
+            p
+        };
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         let fx = effect(&outcome);
         rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));

@@ -4,7 +4,7 @@
 //! screenshot is refused for good.
 
 use image::imageops::FilterType;
-use image::{ImageReader, RgbImage};
+use image::{ImageReader, Limits, RgbImage};
 use std::io::Cursor;
 
 /// `COMPANION_WEBP_MAX_BYTES`: the blob store's per-WebP cap.
@@ -13,6 +13,15 @@ pub const WEBP_MAX_BYTES: usize = 1_048_576;
 pub const IMAGE_EDGE_MAX: u32 = 4096;
 /// `BG3_SCREENSHOT_SOURCE_EDGE_MAX`: the longest original side the contract takes.
 pub const SOURCE_EDGE_MAX: u32 = 16_384;
+/// The decoder's allocation budget. A source inside [`SOURCE_EDGE_MAX`] whose
+/// decoded pixels need more than this is refused before any pixel buffer is
+/// allocated: RGBA up to 8192 x 8192 (RGB about 9450 x 9450) fits, so every
+/// real 4K/8K capture does, while a 16384 x 16384 header does not. The RGBA
+/// to RGB copy afterwards adds at most 3/4 of it, so peak memory stays under
+/// about 450 MiB.
+pub const DECODE_ALLOC_MAX: u64 = 256 * 1024 * 1024;
+/// Total WebP encodes one screenshot may cost before it is refused.
+pub const MAX_ENCODES: usize = 8;
 /// Qualities tried at each size, best first.
 const QUALITIES: [f32; 3] = [80.0, 65.0, 50.0];
 /// Downscale rounds before giving up.
@@ -46,7 +55,16 @@ pub fn encode_screenshot(bytes: &[u8]) -> Result<Encoded, String> {
     if sw == 0 || sh == 0 || sw > SOURCE_EDGE_MAX || sh > SOURCE_EDGE_MAX {
         return Err(format!("{sw}x{sh} is outside 1-{SOURCE_EDGE_MAX} px"));
     }
-    let decoded = image::load_from_memory(bytes)
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(SOURCE_EDGE_MAX);
+    limits.max_image_height = Some(SOURCE_EDGE_MAX);
+    limits.max_alloc = Some(DECODE_ALLOC_MAX);
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("not an image ({e})"))?;
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
         .map_err(|e| format!("not a readable image ({e})"))?
         .into_rgb8();
     let webp = fit_under(fit(decoded, IMAGE_EDGE_MAX), WEBP_MAX_BYTES)?;
@@ -59,12 +77,17 @@ pub fn encode_screenshot(bytes: &[u8]) -> Result<Encoded, String> {
     })
 }
 
-/// Encode `img`, stepping quality then size down until it is ≤ `max` bytes.
-/// Returns the WebP and its size.
+/// Encode `img`, stepping quality then size down until it is ≤ `max` bytes,
+/// in at most [`MAX_ENCODES`] encodes. Returns the WebP and its size.
 pub fn fit_under(mut img: RgbImage, max: usize) -> Result<(Vec<u8>, u32, u32), String> {
+    let mut encodes = 0;
     for _ in 0..MAX_ROUNDS {
         let mut smallest = usize::MAX;
         for q in QUALITIES {
+            if encodes == MAX_ENCODES {
+                return Err(format!("could not fit a WebP under {max} bytes"));
+            }
+            encodes += 1;
             let out = webp_lossy(&img, q)?;
             if out.len() <= max {
                 return Ok((out, img.width(), img.height()));

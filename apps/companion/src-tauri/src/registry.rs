@@ -45,6 +45,8 @@ fn make_bg3_screenshot(
 ) -> Box<dyn Collector> {
     Box::new(
         Bg3ScreenshotCollector::scoped(roots, scope)
+            .with_default_roots(cfg.roots_override(BG3_SCREENSHOT.id).is_none())
+            .previewing(BG3_SCREENSHOT.confirm_first_upload && !cfg.consented(BG3_SCREENSHOT.id))
             .with_opt_in(cfg.opted_in_at(BG3_SCREENSHOT.id))
             .with_hub(crate::screenshot_commands::effective_hub(cfg))
             .reporting(&crate::bg3_screenshot::WAITING),
