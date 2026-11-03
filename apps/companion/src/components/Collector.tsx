@@ -107,6 +107,7 @@ export function Collector({ onError, ...nav }: CollectorProps) {
     onToggle: (enabled) => run({ panel: row.id }, () => api.setCollectorEnabled(row.id, enabled)),
     onUpload: () => run({ panel: row.id }, () => api.confirmFirstUpload(row.id)),
     onSkip: () => run({ panel: row.id }, () => api.skipFirstUpload(row.id)),
+    onCampaign: (key, ticked) => run("none", () => api.setBg3Campaign(key, ticked)),
   });
   return <CollectorScreen status={status} {...nav} wow={wow} game={game} />;
 }

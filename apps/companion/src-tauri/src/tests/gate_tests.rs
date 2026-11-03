@@ -10,6 +10,7 @@ use serde_json::json;
 fn pending(n: usize) -> Vec<PendingUpload> {
     (0..n)
         .map(|i| PendingUpload {
+            campaign: None,
             contract: "bg3-save",
             scope: format!("https://rl.test|/saves/{i}.lsv"),
             item: "save".into(),

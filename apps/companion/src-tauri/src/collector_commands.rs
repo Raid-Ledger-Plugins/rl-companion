@@ -2,7 +2,7 @@
 //! "Upload now".
 
 use crate::collector_view::{apply_root, known};
-use crate::manifest::WOW_LEDGERLINK;
+use crate::manifest::{BG3_SAVE, WOW_LEDGERLINK};
 use crate::runtime::{status, CollectorStatusDto, Runtime};
 use crate::state::Shared;
 use std::sync::Arc;
@@ -198,5 +198,31 @@ pub async fn refresh_server_config(
     rt: State<'_, Arc<Runtime>>,
 ) -> Result<CollectorStatusDto, String> {
     crate::server_config::refresh(&app, &rt).await;
+    Ok(status(&app, &rt))
+}
+
+/// Tick or untick one BG3 campaign in the picker (ROK-2068): persisted, then
+/// a rescan. Unticking only stops future uploads; nothing is deleted.
+#[tauri::command]
+pub fn set_bg3_campaign(
+    app: AppHandle,
+    state: State<'_, Shared>,
+    rt: State<'_, Arc<Runtime>>,
+    key: String,
+    ticked: bool,
+) -> Result<CollectorStatusDto, String> {
+    if !crate::bg3_campaigns::valid_key(&key) {
+        return Err("Unknown campaign".into());
+    }
+    save(&state, |c| {
+        c.bg3_campaigns.insert(key.clone(), ticked);
+    })?;
+    let name = crate::bg3_campaigns::last()
+        .into_iter()
+        .find(|g| g.key == key)
+        .map_or_else(|| "A campaign".to_owned(), |g| g.name);
+    let verb = if ticked { "on" } else { "off" };
+    rt.log_for(BG3_SAVE.id, format!("{name}: uploads turned {verb}"));
+    rt.kick();
     Ok(status(&app, &rt))
 }

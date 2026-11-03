@@ -1,14 +1,17 @@
 //! ROK-2061 lane 2: the BG3 save collector, through the registry.
 
 use super::temp_dir;
-use crate::bg3_collector::{build, newest_first};
-use crate::collector::SentState;
+use crate::bg3_campaigns::{persist_first_sight, CampaignStore};
+use crate::bg3_collector::{build, newest_first, Bg3SaveCollector};
+use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE};
 use crate::registry::{CollectorRegistry, BUILTINS};
+use crate::scope::WatchScope;
 use crate::upload::Uploader;
 use rl_collectors::sha256_hex;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const SAVE_INFO: &str = include_str!(
@@ -83,7 +86,16 @@ fn install(story: &Path, bytes: &[u8]) -> PathBuf {
 }
 
 fn registry(story: &Path, on: bool) -> CollectorRegistry {
+    registry_ticked(story, on, &[])
+}
+
+/// [`registry`] with the picker's ticks, keyed by save-folder name.
+fn registry_ticked(story: &Path, on: bool, ticks: &[(&str, bool)]) -> CollectorRegistry {
     let mut cfg = AppConfig::default();
+    for (folder, t) in ticks {
+        let key = rl_collectors::campaign_key_from_save_folder(folder);
+        cfg.bg3_campaigns.insert(key, *t);
+    }
     cfg.collector_roots.insert(
         BG3_SAVE.id.into(),
         vec![story.to_string_lossy().into_owned()],
@@ -262,25 +274,57 @@ fn newest_first_orders_by_mtime_with_unknown_last() {
     assert_eq!(names, ["new", "mid", "old", "none"]);
 }
 
+fn stamp(story: &Path, folder: &str, secs: u64) {
+    let dir = story.join(folder);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let file = dir.join("QuickSave_1.lsv");
+    std::fs::write(&file, save_bytes()).expect("lsv");
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let f = std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .expect("open");
+    f.set_modified(at).expect("set mtime");
+}
+
+fn queued(reg: &CollectorRegistry, folders: [&'static str; 3]) -> Vec<&'static str> {
+    let scan = reg
+        .get(BG3_SAVE.id)
+        .and_then(|e| e.scan("https://raid.example.net", &SentState::default()))
+        .expect("enabled");
+    scan.pending
+        .iter()
+        .filter_map(|p| folders.into_iter().find(|f| p.scope.contains(f)))
+        .collect()
+}
+
+#[test]
+fn an_unticked_campaign_is_not_queued_and_an_old_one_waits_for_a_tick() {
+    let story = temp_dir("bg3-picker");
+    stamp(&story, "A_old-1", 1_700_000_000);
+    stamp(&story, "B_new-2", 4_000_000_000);
+    stamp(&story, "C_mid-3", 1_750_000_000);
+    let folders = ["A_old", "B_new", "C_mid"];
+    // Defaults: B (saved now) on; A and C (over 30 days old) off.
+    assert_eq!(queued(&registry(&story, true), folders), ["B_new"]);
+    let picked = registry_ticked(&story, true, &[("A_old-1", true), ("B_new-2", false)]);
+    assert_eq!(
+        queued(&picked, folders),
+        ["A_old"],
+        "ticks override the default"
+    );
+    let _ = std::fs::remove_dir_all(story);
+}
+
 #[test]
 fn a_scan_queues_the_newest_save_first() {
     let story = temp_dir("bg3-newest");
-    let stamp = |folder: &str, secs: u64| {
-        let dir = story.join(folder);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let file = dir.join("QuickSave_1.lsv");
-        std::fs::write(&file, save_bytes()).expect("lsv");
-        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
-        let f = std::fs::File::options()
-            .write(true)
-            .open(&file)
-            .expect("open");
-        f.set_modified(at).expect("set mtime");
-    };
-    stamp("A_old-1", 1_700_000_000);
-    stamp("B_new-2", 1_800_000_000);
-    stamp("C_mid-3", 1_750_000_000);
-    let on = registry(&story, true);
+    stamp(&story, "A_old-1", 1_700_000_000);
+    stamp(&story, "B_new-2", 1_800_000_000);
+    stamp(&story, "C_mid-3", 1_750_000_000);
+    // All three ticked: these mtimes are over 30 days old (ROK-2068 picker).
+    let ticks = [("A_old-1", true), ("B_new-2", true), ("C_mid-3", true)];
+    let on = registry_ticked(&story, true, &ticks);
     let bg3 = on.get(BG3_SAVE.id).expect("bg3");
     let scan = bg3
         .scan("https://raid.example.net", &SentState::default())
@@ -292,5 +336,95 @@ fn a_scan_queues_the_newest_save_first() {
         .filter_map(|p| folders.into_iter().find(|f| p.scope.contains(f)))
         .collect();
     assert_eq!(order, ["B_new", "C_mid", "A_old"], "{:?}", scan.notes);
+    let _ = std::fs::remove_dir_all(story);
+}
+
+/// A bare collector over `story` with `ticks` (by save folder) and its own store.
+fn picked(story: &Path, ticks: &[(&str, bool)]) -> (Bg3SaveCollector, &'static CampaignStore) {
+    let ticks: BTreeMap<String, bool> = ticks
+        .iter()
+        .map(|(f, t)| (rl_collectors::campaign_key_from_save_folder(f), *t))
+        .collect();
+    let store: &'static CampaignStore = Box::leak(Box::new(CampaignStore::new()));
+    let bg3 = Bg3SaveCollector::scoped(&[story.to_path_buf()], WatchScope::new(&[story]))
+        .with_ticks(ticks)
+        .remembering(store);
+    (bg3, store)
+}
+
+#[test]
+fn an_unticked_campaigns_saves_are_listed_but_never_built() {
+    let story = temp_dir("bg3-off-unbuilt");
+    stamp(&story, "A_off-1", 1_750_000_000);
+    stamp(&story, "B_on-2", 1_760_000_000);
+    let (bg3, store) = picked(&story, &[("A_off-1", false), ("B_on-2", true)]);
+    let off = rl_collectors::campaign_key_from_save_folder("A_off-1");
+    let found = bg3.found(
+        "https://raid.example.net",
+        &SentState::default(),
+        &mut Scan::default(),
+    );
+    let built: Vec<bool> = found
+        .iter()
+        .filter(|(c, _)| c.key == off)
+        .map(|(_, p)| p.is_some())
+        .collect();
+    assert_eq!(
+        built,
+        [false],
+        "the unticked campaign's save must be found but carry no upload"
+    );
+    assert_eq!(
+        bg3.builds(),
+        1,
+        "only the ticked campaign's save may reach the builder"
+    );
+    let scan = bg3.scan("https://raid.example.net", &SentState::default());
+    assert_eq!(
+        (bg3.builds(), scan.pending.len()),
+        (2, 1),
+        "{:?}",
+        scan.notes
+    );
+    let row = store.groups().into_iter().find(|g| g.key == off);
+    let row = row.expect("the unticked campaign still has a picker row");
+    assert_eq!((row.count, row.newest_unix), (1, 1_750_000_000));
+    assert!(!row.name.is_empty(), "the row keeps its name");
+    let _ = std::fs::remove_dir_all(story);
+}
+
+#[test]
+fn a_first_scan_saves_new_campaigns_defaults_and_a_second_scan_writes_nothing() {
+    let story = temp_dir("bg3-first-sight");
+    stamp(&story, "A_old-1", 1_700_000_000);
+    stamp(&story, "B_new-2", 4_000_000_000);
+    let path = temp_dir("bg3-first-sight-cfg").join("config.json");
+    let shared =
+        crate::state::Shared::new(path.clone(), Box::new(crate::token::MemoryStore::default()));
+    let (bg3, store) = picked(&story, &[]);
+    bg3.scan("https://raid.example.net", &SentState::default());
+    persist_first_sight(store, &shared);
+    let key = rl_collectors::campaign_key_from_save_folder;
+    let want = BTreeMap::from([(key("A_old-1"), false), (key("B_new-2"), true)]);
+    assert_eq!(
+        shared.config().bg3_campaigns,
+        want,
+        "the 30-day defaults are adopted"
+    );
+    assert_eq!(
+        AppConfig::load(&path).bg3_campaigns,
+        want,
+        "and saved to disk"
+    );
+    std::fs::remove_file(&path).expect("drop the saved config");
+    let again = Bg3SaveCollector::scoped(std::slice::from_ref(&story), WatchScope::new(&[&story]))
+        .with_ticks(shared.config().bg3_campaigns)
+        .remembering(store);
+    again.scan("https://raid.example.net", &SentState::default());
+    persist_first_sight(store, &shared);
+    assert!(
+        !path.exists(),
+        "a scan with no new campaign must not write the config"
+    );
     let _ = std::fs::remove_dir_all(story);
 }

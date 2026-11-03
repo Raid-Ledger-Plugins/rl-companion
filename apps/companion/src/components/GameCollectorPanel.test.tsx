@@ -28,6 +28,7 @@ const row: CollectorRow = {
   confirmFirstUpload: true,
   consented: false,
   preview: null,
+  campaigns: [],
 };
 
 function props(over: Partial<GameCollectorPanelProps> = {}): GameCollectorPanelProps {

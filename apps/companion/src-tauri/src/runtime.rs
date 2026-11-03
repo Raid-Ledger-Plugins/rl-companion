@@ -575,6 +575,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
             break;
         }
     }
+    crate::bg3_campaigns::persist_first_sight(&crate::bg3_campaigns::STORE, &shared);
     let joined: Vec<String> = lines.values().cloned().collect();
     let line = status_line(&registry, &joined);
     let line = match device_note(paused, held.is_some(), linked.clone()) {
@@ -656,7 +657,7 @@ async fn upload_all(
 ) -> (String, bool) {
     let waiting = pending.len();
     let mut sent = 0usize;
-    for p in pending {
+    for p in crate::bg3_campaigns::still_ticked(pending, app) {
         if app.state::<Shared>().is_paused() {
             return (
                 format!("Paused — uploaded {sent} of {waiting} export(s)"),

@@ -3,6 +3,7 @@ import css from "../styles.css?raw";
 import type { CollectorRow } from "../api";
 import { hosts } from "../test/elements";
 import { bg3Tile, mixedStatus, tile, wowTile } from "../test/fixtures";
+import { Bg3CampaignPicker } from "./Bg3CampaignPicker";
 import { GameCollectorPanel } from "./GameCollectorPanel";
 import { GameTiles } from "./GameTiles";
 import { GameView } from "./GameView";
@@ -24,8 +25,11 @@ const row: CollectorRow = {
   id: "bg3-save", displayName: "Baldur's Gate 3", enabled: true, status: "1 waiting",
   detectedFolder: "/saves", folderOverride: "x", overrideNote: "Not used: folder \"x\" must be a full path",
   confirmFirstUpload: true, consented: false,
+  campaigns: [],
   preview: { collectorId: "bg3-save", saveName: "S", campaign: "abcd", location: "L", difficulty: "D", savedAt: "", party: [{ name: "A", summary: "B" }], thumbnail: "data:image/webp;base64,AA==", waiting: 1 },
 };
+const camp = (i: number) => ({ key: String(i).padStart(64, "0"), name: `Run ${i}`, newestSavedAt: "2026-11-01T00:00:00Z", saveCount: 2, ticked: i === 0, defaultOn: false });
+const campaigns = Array.from({ length: 10 }, (_, i) => camp(i));
 const handlers = { dirDraft: "", saveError: null, onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle: vi.fn(), onUpload: vi.fn(), onSkip: vi.fn() };
 const wow = { dirDraft: "", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle: vi.fn(), onUploadNow: vi.fn() };
 const allTiles = [
@@ -39,6 +43,7 @@ const els = hosts(
     <GameTiles tiles={allTiles} lastChecked="2026-11-02T18:00:00Z" onOpen={vi.fn()} />
     <GameView status={mixedStatus} id="bg3-save" onBack={vi.fn()} wow={wow} game={() => handlers} />
     <GameView status={mixedStatus} id="wow-ledgerlink" onBack={vi.fn()} wow={wow} game={() => handlers} />
+    <Bg3CampaignPicker campaigns={campaigns} enabled onTick={vi.fn()} />
   </>,
 );
 // `device` is the Collector wrapper's once-per-device line.
@@ -61,6 +66,7 @@ describe("theme tokens — light and dark", () => {
         "preview", "thumb", "facts", "error", "muted", "device",
         "tiles", "tile", "warn", "off", "old", "art", "cover", "fallback", "initials", "scrim",
         "ov-title", "ov-chip", "ov-label", "tl", "gv-head", "back", "banner", "between", "small",
+        "camps", "camps-box", "camps-more", "toggle",
       ]));
       for (const cls of classes) {
         const found = rulesFor(cls);

@@ -1,8 +1,9 @@
 //! Per-game rows for the window (ROK-2061 lane 3): one row per registered
 //! collector, plus the device-level state shown once (not per collector).
 
+use crate::bg3_campaigns::{dtos, last, now_unix, Bg3CampaignDto, CampaignGroup};
 use crate::config::AppConfig;
-use crate::manifest::{resolve_override, CollectorManifest, Platform, WOW_LEDGERLINK};
+use crate::manifest::{resolve_override, CollectorManifest, Platform, BG3_SAVE, WOW_LEDGERLINK};
 use crate::preview::PreviewDto;
 use crate::registry::BUILTINS;
 use serde::Serialize;
@@ -25,6 +26,9 @@ pub struct CollectorRowDto {
     pub confirm_first_upload: bool,
     pub consented: bool,
     pub preview: Option<PreviewDto>,
+    /// The BG3 campaign picker's rows (ROK-2068); empty for other games and
+    /// until the first scan.
+    pub campaigns: Vec<Bg3CampaignDto>,
 }
 
 /// The rate-limit note for text that is not re-rendered every second (the
@@ -118,9 +122,24 @@ pub fn rows(
                 confirm_first_upload: m.confirm_first_upload,
                 consented: cfg.consented(m.id),
                 preview: previews.get(m.id).cloned(),
+                campaigns: campaigns_for(m.id, cfg, &last(), now_unix()),
             }
         })
         .collect()
+}
+
+/// The picker rows: BG3's only, from the given scan groups.
+pub fn campaigns_for(
+    id: &str,
+    cfg: &AppConfig,
+    groups: &[CampaignGroup],
+    now_unix: i64,
+) -> Vec<Bg3CampaignDto> {
+    if id == BG3_SAVE.id {
+        dtos(groups, &cfg.bg3_campaigns, now_unix)
+    } else {
+        Vec::new()
+    }
 }
 
 /// The manifest for a window-supplied id, or a user-facing error.

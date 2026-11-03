@@ -126,6 +126,20 @@ export interface Preview {
   waiting: number;
 }
 
+/** One BG3 campaign in the upload picker (ROK-2068). */
+export interface Bg3Campaign {
+  /** The save's `campaignKey` (SHA-256 hex). */
+  key: string;
+  /** The party leader's name, else the newest save's name. */
+  name: string;
+  /** RFC 3339. */
+  newestSavedAt: string;
+  saveCount: number;
+  ticked: boolean;
+  /** What `ticked` would be without the user's choice (on within 30 days). */
+  defaultOn: boolean;
+}
+
 export interface CollectorRow {
   id: string;
   displayName: string;
@@ -137,9 +151,12 @@ export interface CollectorRow {
   confirmFirstUpload: boolean;
   consented: boolean;
   preview: Preview | null;
+  /** BG3's campaign picker rows; empty for other games. */
+  campaigns: Bg3Campaign[];
 }
 
 export const LEDGERLINK_ID = "wow-ledgerlink";
+export const BG3_ID = "bg3-save";
 
 export const getCollectorStatus = () => invoke<CollectorStatus>("get_collector_status");
 export const setWowDir = (dir: string) => invoke<CollectorStatus>("set_wow_dir", { dir });
@@ -153,6 +170,8 @@ export const setCollectorRoot = (id: string, dir: string) =>
 export const pickCollectorRoot = (id: string) => invoke<CollectorStatus | null>("pick_collector_root", { id });
 export const confirmFirstUpload = (id: string) => invoke<CollectorStatus>("confirm_first_upload", { id });
 export const skipFirstUpload = (id: string) => invoke<CollectorStatus>("skip_first_upload", { id });
+export const setBg3Campaign = (key: string, ticked: boolean) =>
+  invoke<CollectorStatus>("set_bg3_campaign", { key, ticked });
 export const uploadNow = () => invoke<void>("upload_now");
 export const refreshServerConfig = () => invoke<CollectorStatus>("refresh_server_config");
 

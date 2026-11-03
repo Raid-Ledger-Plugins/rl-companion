@@ -20,6 +20,7 @@ fn env(k: &str) -> Option<String> {
 
 fn pending(name: &str, saved_at: &str, sha: &str) -> PendingUpload {
     PendingUpload {
+        campaign: None,
         contract: "bg3-save",
         scope: format!("https://rl.test|/saves/{name}.lsv"),
         item: "save".into(),

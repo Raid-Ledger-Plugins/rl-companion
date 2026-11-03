@@ -17,6 +17,7 @@ fn blob_path() -> String {
 
 fn pending() -> PendingUpload {
     PendingUpload {
+        campaign: None,
         contract: "bg3-save",
         scope: "scope".into(),
         item: "item".into(),
