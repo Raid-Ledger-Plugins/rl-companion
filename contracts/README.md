@@ -6,5 +6,5 @@ commit and updating its source line below.
 
 | Folder | Source | Commit |
 |---|---|---|
-| `bg3-save/v1/` | `packages/contract/companion/bg3-save/v1/` on `main` | `790b4d44d` (2026-10-28; includes ROK-2034, `\p{Cs}` dropped from the save-name pattern) |
+| `bg3-save/v1/` | `packages/contract/companion/bg3-save/v1/` on `main` | `1199dc27e` (2026-11-03; adds ROK-1960 `file-name` key source + fixture, ROK-2070 §3.3 GameID hash-input wording) |
 | `wow-ledgerlink/v1/` | `packages/contract/companion/wow-ledgerlink/v1/` on the ROK-1964 branch (not yet on `main`) | `5dd3acd52` (2026-10-28) — re-pin from `main` once ROK-1964 merges |
