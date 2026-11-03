@@ -4,6 +4,7 @@
 //! refused before anything touches the disk.
 
 use super::health::is_flavor;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 pub const PROBE_ADDON: &str = "LedgerLinkProbe";
@@ -59,23 +60,66 @@ pub fn assert_allowed(wow_dir: &Path, target: &Path) -> Result<(), WriteGuardErr
     }
 }
 
-/// Write `bytes` to `target` atomically (temp file + rename), after
-/// [`assert_allowed`] and a symlink check on the resolved parent folder.
+/// Write `bytes` to `target` atomically (temp file + rename). Every folder
+/// from `wow_dir` down is checked BEFORE anything is created: a symlinked or
+/// redirected step is refused, and the resolved parent must sit inside the
+/// flavor's probe addon folder. The temp file is opened `create_new`, so a
+/// link planted at its name is never followed.
 pub fn guarded_write(wow_dir: &Path, target: &Path, bytes: &[u8]) -> Result<(), WriteGuardError> {
     assert_allowed(wow_dir, target)?;
-    let parent = target
-        .parent()
-        .ok_or_else(|| WriteGuardError::Outside(target.into()))?;
-    std::fs::create_dir_all(parent)?;
-    let real_parent = std::fs::canonicalize(parent)?;
+    let outside = || WriteGuardError::Outside(target.to_path_buf());
+    let parent = target.parent().ok_or_else(outside)?;
+    let rel = parent.strip_prefix(wow_dir).map_err(|_| outside())?;
     let real_root = std::fs::canonicalize(wow_dir)?;
-    if !real_parent.starts_with(&real_root) {
-        return Err(WriteGuardError::Outside(target.into()));
+    let (mut cur, mut expect) = (wow_dir.to_path_buf(), real_root.clone());
+    for part in rel.components() {
+        cur.push(part);
+        expect.push(part);
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(outside()),
+            Ok(_) if std::fs::canonicalize(&cur)? != expect => return Err(outside()),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&cur)?,
+            Err(e) => return Err(e.into()),
+        }
     }
+    let flavor = rel.components().next().ok_or_else(outside)?;
+    let probe_root = probe_addon_dir(&real_root, &flavor.as_os_str().to_string_lossy())?;
+    if !std::fs::canonicalize(parent)?.starts_with(&probe_root) {
+        return Err(outside());
+    }
+    Ok(write_new_then_rename(target, bytes, None)?)
+}
+
+/// Atomic write of a secret (the TLS key): owner-only (0600) on unix.
+pub fn write_private(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_new_then_rename(target, bytes, Some(0o600))
+}
+
+/// Write `<target>.tmp` (a fresh file — an existing one, or a link planted
+/// there, is removed rather than followed), then rename it over `target`.
+fn write_new_then_rename(target: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
     let tmp = crate::config::tmp_path(target);
-    let written = std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, target));
-    if written.is_err() {
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Some(m) = mode {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(m);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    let written = opts.open(&tmp).and_then(|mut f| {
+        f.write_all(bytes)?;
+        f.sync_all()
+    });
+    let renamed = written.and_then(|()| std::fs::rename(&tmp, target));
+    if renamed.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    Ok(written?)
+    renamed
 }

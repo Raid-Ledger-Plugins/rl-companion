@@ -52,7 +52,8 @@ impl TlsMaterial {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let json = serde_json::to_string(&m).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| format!("could not save the certificate: {e}"))?;
+        super::write_guard::write_private(path, json.as_bytes())
+            .map_err(|e| format!("could not save the certificate: {e}"))?;
         Ok(m)
     }
 
