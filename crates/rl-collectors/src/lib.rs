@@ -8,6 +8,9 @@
 //!   (stored, LZ4 or zstd).
 //! - [`extract_save_info`] and [`extract_thumbnail_webp`] pull the two
 //!   entries the `bg3-save/v1` contract needs.
+//! - [`read_lsf_attribute`] reads one attribute out of an LSF v7 resource;
+//!   [`campaign_key_from_package`] uses it to key a save by its `meta.lsf`
+//!   GameID, falling back to the save-folder hash.
 //! - [`normalise_save_info`] turns `SaveInfo.json` into the `bg3-save/v1`
 //!   payload; [`Bg3SaveMessage`] wraps it in the companion envelope.
 //! - [`SettleWatcher`] / [`is_settled`] decide when a save file has stopped
@@ -24,6 +27,7 @@
 
 mod error;
 mod extract;
+mod lsf;
 mod lspk;
 mod normalise;
 mod settle;
@@ -34,11 +38,13 @@ mod wow_sv;
 #[cfg(test)]
 mod tests;
 
-pub use error::{ExtractError, LspkError, NormaliseError, WebpError, WowSvError};
+pub use error::{ExtractError, LsfError, LspkError, NormaliseError, WebpError, WowSvError};
 pub use extract::{
-    SAVE_INFO_MAX_BYTES, SAVE_INFO_NAME, WEBP_MAX_BYTES, campaign_key_from_save_folder,
-    extract_save_info, extract_thumbnail_webp, sha256_hex, thumbnail_ref,
+    META_LSF_MAX_BYTES, META_LSF_NAME, SAVE_INFO_MAX_BYTES, SAVE_INFO_NAME, WEBP_MAX_BYTES,
+    campaign_key_from_package, campaign_key_from_save_folder, extract_save_info,
+    extract_thumbnail_webp, game_id_from_package, sha256_hex, thumbnail_ref,
 };
+pub use lsf::{LSF_MAGIC, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION, read_lsf_attribute};
 pub use lspk::{
     CompressionMethod, DEFAULT_MAX_ENTRY_BYTES, Entry, LSPK_VERSION, MAX_FILES, Package, read_lspk,
 };

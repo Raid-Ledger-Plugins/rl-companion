@@ -54,6 +54,45 @@ pub enum LspkError {
     NotFound(String),
 }
 
+/// Failure reading an LSF v7 resource (`meta.lsf`). Callers that only want
+/// the GameID treat every variant as "unknown layout" and fall back.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum LsfError {
+    /// The first four bytes are not `LSOF`.
+    #[error("not an LSF resource (magic {0:02x?})")]
+    BadMagic([u8; 4]),
+    /// Only LSF v7 (BG3) is supported.
+    #[error("unsupported LSF version {0} (only 7 is supported)")]
+    UnsupportedVersion(u32),
+    /// The input ends before a structure the header points at.
+    #[error("LSF truncated: {what} needs {need} bytes but the input is {have} bytes")]
+    Truncated {
+        what: &'static str,
+        need: u64,
+        have: u64,
+    },
+    /// zlib or an unknown compression method (low nibble of the flags).
+    #[error("LSF uses unsupported compression method {0}")]
+    UnsupportedCompression(u8),
+    /// A section declares more decompressed bytes than the reader accepts.
+    #[error("LSF {section} section is {size} bytes, over the {limit}-byte limit")]
+    SectionTooLarge {
+        section: &'static str,
+        size: u64,
+        limit: u64,
+    },
+    /// A section is corrupt: bad compressed data or a malformed record.
+    #[error("LSF {section} section could not be decoded: {reason}")]
+    Decode {
+        section: &'static str,
+        reason: String,
+    },
+    /// An attribute name points outside the string table.
+    #[error("LSF name reference {0:#010x} is not in the string table")]
+    BadStringRef(u32),
+}
+
 /// Failure reading a WebP header.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]

@@ -227,14 +227,14 @@ fn decode(entry: &Entry, raw: &[u8], expected: usize) -> Result<Vec<u8>, LspkErr
 }
 
 /// Whether `compressed` LZ4 bytes could possibly expand to `size` bytes.
-fn lz4_can_hold(compressed: u64, size: u64) -> bool {
+pub(crate) fn lz4_can_hold(compressed: u64, size: u64) -> bool {
     compressed.saturating_mul(LZ4_MAX_RATIO) >= size
 }
 
 /// Decode one zstd frame. The frame header is checked first so a tiny entry
 /// cannot make the decoder reserve a huge window; then at most
 /// `expected + 1` bytes are read and the caller compares the length.
-fn zstd_decode(raw: &[u8], expected: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn zstd_decode(raw: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     let wanted = expected as u64;
     let window = zstd_window_size(raw)?;
     let allowance = wanted.max(ZSTD_MIN_WINDOW_ALLOWANCE);
