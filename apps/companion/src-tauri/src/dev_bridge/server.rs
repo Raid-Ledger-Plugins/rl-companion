@@ -8,6 +8,7 @@ use super::health::{health, HealthInput};
 use super::logbuf::{self, LogBuffer};
 use super::paging::parse_query;
 use super::routes::{self, CollectorsFn};
+use super::snapshot_cache::SnapshotCache;
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response};
@@ -49,6 +50,8 @@ pub struct Snapshot {
     pub policy: AuthPolicy,
     pub wow_dir: String,
     pub probes_enabled: bool,
+    /// The dev snapshot cache (ROK-2072); `None` while the listener is off.
+    pub snapshot_cache: Option<Arc<SnapshotCache>>,
 }
 
 pub struct ServerCtx {
@@ -164,7 +167,7 @@ impl ServerCtx {
         }
     }
 
-    fn snapshot(&self) -> Snapshot {
+    pub(crate) fn snapshot(&self) -> Snapshot {
         self.snapshot
             .read()
             .unwrap_or_else(|p| p.into_inner())

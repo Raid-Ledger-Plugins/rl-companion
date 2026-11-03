@@ -39,7 +39,7 @@ async fn loopback_bridge(
     dir: &Path,
     cfg: &AppConfig,
 ) -> (DevBridge, SocketAddrV4, reqwest::Client) {
-    let bridge = DevBridge::new(dir.join(TLS_FILE));
+    let bridge = DevBridge::new(dir.join(TLS_FILE), None);
     bridge.refresh(cfg);
     bridge
         .listen(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
@@ -108,7 +108,7 @@ async fn turning_off_refuses_requests_racing_the_close() {
     let dir = super::temp_dir("bridge-off-policy");
     let token = DevToken::generate().expect("rng");
     let mut cfg = enabled_cfg(&token);
-    let bridge = DevBridge::new(dir.join(TLS_FILE));
+    let bridge = DevBridge::new(dir.join(TLS_FILE), None);
     bridge.refresh(&cfg);
     let auth = format!("Bearer {}", token.expose());
     let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);

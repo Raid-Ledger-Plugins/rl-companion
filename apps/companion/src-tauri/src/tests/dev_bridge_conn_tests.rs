@@ -58,7 +58,7 @@ fn cfg(token: &DevToken, allow: &str) -> AppConfig {
 }
 
 async fn bridge_on(dir: &Path, cfg: &AppConfig) -> (DevBridge, SocketAddrV4, reqwest::Client) {
-    let bridge = DevBridge::new(dir.join(TLS_FILE));
+    let bridge = DevBridge::new(dir.join(TLS_FILE), None);
     bridge.refresh(cfg);
     bridge
         .listen(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))

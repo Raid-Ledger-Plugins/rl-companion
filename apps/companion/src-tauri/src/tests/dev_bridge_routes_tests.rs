@@ -33,6 +33,7 @@ fn snap(wow: &Path) -> Snapshot {
         },
         wow_dir: wow.to_string_lossy().into_owned(),
         probes_enabled: false,
+        snapshot_cache: None,
     }
 }
 
@@ -312,7 +313,7 @@ fn collectors_serves_the_runtime_source() {
 fn wow_folder_change_refreshes_the_served_snapshot() {
     let wow = super::temp_dir("bridge-refresh");
     std::fs::create_dir_all(wow.join(FLAVOR)).expect("mkdir");
-    let bridge = DevBridge::new(wow.join("tls.json"));
+    let bridge = DevBridge::new(wow.join("tls.json"), None);
     let mut cfg = AppConfig::default();
     cfg.dev_bridge.allowlist = vec![CALLER.to_string()];
     cfg.dev_bridge.token_sha256 = Some(sha256_hex(&token()));

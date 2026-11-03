@@ -94,15 +94,20 @@ fn rejects_guid_unknown_key_presence_values_duplicates_and_version() {
 #[test]
 fn whole_snapshot_over_48_kib_is_rejected_at_root() {
     let mut v = snap(&ts(NOW), "1");
-    let line = json!({ "id": "S3", "status": "ok", "lines": vec!["z".repeat(270); 11] });
-    let call =
-        |i: usize| json!({ "fn": format!("F{i}"), "status": "error", "error": "e".repeat(500) });
+    // Every item valid on its own (lines ≤ 256 chars, each item ≤ 3 KiB).
+    let line = json!({ "id": "S3", "status": "ok", "lines": vec!["z".repeat(250); 11] });
+    let call = |i: usize| {
+        json!({ "fn": format!("F{i}"), "status": "error", "error": "e".repeat(500),
+                "values": vec!["v".repeat(400); 2] })
+    };
     v["sections"] = json!(vec![line; 9]);
-    v["calls"] = json!((0..30).map(call).collect::<Vec<_>>());
+    v["calls"] = json!((0..14).map(call).collect::<Vec<_>>());
     let len = serde_json::to_vec(&v).unwrap().len();
     assert!(len <= SNAPSHOT_MAX_BYTES, "{len}");
-    validate_snapshot(&v).expect("under the cap");
-    v["calls"] = json!((0..40).map(call).collect::<Vec<_>>());
+    if let Err(e) = validate_snapshot(&v) {
+        panic!("under the cap ({len} bytes) but rejected: {e}");
+    }
+    v["calls"] = json!((0..30).map(call).collect::<Vec<_>>());
     let len = serde_json::to_vec(&v).unwrap().len();
     assert!(len > SNAPSHOT_MAX_BYTES, "{len}");
     let e = validate_snapshot(&v).expect_err("over the cap");

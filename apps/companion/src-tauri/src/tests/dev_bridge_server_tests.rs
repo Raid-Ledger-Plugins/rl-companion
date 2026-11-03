@@ -25,7 +25,7 @@ struct Live {
 /// A bridge listening on 127.0.0.1:<random> (bind rules bypassed — loopback
 /// is refused for real use), with a client that trusts only its certificate.
 async fn live(dir: &Path, cfg: &AppConfig) -> Live {
-    let bridge = DevBridge::new(dir.join(TLS_FILE));
+    let bridge = DevBridge::new(dir.join(TLS_FILE), None);
     bridge.refresh(cfg);
     bridge
         .listen(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
@@ -81,7 +81,7 @@ fn cfg_with(token_sha256: Option<String>, allowlist: &[&str]) -> AppConfig {
 #[tokio::test]
 async fn bridge_off_by_default_opens_no_listener() {
     let dir = super::temp_dir("bridge-off");
-    let bridge = DevBridge::new(dir.join(TLS_FILE));
+    let bridge = DevBridge::new(dir.join(TLS_FILE), None);
     let fresh = AppConfig::default();
     assert!(!fresh.dev_bridge.enabled, "toggle defaults to off");
     let status = bridge.reconcile(&fresh).await;

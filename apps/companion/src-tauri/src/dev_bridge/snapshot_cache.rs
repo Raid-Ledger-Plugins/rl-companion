@@ -11,9 +11,10 @@ use super::write_guard::{cache_file, guarded_cache_remove, guarded_cache_write};
 use rl_collectors::{rfc3339_utc_from_unix_seconds, DevSnapshotEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Under the app-data dir.
 pub const CACHE_DIR: [&str; 2] = ["dev-bridge", "snapshots"];
@@ -39,6 +40,8 @@ pub struct Row {
 pub struct SnapshotCache {
     root: PathBuf,
     lock: Mutex<()>,
+    /// Last-read mtime per `LedgerLink.lua`, so an unchanged file is not re-parsed.
+    mtimes: Mutex<HashMap<PathBuf, SystemTime>>,
 }
 
 /// `characterKey`: the same hash `sv-parsed` reports as `guidHash`.
@@ -114,6 +117,7 @@ impl SnapshotCache {
         Self {
             root,
             lock: Mutex::new(()),
+            mtimes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -210,6 +214,32 @@ impl SnapshotCache {
             self.prune_locked(now);
         }
         changed
+    }
+
+    /// Read `LedgerLinkDB.dev.snapshots` from one account-scope
+    /// `LedgerLink.lua` of `flavor` and ingest it; a file whose mtime has not
+    /// moved since the last read is skipped.
+    pub fn ingest_file(&self, flavor: &str, path: &Path, now: i64) -> usize {
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        {
+            let mut seen = self.mtimes.lock().unwrap_or_else(|p| p.into_inner());
+            if mtime.is_some() && seen.get(path) == mtime.as_ref() {
+                return 0;
+            }
+            if let Some(t) = mtime {
+                seen.insert(path.to_path_buf(), t);
+            }
+        }
+        let Ok(bytes) = std::fs::read(path) else {
+            return 0;
+        };
+        match rl_collectors::parse_ledgerlink_dev_snapshots(&bytes) {
+            Ok(d) => self.ingest(flavor, &d.entries, now),
+            Err(e) => {
+                logbuf::log("warn", "dev_bridge", &format!("dev snapshot read failed: {e}"));
+                0
+            }
+        }
     }
 
     /// Age + row caps on every file, then the whole-cache byte cap.
