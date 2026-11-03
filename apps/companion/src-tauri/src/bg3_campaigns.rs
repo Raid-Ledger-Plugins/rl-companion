@@ -218,11 +218,12 @@ pub fn adopt_defaults(ticks: &mut BTreeMap<String, bool>, fresh: BTreeMap<String
     ticks.len() > before
 }
 
-/// Persist the last scan's first-sight defaults into `bg3_campaigns`, so a
-/// campaign shown OFF stays OFF until the user ticks it, even if they play
-/// it again. Writes the config only when a new campaign appeared.
-pub fn persist_first_sight(state: &Shared) {
-    let fresh = STORE.take_first_sight();
+/// Persist `store`'s first-sight defaults (the app passes [`STORE`]) into
+/// `bg3_campaigns`, so a campaign shown OFF stays OFF until the user ticks
+/// it, even if they play it again. Writes the config only when a new
+/// campaign appeared.
+pub fn persist_first_sight(store: &CampaignStore, state: &Shared) {
+    let fresh = store.take_first_sight();
     if adopt_defaults(&mut state.config().bg3_campaigns, fresh.clone()) {
         let _ = state.update_config(|c| {
             adopt_defaults(&mut c.bg3_campaigns, fresh);

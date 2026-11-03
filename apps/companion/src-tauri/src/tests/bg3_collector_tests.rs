@@ -1,7 +1,7 @@
 //! ROK-2061 lane 2: the BG3 save collector, through the registry.
 
 use super::temp_dir;
-use crate::bg3_campaigns::CampaignStore;
+use crate::bg3_campaigns::{persist_first_sight, CampaignStore};
 use crate::bg3_collector::{build, newest_first, Bg3SaveCollector};
 use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
@@ -390,5 +390,41 @@ fn an_unticked_campaigns_saves_are_listed_but_never_built() {
     let row = row.expect("the unticked campaign still has a picker row");
     assert_eq!((row.count, row.newest_unix), (1, 1_750_000_000));
     assert!(!row.name.is_empty(), "the row keeps its name");
+    let _ = std::fs::remove_dir_all(story);
+}
+
+#[test]
+fn a_first_scan_saves_new_campaigns_defaults_and_a_second_scan_writes_nothing() {
+    let story = temp_dir("bg3-first-sight");
+    stamp(&story, "A_old-1", 1_700_000_000);
+    stamp(&story, "B_new-2", 4_000_000_000);
+    let path = temp_dir("bg3-first-sight-cfg").join("config.json");
+    let shared =
+        crate::state::Shared::new(path.clone(), Box::new(crate::token::MemoryStore::default()));
+    let (bg3, store) = picked(&story, &[]);
+    bg3.scan("https://raid.example.net", &SentState::default());
+    persist_first_sight(store, &shared);
+    let key = rl_collectors::campaign_key_from_save_folder;
+    let want = BTreeMap::from([(key("A_old-1"), false), (key("B_new-2"), true)]);
+    assert_eq!(
+        shared.config().bg3_campaigns,
+        want,
+        "the 30-day defaults are adopted"
+    );
+    assert_eq!(
+        AppConfig::load(&path).bg3_campaigns,
+        want,
+        "and saved to disk"
+    );
+    std::fs::remove_file(&path).expect("drop the saved config");
+    let again = Bg3SaveCollector::scoped(&[story.clone()], WatchScope::new(&[&story]))
+        .with_ticks(shared.config().bg3_campaigns)
+        .remembering(store);
+    again.scan("https://raid.example.net", &SentState::default());
+    persist_first_sight(store, &shared);
+    assert!(
+        !path.exists(),
+        "a scan with no new campaign must not write the config"
+    );
     let _ = std::fs::remove_dir_all(story);
 }
