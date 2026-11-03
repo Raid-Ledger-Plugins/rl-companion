@@ -67,6 +67,19 @@ export interface LogLine {
 
 export type TileState = "supported" | "plugin_off" | "not_on_server" | "app_too_old" | "unknown";
 
+/** One collector's state inside its game's tile (ROK-2073). */
+export interface TileLine {
+  collectorId: string;
+  /** "Saves", "Screenshots". */
+  label: string;
+  state: TileState;
+  chip: string | null;
+  line: string;
+  /** This collector's game-view banner (plain text). */
+  banner: string | null;
+  pluginName: string | null;
+}
+
 /** One game tile on the home screen (computed in Rust, `tiles.rs`). */
 export interface Tile {
   /** Contract id (== collector id for the app's own collectors). */
@@ -90,6 +103,11 @@ export interface Tile {
   /** `true` → the gradient + initials fallback. */
   fallback: boolean;
   initials: string;
+  /**
+   * One line per collector of the game; empty for `app_too_old`. The tile's
+   * own `state`/`chip`/`line`/`banner` are the most urgent line's.
+   */
+  lines: TileLine[];
 }
 
 export interface CollectorStatus {

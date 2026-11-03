@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { CollectorStatus } from "../api";
 import { hosts, must, text } from "../test/elements";
-import { mixedStatus } from "../test/fixtures";
+import { bg3GroupTile, bg3Row, bg3Tile, mixedStatus } from "../test/fixtures";
 import { GameView, type GameHandlers, type WowHandlers } from "./GameView";
 
 const wow: WowHandlers = { dirDraft: "C:\\WoW", onDirDraft: vi.fn(), onSaveDir: vi.fn(), onPickDir: vi.fn(), onToggle: vi.fn(), onUploadNow: vi.fn() };
@@ -69,5 +69,38 @@ describe("GameView — header, banner, back, D15 slot", () => {
     expect(html("wow-ledgerlink")).not.toContain("data-slot");
     const other = { ...mixedStatus, collectors: [...mixedStatus.collectors, { ...must(mixedStatus.collectors[1], "bg3"), id: "other-game" }] };
     expect(html("other-game", other)).not.toContain("data-slot");
+  });
+});
+
+describe("GameView — ROK-2073: a shared game tile opens every collector's controls", () => {
+  const shotRow = { ...bg3Row, id: "bg3-screenshot", displayName: "BG3 screenshots", status: "Not supported on this server" };
+  const grouped: CollectorStatus = { ...mixedStatus, collectors: [...mixedStatus.collectors, shotRow], tiles: [bg3GroupTile] };
+
+  it("AC3: opened from either collector, the BG3 view shows Saves then Screenshots with both pickers", () => {
+    for (const id of ["bg3-save", "bg3-screenshot"]) {
+      const out = html(id, grouped);
+      expect(out, id).toContain("<h2>Baldur&#x27;s Gate 3</h2>");
+      expect(out.indexOf('<h3 class="gv-part">Saves</h3>'), id).toBeGreaterThan(-1);
+      expect(out.indexOf('<h3 class="gv-part">Screenshots</h3>'), id).toBeGreaterThan(out.indexOf('<h3 class="gv-part">Saves</h3>'));
+      expect(out, id).toContain('data-slot="bg3-campaign-picker"');
+      expect(out, id).toContain('data-slot="bg3-screenshot-hub-picker"');
+    }
+  });
+
+  it("AC2: the not-on-server banner sits in the Screenshots section only; device lines show once", () => {
+    const out = html("bg3-save", grouped);
+    const shots = out.indexOf('<h3 class="gv-part">Screenshots</h3>');
+    const banner = out.indexOf("This server doesn&#x27;t take Baldur&#x27;s Gate 3 screenshots.");
+    expect(banner).toBeGreaterThan(shots);
+    expect(out.match(/class="banner"/g)).toHaveLength(1);
+    expect(out.match(/Rate limited for 60 s/g)).toHaveLength(1);
+  });
+
+  it("MINOR 3: one plugin off for both collectors shows the paused banner once, above the sections", () => {
+    const off = { state: "plugin_off" as const, chip: "Plugin not installed", line: "Plugin not installed", banner: must(bg3Tile.banner, "banner"), pluginName: "Baldur's Gate 3" };
+    const lines = bg3GroupTile.lines.map((l) => ({ ...l, ...off }));
+    const out = html("bg3-save", { ...grouped, tiles: [{ ...bg3GroupTile, lines }] });
+    expect(out.match(/Uploads are paused\./g)).toHaveLength(1);
+    expect(out.indexOf("Uploads are paused.")).toBeLessThan(out.indexOf('<h3 class="gv-part">Saves</h3>'));
   });
 });

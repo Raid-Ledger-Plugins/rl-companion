@@ -1,4 +1,4 @@
-import type { CollectorRow, CollectorStatus, Tile } from "../api";
+import type { CollectorRow, CollectorStatus, Tile, TileLine } from "../api";
 
 export function tile(over: Partial<Tile> & Pick<Tile, "id" | "state">): Tile {
   return {
@@ -13,9 +13,28 @@ export function tile(over: Partial<Tile> & Pick<Tile, "id" | "state">): Tile {
     cover: "data:image/jpeg;base64,AA==",
     fallback: false,
     initials: "GG",
+    lines: [],
     ...over,
   };
 }
+
+/** One collector's line inside a game tile (ROK-2073). */
+export function tileLine(over: Partial<TileLine> & Pick<TileLine, "collectorId" | "state">): TileLine {
+  return { label: over.collectorId, chip: null, line: "Up to date", banner: null, pluginName: null, ...over };
+}
+
+/** AC1/AC2: BG3 saves up to date, screenshots not on this server — one tile, two lines. */
+export const bg3GroupTile = tile({
+  id: "bg3-save", state: "supported", title: "Baldur's Gate 3", initials: "BG",
+  lines: [
+    tileLine({ collectorId: "bg3-save", state: "supported", label: "Saves" }),
+    tileLine({
+      collectorId: "bg3-screenshot", state: "not_on_server", label: "Screenshots", chip: "Not on this server",
+      line: "Not supported on this server",
+      banner: "This server doesn't take Baldur's Gate 3 screenshots. Your settings are kept.",
+    }),
+  ],
+});
 
 export const wowTile = tile({ id: "wow-ledgerlink", state: "supported", title: "World of Warcraft", subtitle: "LedgerLink addon", initials: "WW" });
 export const bg3Tile = tile({
