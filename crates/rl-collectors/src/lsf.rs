@@ -1,27 +1,42 @@
 //! Minimal read-only LSF v7 reader (`meta.lsf` inside a BG3 save): find one
 //! attribute by name and return its value as text. No general tree API.
 //!
-//! Layout, ported from LSLib `LSFReader`/`LSFCommon` (ROK-2070 spec §2).
-//! Every line below is UNVERIFIED against a real save until ROK-2070 L2:
+//! Layout, from LSLib `LSFReader`/`LSFCommon`, VERIFIED against a real BG3
+//! save's `meta.lsf` (Patch 7+, 1 661 bytes) in ROK-2070 L2 with
+//! `examples/meta_lsf_dump.rs`:
 //!
 //! | Offset | Field |
 //! |---|---|
 //! | 0 | magic `LSOF` |
 //! | 4 | version u32 = 7 |
-//! | 8 | EngineVersion u64 |
+//! | 8 | EngineVersion u64 (real: `0x02040000000002bc`) |
 //! | 16 | u32 pairs `(uncompressed, onDisk)`: Strings, Keys, Nodes, Attributes, Values |
-//! | 56 | CompressionFlags u8, two unknown bytes, u16 → bytes 56..60 |
-//! | 60 | MetadataFormat u32 (bit 0: keys + adjacency → V3 records) |
-//! | 64 | sections on disk, in order: Strings, Nodes, Attributes, Values (Keys last, unread) |
+//! | 56 | CompressionFlags u8 (real: `0x22`, LZ4), then three zero bytes |
+//! | 60 | MetadataFormat u32 (real: `0` → V2 records; bit 0 → V3) |
+//! | 64 | sections back to back; the real file has Strings, Nodes, Attributes, Values and an empty Keys (0/0), so the Keys position is moot; a non-empty Keys is assumed to follow Values |
 //!
-//! A section with `onDisk == 0` (or compression method 0) is stored; else the
-//! low nibble of CompressionFlags picks LZ4 (block, or frame when the bytes
-//! start with the LZ4 frame magic) or zstd. zlib is refused.
+//! Every real section is compressed and occupies `onDisk` bytes; a section
+//! with `onDisk == 0` (or method 0) is stored and occupies `uncompressed`.
+//! The low nibble of CompressionFlags picks LZ4 (2) or zstd (3); zlib is
+//! refused. Real LZ4: Strings is a raw **block**; Nodes, Attributes and
+//! Values are **frames** (FLG `0x40`: linked blocks, no checksums, no content
+//! size; BD `0x40`). Frame checksums are skipped, not verified.
 //!
-//! Strings: `u32 buckets`, each `u16 count` then `count × (u16 len, utf8)`;
-//! a name ref is `(bucket << 16) | index`. Attributes V3 (16 B): `name u32,
-//! typeAndLength u32 (type = low 6 bits, length = high 26), next i32, offset
-//! u32`; V2 (12 B): `name, typeAndLength, node i32`, offsets cumulative.
+//! Strings: `u32 buckets` (real: 512), each `u16 count` then
+//! `count × (u16 len, utf8)`; a name ref is `(bucket << 16) | index`. The table
+//! holds node and attribute names only, never values. Nodes V2 (12 B): `name,
+//! firstAttribute i32, parent i32` (never parsed here). Attributes V2 (12 B):
+//! `name u32, typeAndLength u32 (type = low 6 bits, length = high 26), node
+//! i32`; values are contiguous in attribute order (offsets cumulative). V3
+//! (16 B: `name, typeAndLength, next i32, offset u32`) is kept for other
+//! producers but is not what BG3 writes.
+//!
+//! `GameID` is a **FixedString** (type 22): 36 printable ASCII characters
+//! plus a NUL, on the `MetaData` node under the root `MetaData` region; it is
+//! the only attribute with that exact name (`SaveGameID` and `GameSessionID`
+//! are different attributes). The UUID (type 31) display form below is
+//! LSLib's: the real file's base-module UUID renders as the published
+//! GustavX module UUID only under this byte order.
 
 use crate::error::LsfError;
 use crate::lspk::{lz4_can_hold, zstd_decode};
