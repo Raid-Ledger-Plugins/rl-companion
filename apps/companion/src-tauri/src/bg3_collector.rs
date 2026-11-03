@@ -9,8 +9,8 @@ use crate::collector::{
 use crate::manifest::BG3_SAVE;
 use crate::scope::WatchScope;
 use rl_collectors::{
-    campaign_key_from_save_folder, extract_save_info, extract_thumbnail_webp, normalise_save_info,
-    read_lspk, sha256_hex, thumbnail_ref, Bg3SaveMessage, CampaignKeySource, SaveMeta,
+    campaign_key_from_package, extract_save_info, extract_thumbnail_webp, normalise_save_info,
+    read_lspk, sha256_hex, thumbnail_ref, Bg3SaveMessage, SaveMeta,
 };
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -120,7 +120,9 @@ pub fn newest_first(mut saves: Vec<(PathBuf, Option<SystemTime>)>) -> Vec<PathBu
 }
 
 /// Parse one `.lsv` into its message, thumbnail blob and window label. The
-/// raw folder name only feeds the hash (contract §3.3); it is never sent.
+/// campaign key is the hash of `meta.lsf`'s GameID (`game-id`), else of the
+/// save-folder name (`save-folder`); an unreadable `meta.lsf` never fails the
+/// upload (ROK-2070). Neither raw value is ever sent (contract §3.3).
 pub fn build(
     bytes: &[u8],
     folder: &str,
@@ -132,10 +134,11 @@ pub fn build(
     let thumb = extract_thumbnail_webp(&package)
         .ok()
         .and_then(|webp| thumbnail_ref(&webp).ok().map(|r| (webp, r)));
+    let (campaign_key, campaign_key_source) = campaign_key_from_package(&package, folder);
     let meta = SaveMeta {
         saved_at: captured_at(mtime),
-        campaign_key: campaign_key_from_save_folder(folder),
-        campaign_key_source: CampaignKeySource::SaveFolder,
+        campaign_key,
+        campaign_key_source,
         thumbnail: thumb.as_ref().map(|(_, r)| r.clone()),
     };
     let payload = normalise_save_info(&info, &meta).map_err(|e| e.to_string())?;
