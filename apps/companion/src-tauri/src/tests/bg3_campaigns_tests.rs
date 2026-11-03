@@ -1,11 +1,13 @@
 //! ROK-2068 fix 3: the BG3 per-campaign upload picker.
 
 use crate::bg3_campaigns::{
-    campaign_name, dtos, group, select, still_ticked_by, ticked, valid_key, CampaignGroup,
-    SaveCampaign, DEFAULT_ON_SECS,
+    adopt_defaults, campaign_name, dtos, first_sight, group, select, still_ticked_by, ticked,
+    valid_key, CampaignGroup, CampaignStore, SaveCampaign, DEFAULT_ON_SECS,
 };
 use crate::collector::PendingUpload;
+use crate::collector_view::campaigns_for;
 use crate::config::AppConfig;
+use crate::manifest::{BG3_SAVE, WOW_LEDGERLINK};
 use serde_json::json;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -189,4 +191,69 @@ fn unticking_mid_batch_stops_that_campaigns_remaining_uploads() {
         ["A1", "WoW"],
         "k-b was unticked after A1 was sent: no k-b save may upload"
     );
+}
+
+#[test]
+fn first_sight_persists_the_30_day_default_on_or_off() {
+    let groups = [grp("k-new", 1), grp("k-old", 40)];
+    let fresh = first_sight(&groups, &BTreeMap::new(), NOW);
+    let want = BTreeMap::from([("k-new".to_owned(), true), ("k-old".to_owned(), false)]);
+    assert_eq!(fresh, want, "a never-seen campaign gets its 30-day default");
+    let mut ticks = BTreeMap::new();
+    assert!(adopt_defaults(&mut ticks, fresh.clone()), "new keys: write");
+    assert_eq!(ticks, want);
+    assert!(
+        !adopt_defaults(&mut ticks, fresh),
+        "nothing new: the config is not written again"
+    );
+}
+
+#[test]
+fn a_new_save_in_a_stored_off_campaign_stays_off() {
+    let ticks = BTreeMap::from([("k-old".to_owned(), false)]);
+    let found = vec![(save("k-old", "Tav", 0), Some(upload("fresh save")))];
+    let (groups, pending) = select(found, &ticks, NOW);
+    assert!(pending.is_empty(), "stored OFF beats the 30-day rule");
+    assert!(first_sight(&groups, &ticks, NOW).is_empty(), "already seen");
+}
+
+#[test]
+fn a_user_tick_wins_over_a_first_sight_default() {
+    let mut ticks = BTreeMap::from([("k-old".to_owned(), true)]);
+    let groups = [grp("k-old", 40)];
+    assert!(first_sight(&groups, &ticks, NOW).is_empty());
+    let late = BTreeMap::from([("k-old".to_owned(), false)]);
+    assert!(
+        !adopt_defaults(&mut ticks, late),
+        "a pick is never replaced"
+    );
+    assert_eq!(ticks.get("k-old"), Some(&true));
+}
+
+#[test]
+fn a_store_hands_out_first_sight_once_and_keeps_groups() {
+    let store = CampaignStore::new();
+    let fresh = BTreeMap::from([("k-a".to_owned(), true)]);
+    store.remember(vec![grp("k-a", 1)], fresh.clone());
+    assert_eq!(store.take_first_sight(), fresh);
+    assert!(store.take_first_sight().is_empty(), "taken once");
+    assert_eq!(store.groups(), [grp("k-a", 1)]);
+}
+
+#[test]
+fn only_the_bg3_row_carries_campaigns() {
+    let cfg = AppConfig::default();
+    let groups = [grp("k-a", 1)];
+    let rows = campaigns_for(BG3_SAVE.id, &cfg, &groups, NOW);
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        ["k-a"]
+    );
+    assert!(campaigns_for(WOW_LEDGERLINK.id, &cfg, &groups, NOW).is_empty());
+}
+
+#[test]
+fn a_campaign_is_named_by_its_newest_save_even_out_of_order() {
+    let groups = group(&[save("k-a", "Older", 5), save("k-a", "Newest", 1)]);
+    assert_eq!(groups[0].name, "Newest");
 }

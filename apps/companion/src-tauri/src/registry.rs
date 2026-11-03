@@ -30,7 +30,11 @@ fn make_wow(roots: &[PathBuf], scope: WatchScope, _: &AppConfig) -> Box<dyn Coll
 }
 
 fn make_bg3(roots: &[PathBuf], scope: WatchScope, cfg: &AppConfig) -> Box<dyn Collector> {
-    Box::new(Bg3SaveCollector::scoped(roots, scope).with_ticks(cfg.bg3_campaigns.clone()))
+    Box::new(
+        Bg3SaveCollector::scoped(roots, scope)
+            .with_ticks(cfg.bg3_campaigns.clone())
+            .remembering(&crate::bg3_campaigns::STORE),
+    )
 }
 
 /// Every collector this build ships.

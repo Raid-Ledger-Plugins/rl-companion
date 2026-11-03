@@ -56,8 +56,7 @@ pub fn campaign_name(leader: Option<&str>, save_name: &str) -> String {
         .to_owned()
 }
 
-/// Group saves by key, newest campaign first. `saves` must be newest first,
-/// so each group's first save names it.
+/// Group saves by key, newest campaign first; the newest save names each.
 pub fn group(saves: &[SaveCampaign]) -> Vec<CampaignGroup> {
     let mut out: Vec<CampaignGroup> = Vec::new();
     for s in saves {
@@ -66,6 +65,7 @@ pub fn group(saves: &[SaveCampaign]) -> Vec<CampaignGroup> {
                 g.count += 1;
                 if s.saved_unix > g.newest_unix {
                     g.newest_unix = s.saved_unix;
+                    g.name = s.name.clone();
                 }
             }
             None => out.push(CampaignGroup {
@@ -157,15 +157,77 @@ pub fn still_ticked<'a>(
     })
 }
 
-/// The last scan's groups, for the window's status (set by the BG3 scan).
-static LAST: Mutex<Vec<CampaignGroup>> = Mutex::new(Vec::new());
+/// What the last BG3 scan saw: its groups (for the window) and the 30-day
+/// defaults of campaigns it met for the first time (to persist). The app
+/// uses [`STORE`]; a test hands its collector a store of its own, so
+/// parallel scans never share one.
+#[derive(Debug, Default)]
+pub struct CampaignStore(Mutex<(Vec<CampaignGroup>, BTreeMap<String, bool>)>);
 
-pub fn remember(groups: Vec<CampaignGroup>) {
-    *LAST.lock().unwrap_or_else(|p| p.into_inner()) = groups;
+impl CampaignStore {
+    pub const fn new() -> Self {
+        Self(Mutex::new((Vec::new(), BTreeMap::new())))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, (Vec<CampaignGroup>, BTreeMap<String, bool>)> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn remember(&self, groups: Vec<CampaignGroup>, first_sight: BTreeMap<String, bool>) {
+        *self.lock() = (groups, first_sight);
+    }
+
+    pub fn groups(&self) -> Vec<CampaignGroup> {
+        self.lock().0.clone()
+    }
+
+    /// The first-sight defaults, once: a later call returns them empty.
+    pub fn take_first_sight(&self) -> BTreeMap<String, bool> {
+        std::mem::take(&mut self.lock().1)
+    }
 }
 
+/// The app's store, written by the registry's BG3 collector.
+pub static STORE: CampaignStore = CampaignStore::new();
+
+/// The last scan's groups, for the window's status.
 pub fn last() -> Vec<CampaignGroup> {
-    LAST.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    STORE.groups()
+}
+
+/// Campaigns with no pick yet, with their 30-day default.
+pub fn first_sight(
+    groups: &[CampaignGroup],
+    ticks: &BTreeMap<String, bool>,
+    now_unix: i64,
+) -> BTreeMap<String, bool> {
+    groups
+        .iter()
+        .filter(|g| !ticks.contains_key(&g.key))
+        .map(|g| (g.key.clone(), default_on(g, now_unix)))
+        .collect()
+}
+
+/// Add each first-sight default the picks lack; a pick already there (the
+/// user's) wins. Returns whether anything was added.
+pub fn adopt_defaults(ticks: &mut BTreeMap<String, bool>, fresh: BTreeMap<String, bool>) -> bool {
+    let before = ticks.len();
+    for (key, on) in fresh {
+        ticks.entry(key).or_insert(on);
+    }
+    ticks.len() > before
+}
+
+/// Persist the last scan's first-sight defaults into `bg3_campaigns`, so a
+/// campaign shown OFF stays OFF until the user ticks it, even if they play
+/// it again. Writes the config only when a new campaign appeared.
+pub fn persist_first_sight(state: &Shared) {
+    let fresh = STORE.take_first_sight();
+    if adopt_defaults(&mut state.config().bg3_campaigns, fresh.clone()) {
+        let _ = state.update_config(|c| {
+            adopt_defaults(&mut c.bg3_campaigns, fresh);
+        });
+    }
 }
 
 /// Unix seconds for `t` (before the epoch → 0).

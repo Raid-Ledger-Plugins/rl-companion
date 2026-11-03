@@ -3,7 +3,9 @@
 //! reader (ROK-1962) and emits one `bg3-save/v1` message per changed save.
 //! Off by default; the user opts in per game.
 
-use crate::bg3_campaigns::{campaign_name, now_unix, remember, select, unix, SaveCampaign};
+use crate::bg3_campaigns::{
+    campaign_name, first_sight, now_unix, select, unix, CampaignStore, SaveCampaign,
+};
 use crate::collector::{
     captured_at, scope_key, Blob, Collector, PendingUpload, Scan, SentState, APP_VERSION,
 };
@@ -34,6 +36,8 @@ pub struct Bg3SaveCollector {
     scope: WatchScope,
     /// The user's per-campaign picks (`AppConfig::bg3_campaigns`).
     ticks: BTreeMap<String, bool>,
+    /// Where the scan leaves its groups (the app's [`crate::bg3_campaigns::STORE`]).
+    store: Option<&'static CampaignStore>,
 }
 
 impl Bg3SaveCollector {
@@ -43,12 +47,19 @@ impl Bg3SaveCollector {
             roots: roots.to_vec(),
             scope,
             ticks: BTreeMap::new(),
+            store: None,
         }
     }
 
     /// Only ticked campaigns upload ([`crate::bg3_campaigns::select`]).
     pub fn with_ticks(mut self, ticks: BTreeMap<String, bool>) -> Self {
         self.ticks = ticks;
+        self
+    }
+
+    /// Each scan leaves its groups and first-sight defaults in `store`.
+    pub fn remembering(mut self, store: &'static CampaignStore) -> Self {
+        self.store = Some(store);
         self
     }
 
@@ -238,8 +249,12 @@ impl Collector for Bg3SaveCollector {
             .iter()
             .filter_map(|save| self.scan_file(save, origin, sent, &mut scan))
             .collect();
-        let (groups, pending) = select(found, &self.ticks, now_unix());
-        remember(groups);
+        let now = now_unix();
+        let (groups, pending) = select(found, &self.ticks, now);
+        if let Some(store) = self.store {
+            let fresh = first_sight(&groups, &self.ticks, now);
+            store.remember(groups, fresh);
+        }
         scan.pending = pending;
         scan
     }

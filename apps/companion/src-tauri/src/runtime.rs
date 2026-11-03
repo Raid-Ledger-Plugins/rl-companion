@@ -575,6 +575,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
             break;
         }
     }
+    crate::bg3_campaigns::persist_first_sight(&shared);
     let joined: Vec<String> = lines.values().cloned().collect();
     let line = status_line(&registry, &joined);
     let line = match device_note(paused, held.is_some(), linked.clone()) {
