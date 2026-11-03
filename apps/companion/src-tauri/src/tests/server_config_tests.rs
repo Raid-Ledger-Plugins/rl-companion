@@ -8,7 +8,7 @@
 use super::TOKEN;
 use crate::config::AppConfig;
 use crate::server_config::{
-    config_url, fetch, PluginState, ServerConfig, ServerState, DEFER_DEBOUNCE,
+    config_url, fetch, FetchError, PluginState, ServerConfig, ServerState, DEFER_DEBOUNCE,
 };
 use crate::token::DeviceToken;
 use serde_json::json;
@@ -115,7 +115,67 @@ async fn fetch_reports_a_non_2xx_as_an_error() {
         .await;
     let token = DeviceToken::parse(TOKEN).expect("token");
     let err = fetch(&server.uri(), &token).await.expect_err("401 fails");
-    assert!(err.contains("401"), "{err}");
+    assert_eq!(err, FetchError::Unauthorized, "a 401 means re-link");
+    assert!(err.to_string().contains("401"), "{err}");
+}
+
+#[tokio::test]
+async fn fetch_reports_a_5xx_as_a_plain_failure_not_a_revocation() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+    let token = DeviceToken::parse(TOKEN).expect("token");
+    let err = fetch(&server.uri(), &token).await.expect_err("503 fails");
+    assert_eq!(
+        err,
+        FetchError::Other("the server answered HTTP 503".into())
+    );
+}
+
+#[tokio::test]
+async fn a_server_change_forgets_the_old_covers_and_wakes_the_config_task() {
+    let dir = super::temp_dir("server-changed");
+    let rt = crate::runtime::Runtime::new(dir.join("sent.json"));
+    rt.update_server(|s| {
+        s.reachable = Some(true);
+        s.covers.insert("bg3-save".into(), Some("data:old".into()));
+    });
+    rt.server_changed();
+    let s = rt.server();
+    assert_eq!(
+        (s.reachable, s.covers.len()),
+        (None, 0),
+        "old server's state kept"
+    );
+    let woke = tokio::time::timeout(Duration::from_millis(50), rt.config_kick.notified()).await;
+    assert!(woke.is_ok(), "the /config task was not woken");
+}
+
+#[test]
+fn a_config_401_shows_the_unlinked_tiles_not_the_cache() {
+    let dir = super::temp_dir("config-401");
+    let rt = crate::runtime::Runtime::new(dir.join("sent.json"));
+    let mut cfg = AppConfig::default();
+    cfg.last_server_config = Some(serde_json::from_str(FIXTURE).expect("fixture"));
+    let line = |rt: &crate::runtime::Runtime| {
+        let s = rt.snapshot(&cfg);
+        let t = s
+            .tiles
+            .iter()
+            .find(|t| t.id == "bg3-save")
+            .map(|t| t.line.clone());
+        (s.relink, t.unwrap_or_default())
+    };
+    assert!(
+        !line(&rt).1.starts_with("Link this device"),
+        "linked: cached state"
+    );
+    rt.config_unauthorized();
+    let (relink, text) = line(&rt);
+    assert!(relink, "the window is asked to re-link");
+    assert!(text.starts_with("Link this device"), "tile line: {text}");
 }
 
 #[test]

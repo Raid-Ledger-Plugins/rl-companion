@@ -308,6 +308,21 @@ impl Runtime {
         self.config_kick.notify_one();
     }
 
+    /// The server URL changed: forget the old server's reachability and
+    /// covers and fetch the new one's `/config` now (ROK-2067 D5).
+    pub fn server_changed(&self) {
+        self.lock().server = ServerState::default();
+        self.config_kick.notify_one();
+    }
+
+    /// `/config` answered 401: the token was cleared, so the tiles show the
+    /// unlinked state and the window asks for a re-link.
+    pub fn config_unauthorized(&self) {
+        let mut inner = self.lock();
+        inner.relink = true;
+        inner.linked = Ok(false);
+    }
+
     /// The `/config` fetch state (reachability, covers, debounce).
     pub fn server(&self) -> ServerState {
         self.lock().server.clone()

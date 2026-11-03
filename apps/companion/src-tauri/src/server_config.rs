@@ -116,25 +116,46 @@ pub fn config_url(server: &str) -> Result<url::Url, String> {
         .map_err(|e| format!("Bad server URL: {e}"))
 }
 
+/// Why a `/config` fetch gave nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchError {
+    /// 401: the token is revoked or unknown — re-link, as for an upload.
+    Unauthorized,
+    Other(String),
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unauthorized => f.write_str("the server answered HTTP 401"),
+            Self::Other(e) => f.write_str(e),
+        }
+    }
+}
+
 /// One `GET /companion/v1/config` with the device token.
-pub async fn fetch(server: &str, token: &DeviceToken) -> Result<ServerConfig, String> {
+pub async fn fetch(server: &str, token: &DeviceToken) -> Result<ServerConfig, FetchError> {
+    let other = FetchError::Other;
     let http = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()
-        .map_err(|e| format!("HTTP client: {e}"))?;
+        .map_err(|e| other(format!("HTTP client: {e}")))?;
     let res = http
-        .get(config_url(server)?)
+        .get(config_url(server).map_err(other)?)
         .bearer_auth(token.expose())
         .send()
         .await
-        .map_err(|_| "could not reach the server".to_owned())?;
-    let code = res.status();
-    if !code.is_success() {
-        return Err(format!("the server answered HTTP {}", code.as_u16()));
+        .map_err(|_| other("could not reach the server".to_owned()))?;
+    match res.status().as_u16() {
+        401 => return Err(FetchError::Unauthorized),
+        c if !(200..300).contains(&c) => {
+            return Err(other(format!("the server answered HTTP {c}")))
+        }
+        _ => {}
     }
     res.json::<ServerConfig>()
         .await
-        .map_err(|e| format!("unexpected /config answer: {e}"))
+        .map_err(|e| other(format!("unexpected /config answer: {e}")))
 }
 
 /// Every contract id a tile may show: the app's collectors and the cache's.
@@ -169,6 +190,13 @@ pub async fn refresh(app: &AppHandle, rt: &Runtime) {
         Some(t) => Some(fetch(&before.server_url, &t).await),
         None => None,
     };
+    let same_server = shared.config().server_url == before.server_url;
+    if let (Some(Err(FetchError::Unauthorized)), true) = (&fetched, same_server) {
+        // Same as an upload's 401: drop the dead token so no later refresh
+        // sends it, and show the unlinked state instead of cached tiles.
+        let _ = shared.clear_token();
+        rt.config_unauthorized();
+    }
     let reachable = fetched.as_ref().map(Result::is_ok);
     if let Some(Ok(sc)) = fetched {
         let at = crate::wow_collector::captured_at(None);

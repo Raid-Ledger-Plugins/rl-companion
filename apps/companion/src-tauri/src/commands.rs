@@ -118,6 +118,7 @@ pub fn set_server_url(
 ) -> Result<String, String> {
     let url = normalise_server_url(&url)?;
     state.set_link_task(None);
+    let changed = state.config().server_url != url;
     let cfg = state
         .update_config(|c| {
             if c.server_url != url {
@@ -128,6 +129,9 @@ pub fn set_server_url(
             c.server_url = url;
         })
         .map_err(s)?;
+    if changed {
+        app.state::<Arc<Runtime>>().server_changed();
+    }
     let linked = state.token().map_err(s)?.is_some();
     tray::set_status(&app, if linked { "Linked" } else { "Not linked" });
     Ok(cfg.server_url)
