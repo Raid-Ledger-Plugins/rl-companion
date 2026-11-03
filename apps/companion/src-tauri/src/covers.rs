@@ -178,7 +178,7 @@ pub fn cached_all(
 /// the body read no further than [`MAX_BYTES`] + 1.
 pub async fn http_fetch(url: url::Url) -> Result<Fetched, String> {
     let policy = reqwest::redirect::Policy::custom(|a| {
-        if a.url().scheme() != "https" || a.previous().len() >= 3 {
+        if a.url().scheme() != "https" || a.previous().len() > 3 {
             a.stop()
         } else {
             a.follow()
