@@ -311,7 +311,7 @@ impl Runtime {
     /// The server URL changed: forget the old server's reachability and
     /// covers and fetch the new one's `/config` now (ROK-2067 D5).
     pub fn server_changed(&self) {
-        self.lock().server = ServerState::default();
+        self.lock().server.reset();
         self.config_kick.notify_one();
     }
 
@@ -328,8 +328,8 @@ impl Runtime {
         self.lock().server.clone()
     }
 
-    pub fn update_server(&self, f: impl FnOnce(&mut ServerState)) {
-        f(&mut self.lock().server);
+    pub fn update_server<R>(&self, f: impl FnOnce(&mut ServerState) -> R) -> R {
+        f(&mut self.lock().server)
     }
 
     /// An upload hit `unknown_contract`: refetch `/config`, at most once a

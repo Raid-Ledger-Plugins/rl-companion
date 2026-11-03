@@ -288,3 +288,40 @@ fn a_server_switch_between_a_config_request_and_its_401_keeps_the_token() {
         "the old server's token was cleared"
     );
 }
+
+fn one_cover(url: &str) -> std::collections::BTreeMap<String, Option<String>> {
+    [("bg3-save".to_owned(), Some(url.to_owned()))].into()
+}
+
+#[test]
+fn a_refresh_for_the_old_server_does_not_overwrite_the_reset_state() {
+    let rt = crate::runtime::Runtime::new(super::temp_dir("stale-refresh").join("s.json"));
+    let old = rt.update_server(ServerState::begin_refresh);
+    rt.server_changed();
+    let stored = rt.update_server(|s| s.publish(old, Some(true), one_cover("data:old")));
+    let s = rt.server();
+    assert_eq!(
+        (stored, s.reachable, s.covers.len()),
+        (false, None, 0),
+        "the old server's covers came back after the switch"
+    );
+}
+
+#[test]
+fn an_older_concurrent_refresh_does_not_overwrite_a_newer_one() {
+    let rt = crate::runtime::Runtime::new(super::temp_dir("older-refresh").join("s.json"));
+    let older = rt.update_server(ServerState::begin_refresh);
+    let newer = rt.update_server(ServerState::begin_refresh);
+    assert!(rt.update_server(|s| s.publish(newer, Some(true), one_cover("data:new"))));
+    let stored = rt.update_server(|s| s.publish(older, Some(false), one_cover("data:old")));
+    let s = rt.server();
+    assert_eq!(
+        (
+            stored,
+            s.reachable,
+            s.covers.get("bg3-save").cloned().flatten()
+        ),
+        (false, Some(true), Some("data:new".to_owned())),
+        "the older refresh overwrote the newer one"
+    );
+}

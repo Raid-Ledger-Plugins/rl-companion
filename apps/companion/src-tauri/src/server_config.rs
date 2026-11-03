@@ -88,9 +88,43 @@ pub struct ServerState {
     /// Cover per contract id as a `data:` URL; `None` = draw the fallback.
     pub covers: BTreeMap<String, Option<String>>,
     last_defer: Option<Instant>,
+    /// Bumped by every refresh start and every server switch: a refresh
+    /// publishes only if nothing newer began while it was out.
+    generation: u64,
 }
 
 impl ServerState {
+    /// A refresh is starting; returns its generation for [`Self::publish`].
+    pub fn begin_refresh(&mut self) -> u64 {
+        self.generation += 1;
+        self.generation
+    }
+
+    /// The server URL changed: forget the old server's state, and make every
+    /// refresh still in flight for it stale.
+    pub fn reset(&mut self) {
+        *self = Self {
+            generation: self.generation + 1,
+            ..Self::default()
+        };
+    }
+
+    /// Store a refresh's result unless a newer refresh or a server switch
+    /// began since `generation`. Returns whether it was stored.
+    pub fn publish(
+        &mut self,
+        generation: u64,
+        reachable: Option<bool>,
+        covers: BTreeMap<String, Option<String>>,
+    ) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.reachable = reachable;
+        self.covers = covers;
+        true
+    }
+
     /// `true` (and the slot is taken) when no deferral-triggered refetch ran
     /// in the last [`DEFER_DEBOUNCE`].
     pub fn take_defer_slot(&mut self, now: Instant) -> bool {
@@ -191,6 +225,7 @@ pub fn revoke_after_401(shared: &Shared, rt: &Runtime, origin: &str, sent: &Devi
 /// Fetch `/config`, cache it, refresh the covers and tell the window. An
 /// unlinked device or a failed fetch keeps the last-known cache and covers.
 pub async fn refresh(app: &AppHandle, rt: &Runtime) {
+    let generation = rt.update_server(ServerState::begin_refresh);
     let shared = app.state::<Shared>();
     let before = shared.config();
     let dir = app
@@ -227,11 +262,11 @@ pub async fn refresh(app: &AppHandle, rt: &Runtime) {
     } else {
         crate::covers::cached_all(&dir, &ids)
     };
-    rt.update_server(|s| {
-        s.reachable = reachable;
-        s.covers = covers;
-    });
-    let _ = app.emit(STATUS_EVENT, status(app, rt));
+    // The artwork await is long: a server switch or a newer refresh since
+    // this one began owns the state now, so this result is dropped.
+    if rt.update_server(|s| s.publish(generation, reachable, covers)) {
+        let _ = app.emit(STATUS_EVENT, status(app, rt));
+    }
 }
 
 /// Fetch on launch, every [`REFRESH_EVERY`], and whenever `config_kick` fires
