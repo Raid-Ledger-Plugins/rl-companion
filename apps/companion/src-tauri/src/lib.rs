@@ -14,6 +14,7 @@ pub mod collector_view;
 pub mod commands;
 pub mod config;
 pub mod covers;
+pub mod dev_bridge;
 pub mod gate;
 pub mod link;
 pub mod manifest;
@@ -61,7 +62,16 @@ pub fn run() {
                 config_dir.join(state::CONFIG_FILE),
                 Box::new(token::KeyringStore),
             );
+            let start_cfg = shared.config();
             app.manage(shared);
+            // Dev bridge (ROK-2055): reconcile opens nothing while it is off.
+            let bridge = Arc::new(dev_bridge::DevBridge::new(
+                config_dir.join(dev_bridge::TLS_FILE),
+            ));
+            app.manage(bridge.clone());
+            tauri::async_runtime::spawn(async move {
+                bridge.reconcile(&start_cfg).await;
+            });
             tray::build(app.handle())?;
             tray_promote::start(app.handle());
             let sent_path = app.path().app_data_dir()?.join(collector::SENT_STATE_FILE);
@@ -106,6 +116,12 @@ pub fn run() {
             collector_commands::skip_first_upload,
             collector_commands::refresh_server_config,
             collector_commands::set_bg3_campaign,
+            dev_bridge::commands::get_dev_bridge_status,
+            dev_bridge::commands::set_dev_bridge_enabled,
+            dev_bridge::commands::set_dev_bridge_probes_enabled,
+            dev_bridge::commands::set_dev_bridge_bind,
+            dev_bridge::commands::set_dev_bridge_allowlist,
+            dev_bridge::commands::rotate_dev_bridge_token,
         ])
         .build(tauri::generate_context!())
         .expect("error while building RL Companion")

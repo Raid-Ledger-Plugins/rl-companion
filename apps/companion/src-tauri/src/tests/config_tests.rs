@@ -72,6 +72,7 @@ fn config_round_trips_and_defaults_to_prod() {
         last_server_config: None,
         fetched_at: None,
         bg3_campaigns: [("ab".repeat(32), false)].into(),
+        dev_bridge: Default::default(),
     };
     cfg.save(&file).expect("save");
     assert_eq!(AppConfig::load(&file), cfg);
