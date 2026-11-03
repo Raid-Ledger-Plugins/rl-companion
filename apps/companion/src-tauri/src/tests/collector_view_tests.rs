@@ -161,7 +161,7 @@ fn preview_summarises_the_newest_save_and_keeps_every_key() {
     assert!(hold(BG3_SAVE.id, &[]).is_none());
 }
 
-fn shot(taken_at: &str, sha: &str, webp: &[u8]) -> PendingUpload {
+fn shot(taken_at: &str, sha: &str, preview: &[u8]) -> PendingUpload {
     PendingUpload {
         campaign: None,
         contract: "bg3-screenshot",
@@ -175,8 +175,8 @@ fn shot(taken_at: &str, sha: &str, webp: &[u8]) -> PendingUpload {
         }}),
         blobs: vec![Blob {
             sha256: "1".repeat(64),
-            content_type: "image/webp".into(),
-            bytes: webp.to_vec(),
+            content_type: "image/jpeg".into(),
+            bytes: preview.to_vec(),
         }],
     }
 }
@@ -194,8 +194,8 @@ fn screenshot_preview_shows_the_newest_shot_its_hub_and_no_save_fields() {
     assert_eq!(p.taken_at, "2026-11-03T12:00:00Z", "newest by takenAt");
     assert_eq!(
         p.thumbnail.as_deref(),
-        Some(format!("data:image/webp;base64,{}", base64(b"NEW")).as_str()),
-        "the newest shot's encoded WebP is the image shown"
+        Some(format!("data:image/jpeg;base64,{}", base64(b"NEW")).as_str()),
+        "the newest shot's preview image (a small JPEG/PNG, never the WebP) is shown"
     );
     assert_eq!(p.hub_guild_id, Some(42));
     assert_eq!((p.waiting, held.keys.len()), (2, 2));

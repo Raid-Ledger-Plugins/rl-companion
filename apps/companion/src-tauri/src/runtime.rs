@@ -613,13 +613,15 @@ async fn scan_and_upload_one(
     token: Option<&crate::token::DeviceToken>,
 ) -> (String, bool) {
     // `Entry::scan` is `None` for a disabled collector: nothing is read.
-    let Some(scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
+    let Some(mut scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
         let name = entry.manifest.display_name;
         return (format!("{name} uploads are off"), false);
     };
     scan.notes
         .iter()
         .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
+    // A held screenshot batch's preview image is downscaled off the runtime.
+    crate::screenshot_preview::attach(&mut scan).await;
     let waiting = scan.pending.len();
     let id = entry.manifest.id;
     match gate(entry.manifest, cfg.consented(id), scan.files, &scan.pending) {

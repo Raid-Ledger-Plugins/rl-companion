@@ -15,6 +15,7 @@ use crate::collector::{
 use crate::manifest::BG3_SCREENSHOT;
 use crate::scope::WatchScope;
 use crate::screenshot_encode::encode_screenshot;
+use crate::screenshot_preview::{self, Wanted};
 use rl_collectors::sha256_hex;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,8 +42,6 @@ static FAILED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 static MEMO: Mutex<BTreeMap<FileKey, String>> = Mutex::new(BTreeMap::new());
 /// sha256 -> where the unsent original lives, for [`encode_for_send`].
 static SOURCES: Mutex<BTreeMap<String, Source>> = Mutex::new(BTreeMap::new());
-/// The original shown by the first-upload preview (one slot).
-static PREVIEW: Mutex<Option<Blob>> = Mutex::new(None);
 /// Past this many entries [`MEMO`] / [`SOURCES`] start over (a re-read, not a loss).
 const MEMO_MAX: usize = 4096;
 
@@ -240,24 +239,19 @@ impl Bg3ScreenshotCollector {
         }
     }
 
-    /// The original as a preview-only blob, read once per newest screenshot.
+    /// The preview image for the newest pending screenshot: Steam's own
+    /// thumbnail or a cached one now, else a downscale queued for
+    /// [`screenshot_preview::attach`]. Never the original.
     fn preview_blob(&self, src: &Source) -> Option<Blob> {
-        let mut slot = PREVIEW.lock().ok()?;
-        if let Some(b) = slot.as_ref().filter(|b| b.sha256 == src.sha) {
-            return Some(b.clone());
+        let blob = screenshot_preview::ready(&src.sha, &src.path, &src.scope);
+        if blob.is_none() {
+            screenshot_preview::want(Wanted {
+                sha: src.sha.clone(),
+                path: src.path.clone(),
+                scope: src.scope.clone(),
+            });
         }
-        let bytes = src.scope.read(&src.path).ok()?;
-        self.reads.fetch_add(1, Ordering::Relaxed);
-        let content_type = image::guess_format(&bytes)
-            .map_or("application/octet-stream", |f| f.to_mime_type())
-            .to_owned();
-        let blob = Blob {
-            sha256: src.sha.clone(),
-            content_type,
-            bytes,
-        };
-        *slot = Some(blob.clone());
-        Some(blob)
+        blob
     }
 }
 
@@ -342,11 +336,6 @@ impl Collector for Bg3ScreenshotCollector {
             }
             remember(&SOURCES, src.sha.clone(), src);
             scan.pending.push(p);
-        }
-        if !self.previewing {
-            if let Ok(mut slot) = PREVIEW.lock() {
-                *slot = None;
-            }
         }
         if waiting > 0 {
             scan.notes.push(format!(

@@ -25,6 +25,7 @@ pub mod runtime;
 pub mod scope;
 pub mod screenshot_commands;
 pub mod screenshot_encode;
+pub mod screenshot_preview;
 pub mod server_config;
 pub mod state;
 pub mod tiles;

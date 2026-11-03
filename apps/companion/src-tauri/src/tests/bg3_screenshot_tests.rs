@@ -6,13 +6,14 @@ use crate::bg3_screenshot::{
     build, encode_for_send, needs_encode, off_thread, refused, Bg3ScreenshotCollector, Unready,
     STEAM_SUBPATH,
 };
-use crate::collector::{scope_key, Collector, SentState};
+use crate::collector::{scope_key, Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SCREENSHOT};
 use crate::registry::{CollectorRegistry, BUILTINS};
 use crate::scope::WatchScope;
 use crate::screenshot_commands::{effective_hub, hubs_view, valid_hub};
-use crate::screenshot_encode::{encode_screenshot, fit_under, WEBP_MAX_BYTES};
+use crate::screenshot_encode::{encode_screenshot, fit_under, source_dimensions, WEBP_MAX_BYTES};
+use crate::screenshot_preview::{attach, PREVIEW_EDGE_MAX, PREVIEW_MAX_BYTES};
 use crate::server_config::ServerConfig;
 use image::{ImageFormat, RgbImage};
 use rl_collectors::{sha256_hex, webp_dimensions};
@@ -461,29 +462,102 @@ fn a_rescan_of_unchanged_files_neither_rereads_nor_encodes() {
 }
 
 #[test]
-fn the_preview_carries_only_the_newest_original() {
-    let dir = temp_dir("shot-preview");
-    shot(&dir, "old.png", &png(20, 20, 14), OPT_IN + 1);
-    let newest = png(20, 20, 15);
-    shot(&dir, "new.png", &newest, OPT_IN + 2);
-    let c = collector(&dir, Some(HUB)).previewing(true);
+fn the_preview_is_steams_thumbnail_of_the_newest_shot_never_the_original() {
+    let (userdata, folder) = steam(&temp_dir("shot-preview"));
+    shot(&folder, "old.png", &png(20, 20, 14), OPT_IN + 1);
+    let newest = png(300, 200, 15);
+    shot(&folder, "new.png", &newest, OPT_IN + 2);
+    let thumb = png(30, 20, 16);
+    std::fs::write(folder.join("thumbnails").join("new.png"), &thumb).expect("thumb");
+    let c = collector(&userdata, Some(HUB)).previewing(true);
     let scan = c.scan(ORIGIN, &SentState::default());
     let blobs: Vec<usize> = scan.pending.iter().map(|p| p.blobs.len()).collect();
-    assert_eq!(blobs, vec![1, 0]);
+    assert_eq!(blobs, vec![1, 0], "only the newest carries a preview");
     let b = scan
         .pending
         .first()
         .and_then(|p| p.blobs.first())
         .expect("preview blob");
-    assert_eq!((b.content_type.as_str(), &b.bytes), ("image/png", &newest));
+    assert_eq!(b.content_type, "image/png");
+    assert!(b.bytes == thumb, "Steam's thumbnail is the preview");
+    assert!(b.bytes != newest, "the original is never the preview");
     assert!(scan.pending.iter().all(needs_encode));
+}
+
+#[tokio::test]
+async fn without_a_thumbnail_the_preview_is_a_capped_downscale() {
+    let dir = temp_dir("shot-preview-down");
+    let original = png(1600, 900, 17);
+    shot(&dir, "big.png", &original, OPT_IN + 1);
+    let mut scan = collector(&dir, Some(HUB))
+        .previewing(true)
+        .scan(ORIGIN, &SentState::default());
+    let first = |s: &Scan| s.pending.first().map(|p| p.blobs.len());
+    assert_eq!(first(&scan), Some(0), "the scan itself never decodes");
+    attach(&mut scan).await;
+    let b = scan
+        .pending
+        .first()
+        .and_then(|p| p.blobs.first())
+        .expect("attach adds the preview");
+    assert_eq!(b.content_type, "image/jpeg");
+    assert!(
+        b.bytes.len() <= PREVIEW_MAX_BYTES,
+        "preview is {} bytes, cap {PREVIEW_MAX_BYTES}",
+        b.bytes.len()
+    );
+    let (w, h) = source_dimensions(&b.bytes).expect("a readable JPEG");
+    assert_eq!((w, h), (PREVIEW_EDGE_MAX, 288), "1600x900 fits in 512 px");
+    assert!(original.len() > b.bytes.len());
+}
+
+#[test]
+fn a_thumbnail_over_the_cap_or_outside_the_folder_is_not_used() {
+    let base = temp_dir("shot-preview-scope");
+    let (userdata, folder) = steam(&base);
+    shot(&folder, "huge.png", &png(64, 64, 18), OPT_IN + 1);
+    let huge = png(600, 600, 19);
+    assert!(
+        huge.len() > PREVIEW_MAX_BYTES,
+        "fixture must exceed the cap"
+    );
+    std::fs::write(folder.join("thumbnails").join("huge.png"), &huge).expect("thumb");
+    let scan = collector(&userdata, Some(HUB))
+        .previewing(true)
+        .scan(ORIGIN, &SentState::default());
+    assert_eq!(
+        scan.pending.first().map(|p| p.blobs.len()),
+        Some(0),
+        "an over-cap thumbnail is not sent"
+    );
+    #[cfg(unix)]
+    {
+        shot(&folder, "esc.png", &png(64, 64, 20), OPT_IN + 2);
+        let outside = base.join("outside.png");
+        std::fs::write(&outside, png(10, 10, 21)).expect("outside");
+        std::os::unix::fs::symlink(&outside, folder.join("thumbnails").join("esc.png"))
+            .expect("symlink");
+        let scan = collector(&userdata, Some(HUB))
+            .previewing(true)
+            .scan(ORIGIN, &SentState::default());
+        assert_eq!(
+            scan.pending.first().map(|p| p.blobs.len()),
+            Some(0),
+            "a thumbnail that resolves outside the folder is not read"
+        );
+    }
 }
 
 #[tokio::test]
 async fn encode_for_send_builds_a_valid_message_from_the_original() {
     let dir = temp_dir("shot-send");
-    shot(&dir, "a.png", &png(320, 180, 16), OPT_IN + 1);
-    let scan = collector(&dir, Some(HUB)).scan(ORIGIN, &SentState::default());
+    // A past mtime: OPT_IN is in the future, where `takenAt` clamps to "now"
+    // and two reads a second apart would disagree.
+    let past = 1_700_000_000;
+    shot(&dir, "a.png", &png(320, 180, 16), past + 1);
+    let scan = collector(&dir, Some(HUB))
+        .with_opt_in(Some(past))
+        .scan(ORIGIN, &SentState::default());
     let p = scan.pending.first().expect("pending");
     let ready = encode_for_send(p).await.expect("encodes");
     assert!(!needs_encode(&ready));
@@ -498,6 +572,10 @@ async fn encode_for_send_builds_a_valid_message_from_the_original() {
     assert_eq!(
         ready.body["payload"]["takenAt"],
         p.body["payload"]["takenAt"]
+    );
+    assert_eq!(
+        ready.body["payload"]["takenAt"],
+        json!("2023-11-14T22:13:21Z")
     );
 }
 

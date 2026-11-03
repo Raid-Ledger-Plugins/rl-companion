@@ -55,18 +55,7 @@ pub fn encode_screenshot(bytes: &[u8]) -> Result<Encoded, String> {
     if sw == 0 || sh == 0 || sw > SOURCE_EDGE_MAX || sh > SOURCE_EDGE_MAX {
         return Err(format!("{sw}x{sh} is outside 1-{SOURCE_EDGE_MAX} px"));
     }
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(SOURCE_EDGE_MAX);
-    limits.max_image_height = Some(SOURCE_EDGE_MAX);
-    limits.max_alloc = Some(DECODE_ALLOC_MAX);
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|e| format!("not an image ({e})"))?;
-    reader.limits(limits);
-    let decoded = reader
-        .decode()
-        .map_err(|e| format!("not a readable image ({e})"))?
-        .into_rgb8();
+    let decoded = decode_rgb(bytes)?;
     let webp = fit_under(fit(decoded, IMAGE_EDGE_MAX), WEBP_MAX_BYTES)?;
     Ok(Encoded {
         width: webp.1,
@@ -75,6 +64,23 @@ pub fn encode_screenshot(bytes: &[u8]) -> Result<Encoded, String> {
         source_width: sw,
         source_height: sh,
     })
+}
+
+/// Decode `bytes` (JPEG or PNG) to RGB inside [`SOURCE_EDGE_MAX`] and
+/// [`DECODE_ALLOC_MAX`].
+pub fn decode_rgb(bytes: &[u8]) -> Result<RgbImage, String> {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(SOURCE_EDGE_MAX);
+    limits.max_image_height = Some(SOURCE_EDGE_MAX);
+    limits.max_alloc = Some(DECODE_ALLOC_MAX);
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| format!("not an image ({e})"))?;
+    reader.limits(limits);
+    Ok(reader
+        .decode()
+        .map_err(|e| format!("not a readable image ({e})"))?
+        .into_rgb8())
 }
 
 /// Encode `img`, stepping quality then size down until it is ≤ `max` bytes,
@@ -106,7 +112,7 @@ pub fn fit_under(mut img: RgbImage, max: usize) -> Result<(Vec<u8>, u32, u32), S
 }
 
 /// `img` scaled down so its longest side is at most `max` (never up).
-fn fit(img: RgbImage, max: u32) -> RgbImage {
+pub fn fit(img: RgbImage, max: u32) -> RgbImage {
     let edge = img.width().max(img.height());
     if edge <= max {
         return img;
