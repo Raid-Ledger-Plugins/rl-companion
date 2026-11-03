@@ -95,9 +95,16 @@ impl DevBridge {
     }
 
     /// Bring the listener in line with `cfg`: start, move, keep or stop it.
+    /// When it should not run, the served policy is emptied first, so a
+    /// request racing the close is refused rather than answered.
     pub async fn reconcile(&self, cfg: &AppConfig) -> ListenerStatus {
-        self.ctx.set_snapshot(snapshot(cfg));
-        match desired(&cfg.dev_bridge) {
+        let want = desired(&cfg.dev_bridge);
+        let mut snap = snapshot(cfg);
+        if !matches!(want, Ok(Some(_))) {
+            snap.policy = auth::AuthPolicy::default();
+        }
+        self.ctx.set_snapshot(snap);
+        match want {
             Ok(Some(addr)) => match self.listen(addr).await {
                 Ok(()) => self.status().await,
                 Err(e) => ListenerStatus {
@@ -123,7 +130,10 @@ impl DevBridge {
     /// tests call it directly with a loopback address.
     pub(crate) async fn listen(&self, addr: SocketAddrV4) -> Result<(), String> {
         let mut running = self.running.lock().await;
-        if running.as_ref().is_some_and(|r| r.requested == addr) {
+        if running
+            .as_ref()
+            .is_some_and(|r| r.requested == addr && !r.task.is_finished())
+        {
             return Ok(());
         }
         if let Some(old) = running.take() {
@@ -143,6 +153,7 @@ impl DevBridge {
         let listener =
             tokio::net::TcpListener::from_std(std_listener).map_err(|e| e.to_string())?;
         let (stop, rx) = oneshot::channel();
+        self.ctx.set_closed_reason(None);
         let task = tokio::spawn(server::serve(listener, acceptor, self.ctx.clone(), rx));
         *running = Some(Running {
             requested: addr,
@@ -161,16 +172,24 @@ impl DevBridge {
         }
     }
 
+    /// The bound address while the accept loop runs (it ends on its own
+    /// when the bound IP leaves this PC — spec §7 fallback).
     pub async fn listening_addr(&self) -> Option<SocketAddrV4> {
-        self.running.lock().await.as_ref().map(|r| r.bound)
+        self.running
+            .lock()
+            .await
+            .as_ref()
+            .filter(|r| !r.task.is_finished())
+            .map(|r| r.bound)
     }
 
     pub async fn status(&self) -> ListenerStatus {
         let running = self.running.lock().await;
+        let live = running.as_ref().filter(|r| !r.task.is_finished());
         ListenerStatus {
-            listening: running.as_ref().map(|r| r.bound.to_string()),
-            error: None,
-            cert_fingerprint: running.as_ref().map(|r| r.fingerprint.clone()),
+            listening: live.map(|r| r.bound.to_string()),
+            error: live.is_none().then(|| self.ctx.closed_reason()).flatten(),
+            cert_fingerprint: live.map(|r| r.fingerprint.clone()),
         }
     }
 
@@ -198,6 +217,8 @@ pub fn on_wow_dir_changed(bridge: Option<&DevBridge>, cfg: &AppConfig) {
     }
 }
 
+/// Stop accepting, then wait while `serve` closes every accepted connection
+/// and pending handshake (bounded by its drain timeout).
 async fn shut(r: Running) {
     let _ = r.stop.send(());
     let _ = r.task.await;

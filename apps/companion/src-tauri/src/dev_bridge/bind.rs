@@ -83,3 +83,21 @@ pub fn local_private_ipv4s() -> Vec<String> {
         _ => Vec::new(),
     }
 }
+
+/// Whether `ip` is still an address of this PC: binding a UDP socket to it
+/// succeeds only while some interface carries it (no packet is sent).
+pub fn ip_is_local(ip: Ipv4Addr) -> bool {
+    UdpSocket::bind((ip, 0)).is_ok()
+}
+
+/// The spec §7 fallback rule: keep listening on `ip` only while `is_local`
+/// says this PC still has it; otherwise the reason the listener closed.
+pub fn bound_ip_check(ip: Ipv4Addr, is_local: impl Fn(Ipv4Addr) -> bool) -> Result<(), String> {
+    if is_local(ip) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Dev bridge stopped: {ip} is no longer an address of this PC (network changed). Pick an address and turn it on again."
+        ))
+    }
+}
