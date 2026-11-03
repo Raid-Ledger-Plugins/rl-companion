@@ -187,7 +187,12 @@ rl_test! {
         decode_error_in(with_sections(|s| s.attrs.push(0)), "attributes");
         decode_error_in(with_sections(|s| s.strings.truncate(9)), "strings");
         decode_error_in(with_sections(|s| s.strings[10] = 0xFF), "strings");
-        decode_error_in(with_sections(|s| set_u32(&mut s.strings, 0, 70_000)), "strings");
+        let too_many = with_sections(|s| set_u32(&mut s.strings, 0, 70_000));
+        let expected = LsfError::Decode {
+            section: "strings",
+            reason: "too many string buckets".to_owned(),
+        };
+        assert_eq!(too_many, Err(expected), "the bucket cap refuses before reading");
         // The GameID record is the second one; point its offset past the end.
         decode_error_in(with_sections(|s| set_u32(&mut s.attrs, 16 + 12, 9_999)), "values");
         // Plain bytes flagged LZ4 are not a valid LZ4 block.

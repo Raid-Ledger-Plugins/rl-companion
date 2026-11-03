@@ -36,6 +36,8 @@ pub const LSF_MAX_SECTION_BYTES: u64 = 1024 * 1024;
 pub const LSF_MAX_STRINGS: usize = 65_536;
 
 const METADATA_START: usize = 16;
+/// Metadata order of the `(uncompressed, onDisk)` pairs.
+const SECTION_NAMES: [&str; 5] = ["strings", "keys", "nodes", "attributes", "values"];
 const SECTIONS_START: usize = 64;
 const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
 const UUID_TYPE: u32 = 31;
@@ -63,17 +65,11 @@ pub fn read_lsf_attribute(bytes: &[u8], name: &str) -> Result<Option<String>, Ls
         return Err(LsfError::UnsupportedVersion(version));
     }
     let head = take(bytes, 0, SECTIONS_START, "metadata")?;
-    let pair = |i: usize, name| Sizes {
-        name,
+    let [strings, _keys, nodes, attrs, values] = std::array::from_fn(|i| Sizes {
+        name: SECTION_NAMES[i],
         size: le_u32(head, METADATA_START + i * 8),
         on_disk: le_u32(head, METADATA_START + i * 8 + 4),
-    };
-    let (strings, nodes, attrs, values) = (
-        pair(0, "strings"),
-        pair(2, "nodes"),
-        pair(3, "attributes"),
-        pair(4, "values"),
-    );
+    });
     let flags = head[56];
     let v3 = le_u32(head, 60) & 1 != 0;
     let mut at = SECTIONS_START;
