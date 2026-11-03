@@ -214,7 +214,10 @@ impl ServerCtx {
     pub fn audit(&self, peer: IpAddr, method: &Method, path: &str, r: &Routed, bytes: usize) {
         let line = if r.admitted {
             let shown = if r.status == 404 { "<unknown>" } else { path };
-            Some(format!("{method} {shown} {} {bytes}B from {peer}", r.status))
+            Some(format!(
+                "{method} {shown} {} {bytes}B from {peer}",
+                r.status
+            ))
         } else {
             let mut d = self.denials.lock().unwrap_or_else(|p| p.into_inner());
             d.note(peer, r.status, Instant::now())
@@ -233,7 +236,10 @@ impl ServerCtx {
 
     /// Why the listener closed itself (bound IP gone), if it did.
     pub fn closed_reason(&self) -> Option<String> {
-        self.closed.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.closed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     pub(crate) fn set_closed_reason(&self, why: Option<String>) {
@@ -306,7 +312,7 @@ async fn serve_conn(
             Ok(Ok(tls)) => tls,
             _ => return,
         },
-        _ = shutdown.wait_for(|stop| *stop) => return,
+        _ = stopped(&mut shutdown) => return,
     };
     let svc = hyper::service::service_fn(move |req: Request<Incoming>| {
         let ctx = ctx.clone();
@@ -320,11 +326,16 @@ async fn serve_conn(
     tokio::pin!(conn);
     tokio::select! {
         _ = conn.as_mut() => {}
-        _ = shutdown.wait_for(|stop| *stop) => {
+        _ = stopped(&mut shutdown) => {
             conn.as_mut().graceful_shutdown();
             let _ = tokio::time::timeout(DRAIN_TIMEOUT, conn).await;
         }
     }
+}
+
+/// Resolves once the listener has asked its connections to close.
+async fn stopped(rx: &mut watch::Receiver<bool>) {
+    let _ = rx.wait_for(|stop| *stop).await;
 }
 
 /// True while the listener may keep running on `bound`.
@@ -372,7 +383,10 @@ pub async fn serve(
     drop(listener);
     let _ = shutdown.send(true);
     let drain = async { while conns.join_next().await.is_some() {} };
-    if tokio::time::timeout(DRAIN_TIMEOUT * 2, drain).await.is_err() {
+    if tokio::time::timeout(DRAIN_TIMEOUT * 2, drain)
+        .await
+        .is_err()
+    {
         conns.abort_all();
         while conns.join_next().await.is_some() {}
     }
