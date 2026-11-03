@@ -417,7 +417,7 @@ fn a_first_scan_saves_new_campaigns_defaults_and_a_second_scan_writes_nothing() 
         "and saved to disk"
     );
     std::fs::remove_file(&path).expect("drop the saved config");
-    let again = Bg3SaveCollector::scoped(&[story.clone()], WatchScope::new(&[&story]))
+    let again = Bg3SaveCollector::scoped(std::slice::from_ref(&story), WatchScope::new(&[&story]))
         .with_ticks(shared.config().bg3_campaigns)
         .remembering(store);
     again.scan("https://raid.example.net", &SentState::default());
