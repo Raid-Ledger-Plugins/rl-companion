@@ -36,16 +36,22 @@ export function DevBridge({ onError }: { onError: (message: string) => void }) {
     }
   };
 
+  const toggle = async (on: boolean) => {
+    try {
+      const s = await bridge.toggleWithConsent(on, bridge.confirmDevBridgeConsent, bridge.setDevBridgeEnabled);
+      if (s) await apply(Promise.resolve(s));
+    } catch (e) {
+      onError(typeof e === "string" ? e : "Could not update the developer bridge.");
+    }
+  };
+
   return (
     <DevBridgePanel
       status={status}
       drafts={drafts}
       token={token}
       onDrafts={setDrafts}
-      onToggle={(on) => {
-        if (on && !window.confirm(bridge.DEV_BRIDGE_CONSENT)) return;
-        void apply(bridge.setDevBridgeEnabled(on));
-      }}
+      onToggle={(on) => void toggle(on)}
       onProbes={(on) => void apply(bridge.setDevBridgeProbesEnabled(on))}
       onSaveBind={() => void apply(bridge.setDevBridgeBind(drafts.ip, Number(drafts.port)))}
       onSaveAllowlist={() => void apply(bridge.setDevBridgeAllowlist(bridge.parseAllowlist(drafts.allowlist)))}
