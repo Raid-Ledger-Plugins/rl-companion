@@ -7,6 +7,7 @@
 pub mod autostart;
 pub mod bg3_campaigns;
 pub mod bg3_collector;
+pub mod bg3_screenshot;
 pub mod blob_send;
 pub mod collector;
 pub mod collector_commands;
@@ -22,6 +23,8 @@ pub mod preview;
 pub mod registry;
 pub mod runtime;
 pub mod scope;
+pub mod screenshot_commands;
+pub mod screenshot_encode;
 pub mod server_config;
 pub mod state;
 pub mod tiles;
@@ -106,6 +109,8 @@ pub fn run() {
             collector_commands::skip_first_upload,
             collector_commands::refresh_server_config,
             collector_commands::set_bg3_campaign,
+            screenshot_commands::get_bg3_screenshot_hubs,
+            screenshot_commands::set_bg3_screenshot_hub,
         ])
         .build(tauri::generate_context!())
         .expect("error while building RL Companion")

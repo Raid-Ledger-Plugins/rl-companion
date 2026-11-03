@@ -55,6 +55,15 @@ pub struct AppConfig {
     /// keyed by `campaignKey`. A missing key means the 30-day default.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub bg3_campaigns: BTreeMap<String, bool>,
+    /// When each collector was last switched on (unix seconds), keyed by
+    /// manifest id. The BG3 screenshot collector sends only files taken at
+    /// or after it (ROK-1966 Q2: no backfill).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub collector_opted_in_at: BTreeMap<String, i64>,
+    /// The hub (`guilds.id`) BG3 screenshots go to (ROK-1966 Q3). `None` =
+    /// not picked yet: screenshots wait, nothing uploads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bg3_screenshot_hub: Option<i64>,
 }
 
 /// The id the legacy `ledgerlinkEnabled` flag belongs to.
@@ -75,6 +84,8 @@ impl Default for AppConfig {
             last_server_config: None,
             fetched_at: None,
             bg3_campaigns: BTreeMap::new(),
+            collector_opted_in_at: BTreeMap::new(),
+            bg3_screenshot_hub: None,
         }
     }
 }
@@ -109,7 +120,22 @@ impl AppConfig {
     }
 
     pub fn set_collector_enabled(&mut self, id: &str, on: bool) {
+        self.set_collector_enabled_at(id, on, crate::bg3_campaigns::now_unix());
+    }
+
+    /// [`Self::set_collector_enabled`] at `now`: an off→on switch stamps the
+    /// opt-in time; staying on keeps the first stamp.
+    pub fn set_collector_enabled_at(&mut self, id: &str, on: bool, now: i64) {
+        let was_on = self.collectors_enabled.get(id).copied().unwrap_or(false);
+        if on && !was_on {
+            self.collector_opted_in_at.insert(id.to_owned(), now);
+        }
         self.collectors_enabled.insert(id.to_owned(), on);
+    }
+
+    /// When `id` was last switched on, if ever.
+    pub fn opted_in_at(&self, id: &str) -> Option<i64> {
+        self.collector_opted_in_at.get(id).copied()
     }
 
     /// The user confirmed `id`'s first-upload preview.
