@@ -53,7 +53,13 @@ fn io(e: std::io::Error) -> String {
 
 pub fn apply_enabled(shared: &Shared, on: bool) -> Result<AppConfig, String> {
     shared
-        .update_config(|c| c.dev_bridge.enabled = on)
+        .update_config(|c| {
+            c.dev_bridge.enabled = on;
+            // Off clears "Allow probes": re-enabling never silently re-arms them.
+            if !on {
+                c.dev_bridge.probes_enabled = false;
+            }
+        })
         .map_err(io)
 }
 
@@ -108,7 +114,15 @@ pub fn apply_rotate(shared: &Shared) -> Result<(DevToken, AppConfig), String> {
 
 type Bridge<'a> = State<'a, Arc<DevBridge>>;
 
-async fn settle(app: &AppHandle, bridge: &DevBridge, cfg: AppConfig) -> DevBridgeStatusDto {
+/// Serialises read-config + reconcile, so two concurrent commands can never
+/// apply an older snapshot after a newer one (e.g. an allowlist save putting
+/// back the hash a Rotate just replaced): each reconcile reads the latest
+/// saved config under this lock.
+static RECONCILE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn settle(app: &AppHandle, bridge: &DevBridge, shared: &Shared) -> DevBridgeStatusDto {
+    let _one = RECONCILE.lock().await;
+    let cfg = shared.config();
     let listener = bridge.reconcile(&cfg).await;
     crate::tray::set_dev_bridge(app, listener.listening.is_some());
     dto(&cfg, listener)
@@ -120,7 +134,7 @@ pub async fn get_dev_bridge_status(
     app: AppHandle,
     bridge: Bridge<'_>,
 ) -> Result<DevBridgeStatusDto, String> {
-    Ok(settle(&app, &bridge, shared.config()).await)
+    Ok(settle(&app, &bridge, &shared).await)
 }
 
 #[tauri::command]
@@ -130,8 +144,8 @@ pub async fn set_dev_bridge_enabled(
     bridge: Bridge<'_>,
     enabled: bool,
 ) -> Result<DevBridgeStatusDto, String> {
-    let cfg = apply_enabled(&shared, enabled)?;
-    Ok(settle(&app, &bridge, cfg).await)
+    apply_enabled(&shared, enabled)?;
+    Ok(settle(&app, &bridge, &shared).await)
 }
 
 #[tauri::command]
@@ -141,8 +155,8 @@ pub async fn set_dev_bridge_probes_enabled(
     bridge: Bridge<'_>,
     enabled: bool,
 ) -> Result<DevBridgeStatusDto, String> {
-    let cfg = apply_probes_enabled(&shared, enabled)?;
-    Ok(settle(&app, &bridge, cfg).await)
+    apply_probes_enabled(&shared, enabled)?;
+    Ok(settle(&app, &bridge, &shared).await)
 }
 
 #[tauri::command]
@@ -153,8 +167,8 @@ pub async fn set_dev_bridge_bind(
     ip: String,
     port: u16,
 ) -> Result<DevBridgeStatusDto, String> {
-    let cfg = apply_bind(&shared, &ip, port)?;
-    Ok(settle(&app, &bridge, cfg).await)
+    apply_bind(&shared, &ip, port)?;
+    Ok(settle(&app, &bridge, &shared).await)
 }
 
 #[tauri::command]
@@ -164,8 +178,8 @@ pub async fn set_dev_bridge_allowlist(
     bridge: Bridge<'_>,
     ips: Vec<String>,
 ) -> Result<DevBridgeStatusDto, String> {
-    let cfg = apply_allowlist(&shared, &ips)?;
-    Ok(settle(&app, &bridge, cfg).await)
+    apply_allowlist(&shared, &ips)?;
+    Ok(settle(&app, &bridge, &shared).await)
 }
 
 /// Create or Rotate. The window shows `token` once with a Copy button.
@@ -175,9 +189,8 @@ pub async fn rotate_dev_bridge_token(
     app: AppHandle,
     bridge: Bridge<'_>,
 ) -> Result<DevTokenDto, String> {
-    let (token, cfg) = apply_rotate(&shared)?;
-    let listener = bridge.reconcile(&cfg).await;
-    crate::tray::set_dev_bridge(&app, listener.listening.is_some());
+    let (token, _) = apply_rotate(&shared)?;
+    settle(&app, &bridge, &shared).await;
     Ok(DevTokenDto {
         token: token.expose().to_owned(),
     })

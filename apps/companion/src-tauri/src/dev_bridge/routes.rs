@@ -3,7 +3,7 @@
 //! the probe endpoints arrive with C4.
 
 use super::health::discover_flavors;
-use super::logbuf::{is_level, LogBuffer};
+use super::logbuf::{is_level, parse_utc, LogBuffer};
 use super::paging::{decode_cursor, encode_cursor, invalid, page, wrap_next, Query};
 use super::server::Snapshot;
 use super::{addons, sv};
@@ -85,13 +85,14 @@ fn sv_raw_ep(snap: &Snapshot, q: &Query) -> Res {
     if scope != "account" && scope != "character" {
         return Err(bad("scope", "scope is account or character"));
     }
-    let start = cursor(q)?;
-    sv::raw(Path::new(snap.wow_dir.trim()), &flavor, scope, start).map_err(|missing| {
-        if missing {
-            not_found()
-        } else {
-            bad("cursor", "Unknown cursor")
-        }
+    let cursor = q.get("cursor").map(String::as_str);
+    sv::raw(Path::new(snap.wow_dir.trim()), &flavor, scope, cursor).map_err(|e| match e {
+        sv::RawError::Missing => not_found(),
+        sv::RawError::BadCursor => bad("cursor", "Unknown cursor"),
+        sv::RawError::Changed => bad(
+            "cursor",
+            "The file changed since this cursor; restart from the first page",
+        ),
     })
 }
 
@@ -100,7 +101,7 @@ fn sv_parsed_ep(snap: &Snapshot, q: &Query) -> Res {
     let start = cursor(q)?;
     let rows: Vec<Value> = sv::sv_files(Path::new(snap.wow_dir.trim()), &flavor)
         .iter()
-        .map(sv::parsed_file)
+        .flat_map(sv::parsed_rows)
         .collect();
     Ok(page(
         &rows,
@@ -117,10 +118,13 @@ fn logs_ep(logs: &LogBuffer, q: &Query) -> Res {
     if level.is_some_and(|l| !is_level(l)) {
         return Err(bad("level", "level is error, warn, info, debug or trace"));
     }
-    let since = q.get("since").map(String::as_str);
-    if since.is_some_and(|s| s.len() > 24 || !s.ends_with('Z')) {
-        return Err(bad("since", "since is an RFC 3339 UTC time"));
-    }
+    let since = match q.get("since") {
+        None => None,
+        Some(s) => match parse_utc(s) {
+            Some(t) if s.len() <= 24 => Some(t),
+            _ => return Err(bad("since", "since is an RFC 3339 UTC time")),
+        },
+    };
     let selected = logs.select(from, level, since);
     let lines: Vec<Value> = selected.iter().map(|(_, v)| v.clone()).collect();
     let mut body = page(

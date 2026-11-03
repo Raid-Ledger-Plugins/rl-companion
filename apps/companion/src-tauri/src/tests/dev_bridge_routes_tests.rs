@@ -331,3 +331,217 @@ fn wow_folder_change_refreshes_the_served_snapshot() {
     );
     assert_eq!(after["wowDir"], json!(cfg.wow_dir.replace('\\', "/")));
 }
+
+/// A worst-case LedgerLink.lua: 40 outbox entries with 128-char section and
+/// source, and 32 top-level keys of 64 chars.
+fn worst_case_sv() -> String {
+    let real = rl_collectors::parse_ledgerlink_outbox(MULTI).expect("fixture parses");
+    let text = &real.entries.first().expect("an entry").text;
+    let mut lua = String::from("LedgerLinkDB = {\n");
+    for k in 0..32 {
+        lua.push_str(&format!("\t[\"{}{k:02}\"] = 1,\n", "k".repeat(62)));
+    }
+    lua.push_str("\t[\"outbox\"] = {\n");
+    for i in 0..40 {
+        lua.push_str(&format!(
+            "\t\t[\"Player-0000-{i:08X}\"] = {{\n\t\t\t[\"at\"] = 1790000000,\n\t\t\t[\"exportedAt\"] = 1790000000,\n\t\t\t[\"section\"] = \"{}\",\n\t\t\t[\"source\"] = \"{}\",\n\t\t\t[\"text\"] = \"{text}\",\n\t\t}},\n",
+            "s".repeat(128),
+            "o".repeat(128),
+        ));
+    }
+    lua.push_str("\t},\n}\n");
+    lua
+}
+
+#[test]
+fn sv_parsed_worst_case_row_splits_under_16_kib() {
+    let wow = super::temp_dir("bridge-sv-worst");
+    let (acct, realm, ch) = ("A".repeat(100), "R".repeat(100), "C".repeat(100));
+    let rel = format!("{FLAVOR}/WTF/Account/{acct}/{realm}/{ch}/SavedVariables/LedgerLink.lua");
+    write(&wow.join(rel), worst_case_sv().as_bytes());
+    let c = ctx(&wow);
+    // `pages` asserts every page is schema-valid and ≤ 16 KiB.
+    let all = pages(
+        &c,
+        "/dev/v1/ledgerlink/sv/parsed",
+        "sv-parsed",
+        &format!("flavor={FLAVOR}"),
+    );
+    let rows: Vec<Value> = all
+        .iter()
+        .flat_map(|p| p["files"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert!(
+        rows.len() > 1,
+        "the 40-entry outbox is split across rows, got {}",
+        rows.len()
+    );
+    for r in &rows {
+        let len = serde_json::to_vec(r).expect("json").len();
+        assert!(
+            len <= crate::dev_bridge::sv::ROW_MAX_BYTES,
+            "row is {len} B"
+        );
+        assert_eq!(r["character"], json!(ch), "every split row names the file");
+    }
+    let entries: usize = rows
+        .iter()
+        .map(|r| r["outbox"].as_array().map_or(0, Vec::len))
+        .sum();
+    assert_eq!(entries, 40, "no outbox entry is lost by the split");
+    assert_eq!(rows[0]["topKeys"].as_array().map_or(0, Vec::len), 32);
+}
+
+#[test]
+fn sv_raw_cursor_refuses_a_file_rewritten_mid_paging() {
+    let wow = super::temp_dir("bridge-sv-rewrite");
+    let path = wow.join(format!(
+        "{FLAVOR}/WTF/Account/TESTACCOUNT/SavedVariables/LedgerLink.lua"
+    ));
+    write(&path, "x".repeat(40_000).as_bytes());
+    let c = ctx(&wow);
+    let base = format!("flavor={FLAVOR}&scope=account");
+    let (status, first) = get(&c, "/dev/v1/ledgerlink/sv", Some(&base));
+    assert_eq!(status, 200);
+    let next = first["next"].as_str().expect("a second page").to_owned();
+    write(&path, "y".repeat(40_001).as_bytes());
+    let (status, body) = get(
+        &c,
+        "/dev/v1/ledgerlink/sv",
+        Some(&format!("{base}&cursor={next}")),
+    );
+    assert_eq!(
+        status, 400,
+        "a stale cursor is refused, not spliced: {body}"
+    );
+    assert_eq!(schema_errors("error", &body), Vec::<String>::new());
+    assert_eq!(body["issues"][0]["path"], json!(["cursor"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn sv_symlinked_ledgerlink_lua_is_not_followed() {
+    let wow = super::temp_dir("bridge-sv-symlink");
+    let outside = wow.join("outside.lua");
+    write(&outside, b"LedgerLinkDB = {\n\t[\"secret\"] = 1,\n}\n");
+    let link = wow.join(format!(
+        "{FLAVOR}/WTF/Account/TESTACCOUNT/SavedVariables/LedgerLink.lua"
+    ));
+    std::fs::create_dir_all(link.parent().expect("parent")).expect("mkdir");
+    std::os::unix::fs::symlink(&outside, &link).expect("symlink");
+    let c = ctx(&wow);
+    let (status, body) = get(
+        &c,
+        "/dev/v1/ledgerlink/sv",
+        Some(&format!("flavor={FLAVOR}&scope=account")),
+    );
+    assert_eq!(
+        status, 404,
+        "a symlinked LedgerLink.lua is not read: {body}"
+    );
+    let (_, parsed) = get(
+        &c,
+        "/dev/v1/ledgerlink/sv/parsed",
+        Some(&format!("flavor={FLAVOR}")),
+    );
+    assert_eq!(parsed["files"], json!([]), "nor listed in sv/parsed");
+}
+
+#[test]
+fn every_refusal_body_matches_the_error_def() {
+    let wow = super::temp_dir("bridge-error-bodies");
+    std::fs::create_dir_all(wow.join(FLAVOR)).expect("mkdir");
+    let c = ctx(&wow);
+    let mut seen = Vec::new();
+    let mut check = |status: u16, body: Value| {
+        assert_eq!(
+            schema_errors("error", &body),
+            Vec::<String>::new(),
+            "{status} body {body}"
+        );
+        seen.push(status);
+    };
+    let (s, b) = get(&c, "/dev/v1/nope", None);
+    check(s, b);
+    let (s, b) = get(
+        &c,
+        "/dev/v1/ledgerlink/sv",
+        Some(&format!("flavor={FLAVOR}&scope=account")),
+    );
+    check(s, b);
+    let (s, b) = c.route(IpAddr::V4(CALLER), &Method::GET, "/dev/v1/logs", None, None);
+    check(s, b);
+    let outsider = IpAddr::V4(Ipv4Addr::new(192, 168, 0, 9));
+    let auth = format!("Bearer {}", token());
+    let (s, b) = c.route(outsider, &Method::GET, "/dev/v1/logs", None, Some(&auth));
+    check(s, b);
+    let wrong = format!("Bearer rlcdev_{}", "B".repeat(43));
+    let mut last = (0, Value::Null);
+    for _ in 0..12 {
+        last = c.route(
+            IpAddr::V4(CALLER),
+            &Method::GET,
+            "/dev/v1/logs",
+            None,
+            Some(&wrong),
+        );
+    }
+    check(last.0, last.1);
+    assert_eq!(seen, vec![404, 404, 401, 403, 429]);
+}
+
+#[test]
+fn redact_user_names_with_spaces_and_debug_escapes() {
+    let cases = [
+        (r"from C:\Users\Jake Doe\x", r"from C:\Users\<user>\x"),
+        (r"path C:\\Users\\Jake\\wow", r"path C:\\Users\\<user>\\wow"),
+        (r"C:\\Users\\Jake Doe\\wow", r"C:\\Users\\<user>\\wow"),
+        ("/Users/jake/wow and more", "/Users/<user>/wow and more"),
+        ("at /home/jake done", "at /home/<user> done"),
+    ];
+    for (raw, want) in cases {
+        assert_eq!(redact(raw), want, "redact({raw:?})");
+    }
+}
+
+#[test]
+fn since_is_parsed_as_rfc3339_utc_and_orders_fractions() {
+    use crate::dev_bridge::logbuf::parse_utc;
+    for bad in [
+        "Z",
+        "2026-11-01Z",
+        "2026-13-01T00:00:00Z",
+        "2026-02-30T00:00:00Z",
+        "2026-11-01T00:00:00",
+    ] {
+        assert_eq!(parse_utc(bad), None, "{bad:?} is not RFC 3339 UTC");
+    }
+    let whole = parse_utc("2026-11-01T18:00:00Z").expect("whole");
+    let frac = parse_utc("2026-11-01T18:00:00.5Z").expect("fraction");
+    assert!(
+        frac > whole,
+        "…:00.5Z sorts after …:00Z (a text compare puts it first)"
+    );
+    assert_eq!(parse_utc("1970-01-01T00:00:01Z"), Some((1, 0)));
+    let buf: &'static LogBuffer = Box::leak(Box::new(LogBuffer::default()));
+    buf.push("info", "dev_bridge", "early", "2026-11-01T18:00:00Z".into());
+    buf.push(
+        "info",
+        "dev_bridge",
+        "late",
+        "2026-11-01T18:00:00.5Z".into(),
+    );
+    let c = ServerCtx::with_logs(buf);
+    c.set_snapshot(snap(Path::new("")));
+    let (status, _) = get(&c, "/dev/v1/logs", Some("since=Z"));
+    assert_eq!(status, 400, "since=Z is refused");
+    let (_, body) = get(&c, "/dev/v1/logs", Some("since=2026-11-01T18:00:00.1Z"));
+    let msgs: Vec<&str> = body["lines"].as_array().map_or(Vec::new(), |l| {
+        l.iter().filter_map(|x| x["msg"].as_str()).collect()
+    });
+    assert_eq!(
+        msgs,
+        vec!["late"],
+        "only the line at/after the fractional since"
+    );
+}
