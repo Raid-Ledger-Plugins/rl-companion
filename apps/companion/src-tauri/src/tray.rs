@@ -98,6 +98,24 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
+/// The tray tooltip; spec §6.5 shows "Dev bridge on" while the listener is open.
+pub fn tooltip(dev_bridge_on: bool) -> &'static str {
+    if dev_bridge_on {
+        "RL Companion — Dev bridge on"
+    } else {
+        "RL Companion"
+    }
+}
+
+/// Tooltip + text badge beside the icon (macOS/Linux; Windows shows the
+/// tooltip). No-op before the tray exists.
+pub fn set_dev_bridge(app: &AppHandle, on: bool) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(tooltip(on)));
+        let _ = tray.set_title(if on { Some("DEV") } else { None });
+    }
+}
+
 /// Update the tray's status line. No-op before the tray exists (and in tests).
 pub fn set_status(app: &AppHandle, text: &str) {
     if let Some(items) = app.try_state::<TrayItems>() {
