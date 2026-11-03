@@ -64,14 +64,12 @@ fn resolve(cfg: &AppConfig, targets: Option<&[HubTarget]>) -> Option<i64> {
         return cfg.bg3_screenshot_hub;
     };
     let listed = |id: i64| targets.iter().any(|t| t.hub_guild_id == id);
-    cfg.bg3_screenshot_hub
-        .filter(|&id| listed(id))
-        .or_else(|| {
-            targets
-                .iter()
-                .find(|t| t.is_default)
-                .map(|t| t.hub_guild_id)
-        })
+    cfg.bg3_screenshot_hub.filter(|&id| listed(id)).or_else(|| {
+        targets
+            .iter()
+            .find(|t| t.is_default)
+            .map(|t| t.hub_guild_id)
+    })
 }
 
 /// The picker's view of `cfg`.
