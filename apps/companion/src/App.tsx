@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as api from "./api";
 import { Collector } from "./components/Collector";
 import { Startup } from "./components/Startup";
+import { HOME, navigate, type NavAction, type View } from "./view";
 
 type Link = { phase: "idle" } | { phase: "waiting"; start: api.LinkStart };
 
@@ -16,6 +17,16 @@ export default function App() {
   const [link, setLink] = useState<Link>({ phase: "idle" });
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // D8: only a tile click, the back button or Escape move the view — never a status event.
+  const [view, setView] = useState<View>(HOME);
+  const nav = useCallback((a: NavAction) => setView((v) => navigate(v, a)), []);
+
+  useEffect(() => {
+    if (view.kind !== "game") return;
+    const onKey = (e: KeyboardEvent) => nav({ type: "key", key: e.key });
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view.kind, nav]);
 
   const refresh = useCallback(async () => {
     const s = await api.getStatus();
@@ -60,14 +71,16 @@ export default function App() {
   }, [refresh, run]);
 
   if (!status) return <main className="muted">Loading…</main>;
+  const home = view.kind === "home";
 
+  // The collector stays at the same position in both views so its state survives navigation.
   return (
     <main>
-      <h1>RL Companion</h1>
+      {home && <h1>RL Companion</h1>}
       {notice && <p className="muted">{notice}</p>}
       {error && <p className="error">{error}</p>}
 
-      <section>
+      {home && <section>
         <h2>Device link</h2>
         {status.linked ? (
           <div className="row">
@@ -109,11 +122,17 @@ export default function App() {
             </button>
           </>
         )}
-      </section>
+      </section>}
 
-      <Collector onError={setError} />
+      <Collector
+        view={view}
+        serverUrl={status.serverUrl}
+        onOpen={(id) => nav({ type: "open", id })}
+        onBack={() => nav({ type: "back" })}
+        onError={setError}
+      />
 
-      <section>
+      {home && <section>
         <h2>Server</h2>
         <label>
           Raid Ledger address
@@ -128,9 +147,9 @@ export default function App() {
           </button>
           <span className="muted">Each server keeps its own link.</span>
         </div>
-      </section>
+      </section>}
 
-      <Startup onError={setError} />
+      {home && <Startup onError={setError} />}
     </main>
   );
 }

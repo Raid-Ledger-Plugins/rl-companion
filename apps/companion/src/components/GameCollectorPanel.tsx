@@ -1,8 +1,16 @@
-import type { CollectorRow } from "../api";
+import type { ReactNode } from "react";
+import type { CharResult, CollectorRow, LogLine } from "../api";
+import { ActivityLog, ResultList } from "./UploadLists";
 import { FirstUploadPreview } from "./FirstUploadPreview";
 
 export interface GameCollectorPanelProps {
   row: CollectorRow;
+  /** Only this collector's results (D12) — the caller filters. */
+  results: CharResult[];
+  /** This collector's lines plus the device-level ones. */
+  log: LogLine[];
+  /** Rendered below the auto-upload toggle (the BG3 campaign picker slot, D15). */
+  belowToggle?: ReactNode;
   dirDraft: string;
   /** The backend's refusal of the last folder the user tried to save. */
   saveError: string | null;
@@ -26,6 +34,7 @@ export function GameCollectorPanel(p: GameCollectorPanelProps) {
         <input type="checkbox" checked={row.enabled} onChange={(e) => p.onToggle(e.target.checked)} />
         Upload new {row.displayName} saves automatically
       </label>
+      {p.belowToggle}
       {!row.enabled && <span className="muted">Off until you turn it on. Nothing is read from your save folder while off.</span>}
       {row.enabled && row.confirmFirstUpload && !row.consented && !row.preview && (
         <span className="muted">You will see a preview before the first upload.</span>
@@ -47,6 +56,8 @@ export function GameCollectorPanel(p: GameCollectorPanelProps) {
         <button disabled={p.dirDraft === row.folderOverride} onClick={p.onSaveDir}>Save</button>
       </div>
       {row.preview && <FirstUploadPreview preview={row.preview} onUpload={p.onUpload} onSkip={p.onSkip} />}
+      <ResultList heading="Last upload per save" results={p.results} />
+      <ActivityLog log={p.log} />
     </section>
   );
 }

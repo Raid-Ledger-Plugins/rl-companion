@@ -9,6 +9,8 @@ function render(status: CollectorStatus, dirDraft = status.wowDir): string {
   return renderToStaticMarkup(
     <CollectorPanel
       status={status}
+      results={status.results}
+      log={status.log}
       dirDraft={dirDraft}
       onDirDraft={noop}
       onSaveDir={noop}
@@ -24,13 +26,15 @@ const base: CollectorStatus = {
   wowDir: "C:\\Program Files (x86)\\World of Warcraft",
   status: "Uploaded 1 of 2 export(s)",
   results: [
-    { label: "Player-0000-0A000001 (char)", result: "Uploaded", ok: true, at: "2026-11-02T18:00:00Z" },
-    { label: "Player-0000-0A000002 (guild)", result: "Rejected 400: invalid_payload (ROSTER_HELD)", ok: false, at: "2026-11-02T18:00:01Z" },
+    { collectorId: "wow-ledgerlink", label: "Player-0000-0A000001 (char)", result: "Uploaded", ok: true, at: "2026-11-02T18:00:00Z" },
+    { collectorId: "wow-ledgerlink", label: "Player-0000-0A000002 (guild)", result: "Rejected 400: invalid_payload (ROSTER_HELD)", ok: false, at: "2026-11-02T18:00:01Z" },
   ],
-  log: [{ at: "2026-11-02T18:00:01Z", text: "LedgerLink uploads turned on" }],
+  log: [{ at: "2026-11-02T18:00:01Z", text: "LedgerLink uploads turned on", collectorId: "wow-ledgerlink" }],
   device: null,
   relink: false,
   collectors: [],
+  tiles: [],
+  lastChecked: null,
 };
 
 describe("CollectorPanel", () => {

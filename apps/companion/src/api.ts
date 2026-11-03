@@ -50,6 +50,8 @@ export const LINK_MESSAGES: Record<LinkEvent["state"], string> = {
 };
 
 export interface CharResult {
+  /** The collector that produced this result (D12); each game view shows only its own. */
+  collectorId: string;
   label: string;
   result: string;
   ok: boolean;
@@ -59,6 +61,35 @@ export interface CharResult {
 export interface LogLine {
   at: string;
   text: string;
+  /** `null` = a device-level line (rate limited, not linked), shown in every game view. */
+  collectorId: string | null;
+}
+
+export type TileState = "supported" | "plugin_off" | "not_on_server" | "app_too_old" | "unknown";
+
+/** One game tile on the home screen (computed in Rust, `tiles.rs`). */
+export interface Tile {
+  /** Contract id (== collector id for the app's own collectors). */
+  id: string;
+  /** Panel to open; `null` for `app_too_old`. */
+  collectorId: string | null;
+  title: string;
+  subtitle: string | null;
+  state: TileState;
+  /** Shown ON the art: "Plugin not installed", "Not on this server", … */
+  chip: string | null;
+  /** The line under the art. */
+  line: string;
+  /** The game view's banner (plain text). */
+  banner: string | null;
+  /** Bolded inside `banner`. */
+  pluginName: string | null;
+  clickable: boolean;
+  /** A `data:` URL, or `null`. */
+  cover: string | null;
+  /** `true` → the gradient + initials fallback. */
+  fallback: boolean;
+  initials: string;
 }
 
 export interface CollectorStatus {
@@ -72,6 +103,9 @@ export interface CollectorStatus {
   /** The last scan hit a 401 and the token was cleared; the window shows it unlinked. */
   relink: boolean;
   collectors: CollectorRow[];
+  tiles: Tile[];
+  /** RFC 3339; set only while the server is unreachable and a cached answer is shown. */
+  lastChecked: string | null;
 }
 
 export interface PartyLine {
@@ -120,6 +154,7 @@ export const pickCollectorRoot = (id: string) => invoke<CollectorStatus | null>(
 export const confirmFirstUpload = (id: string) => invoke<CollectorStatus>("confirm_first_upload", { id });
 export const skipFirstUpload = (id: string) => invoke<CollectorStatus>("skip_first_upload", { id });
 export const uploadNow = () => invoke<void>("upload_now");
+export const refreshServerConfig = () => invoke<CollectorStatus>("refresh_server_config");
 
 export const onCollectorStatus = (cb: (s: CollectorStatus) => void): Promise<UnlistenFn> =>
   listen<CollectorStatus>("collector-status", (event) => cb(event.payload));

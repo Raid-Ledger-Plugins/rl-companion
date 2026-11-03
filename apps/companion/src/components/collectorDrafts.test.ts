@@ -25,7 +25,7 @@ const status: CollectorStatus = {
   log: [],
   device: null,
   relink: false,
-  collectors: [row("wow-ledgerlink", "C:\\WoW"), row("bg3-save", "D:\\Saved"), row("other-game", "E:\\Saved")],
+  tiles: [], lastChecked: null, collectors: [row("wow-ledgerlink", "C:\\WoW"), row("bg3-save", "D:\\Saved"), row("other-game", "E:\\Saved")],
 };
 
 const typing: Drafts = { wowDir: "C:\\Half-typed", roots: { "bg3-save": "D:\\Unsaved", "other-game": "E:\\Unsaved" } };

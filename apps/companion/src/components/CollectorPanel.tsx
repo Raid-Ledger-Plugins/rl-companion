@@ -1,7 +1,12 @@
-import { LEDGERLINK_ID, type CollectorStatus } from "../api";
+import { LEDGERLINK_ID, type CharResult, type CollectorStatus, type LogLine } from "../api";
+import { ActivityLog, ResultList } from "./UploadLists";
 
 export interface CollectorPanelProps {
   status: CollectorStatus;
+  /** Only this collector's results (D12) — the caller filters. */
+  results: CharResult[];
+  /** This collector's lines plus the device-level ones. */
+  log: LogLine[];
   dirDraft: string;
   onDirDraft: (dir: string) => void;
   onSaveDir: () => void;
@@ -35,26 +40,8 @@ export function CollectorPanel(p: CollectorPanelProps) {
         <button disabled={p.dirDraft === status.wowDir} onClick={p.onSaveDir}>Save</button>
         <button className="primary" disabled={!status.enabled} onClick={p.onUploadNow}>Upload now</button>
       </div>
-      <h2>Last upload per character</h2>
-      {status.results.length === 0 ? (
-        <span className="muted">Nothing uploaded yet.</span>
-      ) : (
-        <ul className="results">
-          {status.results.map((r) => (
-            <li key={r.label} className={r.ok ? "ok" : "bad"}>
-              {r.label}: {r.result} <span className="muted">{r.at}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <h2>Recent activity</h2>
-      <ul className="log">
-        {status.log.map((l, i) => (
-          <li key={`${l.at}-${i}`}>
-            {l.at} {l.text}
-          </li>
-        ))}
-      </ul>
+      <ResultList heading="Last upload per character" results={p.results} />
+      <ActivityLog log={p.log} />
     </section>
   );
 }
