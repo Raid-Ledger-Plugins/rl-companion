@@ -1,12 +1,16 @@
 import type { ReactNode } from "react";
-import { LEDGERLINK_ID, type CollectorRow, type CollectorStatus } from "../api";
+import { BG3_ID, LEDGERLINK_ID, type CollectorRow, type CollectorStatus } from "../api";
 import { CollectorPanel, type CollectorPanelProps } from "./CollectorPanel";
 import { Cover } from "./GameTiles";
+import { Bg3CampaignPicker } from "./Bg3CampaignPicker";
 import { GameCollectorPanel, type GameCollectorPanelProps } from "./GameCollectorPanel";
 
 type Own = "status" | "row" | "results" | "log" | "belowToggle";
 export type WowHandlers = Omit<CollectorPanelProps, Own>;
-export type GameHandlers = Omit<GameCollectorPanelProps, Own>;
+export type GameHandlers = Omit<GameCollectorPanelProps, Own> & {
+  /** BG3 only: tick or untick one campaign in the picker (D15). */
+  onCampaign?: (key: string, ticked: boolean) => void;
+};
 
 export interface GameViewProps {
   status: CollectorStatus;
@@ -16,9 +20,15 @@ export interface GameViewProps {
   game: (row: CollectorRow) => GameHandlers;
 }
 
-/** D15: ROK-2068's BG3 per-campaign picker goes here once it ships. Empty until then. */
-export function CampaignPickerSlot() {
-  return <div data-slot="bg3-campaign-picker" aria-hidden="true" />;
+type GamePanelProps = Pick<GameCollectorPanelProps, "row" | "results" | "log"> & Pick<GameViewProps, "game">;
+
+/** A non-WoW game's panel; BG3 gets the campaign picker below its toggle (D15). */
+function GamePanel({ row, results, log, game }: GamePanelProps) {
+  const { onCampaign, ...handlers } = game(row);
+  const picker = row.id === BG3_ID
+    ? <Bg3CampaignPicker campaigns={row.campaigns} enabled={row.enabled} onTick={onCampaign ?? (() => undefined)} />
+    : null;
+  return <GameCollectorPanel row={row} results={results} log={log} belowToggle={picker} {...handlers} />;
 }
 
 /** Bold the plugin name (and the lead sentence) inside a plain-text banner. */
@@ -59,13 +69,7 @@ export function GameView(p: GameViewProps) {
       {id === LEDGERLINK_ID ? (
         <CollectorPanel status={status} results={results} log={log} {...p.wow} />
       ) : row ? (
-        <GameCollectorPanel
-          row={row}
-          results={results}
-          log={log}
-          belowToggle={id === "bg3-save" ? <CampaignPickerSlot /> : null}
-          {...p.game(row)}
-        />
+        <GamePanel row={row} results={results} log={log} game={p.game} />
       ) : null}
     </>
   );

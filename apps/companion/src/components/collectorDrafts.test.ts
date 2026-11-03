@@ -14,6 +14,7 @@ function row(id: string, folderOverride: string): CollectorRow {
     confirmFirstUpload: false,
     consented: true,
     preview: null,
+    campaigns: [],
   };
 }
 

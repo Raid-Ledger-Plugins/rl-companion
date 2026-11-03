@@ -95,3 +95,8 @@ img.cover:not([hidden]) + .fallback, img.cover[hidden] { display: none; }
 .gv-head h2 { color: var(--text); font-size: 15px; }
 .back { justify-self: start; border: none; background: none; padding: 2px 0; color: var(--accent); font-weight: 600; }
 .banner { font-size: 13px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--warn); background: var(--warn-bg); color: var(--text); }
+/* ROK-2068: the BG3 campaign picker (D15). */
+.camps-box { display: flex; flex-direction: column; gap: 6px; }
+.camps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.camps-more summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.camps-more .camps { margin-top: 6px; }

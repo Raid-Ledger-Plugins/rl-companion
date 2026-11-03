@@ -27,6 +27,7 @@ export const bg3Tile = tile({
 export const bg3Row: CollectorRow = {
   id: "bg3-save", displayName: "Baldur's Gate 3", enabled: true, status: "Plugin not installed",
   detectedFolder: "C:\\Saves", folderOverride: "", overrideNote: null, confirmFirstUpload: true, consented: true, preview: null,
+  campaigns: [],
 };
 export const wowRow: CollectorRow = { ...bg3Row, id: "wow-ledgerlink", displayName: "LedgerLink", status: "Up to date" };
 
