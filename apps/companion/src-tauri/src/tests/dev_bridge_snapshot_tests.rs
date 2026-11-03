@@ -219,3 +219,89 @@ fn the_cache_has_no_path_to_the_uploader() {
         }
     }
 }
+
+fn pinned(rel: &str) -> Value {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../contracts/dev-bridge/v1/fixtures")
+        .join(rel);
+    serde_json::from_str(&std::fs::read_to_string(p).expect(rel)).expect(rel)
+}
+
+#[test]
+fn a_guid_as_key_snapshot_is_rejected_without_the_guid_reaching_the_log() {
+    let v = pinned("invalid/ledgerlink-snapshot--guid-as-key.json");
+    let e = validate_snapshot(&v).expect_err("guid-as-key");
+    assert!(
+        !e.contains("Player-"),
+        "validator error echoes the GUID: {e}"
+    );
+    assert!(e.starts_with("calls.4.values.0.<guid>:"), "{e}");
+
+    let cache = SnapshotCache::in_app_data(&temp_dir("snapshot-guid-log"));
+    assert_eq!(cache.ingest(FLAVOR, &[entry(&v)], NOW), 0);
+    let lines = crate::dev_bridge::logbuf::global().select(0, None, None);
+    let msgs: Vec<String> = lines.iter().map(|(_, l)| l["msg"].to_string()).collect();
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("rejected") && m.contains("<guid>")),
+        "the rejection is logged: {msgs:?}"
+    );
+    let leaked: Vec<&String> = msgs.iter().filter(|m| m.contains("Player-")).collect();
+    assert!(
+        leaked.is_empty(),
+        "a GUID reached the LogBuffer: {leaked:?}"
+    );
+}
+
+#[test]
+fn the_log_redacts_player_guids() {
+    let out = crate::dev_bridge::logbuf::redact("bad key Player-1234-0ABCDEF0 at calls.4");
+    assert_eq!(out, "bad key <guid> at calls.4");
+}
+
+#[test]
+fn a_probe_value_table_holds_at_most_40_keys() {
+    let table = |n: usize| -> Value {
+        Value::Object((0..n).map(|i| (format!("k{i}"), json!(i))).collect())
+    };
+    let mut v = snap(&ts(NOW), "1");
+    v["calls"][0]["values"] = json!([table(40)]);
+    validate_snapshot(&v).expect("40 keys is the cap");
+    v["calls"][0]["values"] = json!([table(41)]);
+    let e = validate_snapshot(&v).expect_err("41 keys must be rejected");
+    assert!(
+        e.starts_with("calls.0:"),
+        "expected an issue at calls.0, got {e}"
+    );
+}
+
+#[test]
+fn string_caps_count_utf16_units_and_region_is_a_safe_integer() {
+    let mut v = snap(&ts(NOW), "1");
+    // 128 emoji = 128 chars but 256 UTF-16 units: exactly the 256 cap.
+    v["sections"][0]["lines"] = json!(["😀".repeat(128)]);
+    validate_snapshot(&v).expect("256 UTF-16 units is the cap");
+    // 129 emoji = 129 chars (under 256) but 258 UTF-16 units, as Zod counts.
+    v["sections"][0]["lines"] = json!(["😀".repeat(129)]);
+    let e = validate_snapshot(&v).expect_err("258 UTF-16 units must be rejected");
+    assert!(e.starts_with("sections.0:"), "got {e}");
+
+    let mut v = snap(&ts(NOW), "1");
+    v["client"]["region"] = json!(9_007_199_254_740_991_i64);
+    validate_snapshot(&v).expect("2^53 - 1 is a safe integer");
+    v["client"]["region"] = json!(9_007_199_254_740_992_i64);
+    let e = validate_snapshot(&v).expect_err("2^53 is not a safe integer");
+    assert!(e.starts_with("client:"), "got {e}");
+}
+
+#[test]
+fn rows_written_in_the_same_second_get_increasing_ids() {
+    let mut rows: Vec<Row> = Vec::new();
+    for b in ["1", "2", "3", "4", "5", "6"] {
+        assert!(merge(&mut rows, snap(&ts(NOW), b), NOW), "{b} appends");
+    }
+    let ids: Vec<&str> = rows.iter().map(|r| r.snapshot_id.as_str()).collect();
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, ids, "ids sort in write order");
+}

@@ -258,3 +258,13 @@ fn routes_never_take_a_request_value_as_a_path() {
     assert_eq!(s, 400);
     assert!(!Path::new(&env.wow).join("etc").exists());
 }
+
+#[test]
+fn an_unknown_history_cursor_is_400() {
+    let env = Env::new("snap-route-history-cursor");
+    env.add(G1, &variant(1), NOW);
+    let bad =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("hZZZZZZZZZZZZZZZZZZZZZZZZZZ");
+    let (status, body) = env.get(HISTORY, &format!("cursor={bad}"));
+    assert_eq!((status, issue_at(&body)), (400, "cursor"), "{body}");
+}

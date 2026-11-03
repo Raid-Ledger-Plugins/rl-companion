@@ -63,7 +63,10 @@ fn every_invalid_snapshot_fixture_is_rejected_at_its_expected_path() {
     assert!(names.len() >= 9, "{names:?}");
     for stem in names {
         let v = load(&format!("invalid/{stem}.json"));
-        let want = expected[&stem]["path"].as_str().expect("EXPECTED entry");
+        let raw = expected[&stem]["path"].as_str().expect("EXPECTED entry");
+        // The validator reports a GUID-bearing key as `<guid>` (its errors are logged).
+        let want = crate::dev_bridge::logbuf::redact(raw);
+        let want = want.as_str();
         let def = def_for(&stem);
         if let Some(slice_at) = want.strip_prefix("snapshot.") {
             // A page's slice refinements (GUID guard, presence rows, D4).
