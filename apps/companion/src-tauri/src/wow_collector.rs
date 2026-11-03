@@ -131,6 +131,7 @@ impl LedgerLinkCollector {
                 continue;
             }
             scan.pending.push(PendingUpload {
+                campaign: None,
                 contract: CONTRACT,
                 scope: scope.clone(),
                 item: entry.guid.clone(),

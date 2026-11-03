@@ -1,12 +1,13 @@
 //! ROK-2068 fix 3: the BG3 per-campaign upload picker.
 
 use crate::bg3_campaigns::{
-    campaign_name, dtos, group, select, ticked, valid_key, CampaignGroup, SaveCampaign,
-    DEFAULT_ON_SECS,
+    campaign_name, dtos, group, select, still_ticked_by, ticked, valid_key, CampaignGroup,
+    SaveCampaign, DEFAULT_ON_SECS,
 };
 use crate::collector::PendingUpload;
 use crate::config::AppConfig;
 use serde_json::json;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 const NOW: i64 = 1_800_000_000;
@@ -22,6 +23,7 @@ fn save(key: &str, name: &str, age_days: i64) -> SaveCampaign {
 
 fn upload(label: &str) -> PendingUpload {
     PendingUpload {
+        campaign: None,
         contract: "bg3-save",
         scope: format!("o|{label}"),
         item: "save".into(),
@@ -160,4 +162,31 @@ fn only_sha256_keys_are_accepted_from_the_window() {
     assert!(valid_key(&"a1".repeat(32)));
     assert!(!valid_key("short"));
     assert!(!valid_key(&"A1".repeat(32)));
+}
+
+#[test]
+fn unticking_mid_batch_stops_that_campaigns_remaining_uploads() {
+    let tagged = |label: &str, key: Option<&str>| PendingUpload {
+        campaign: key.map(str::to_owned),
+        ..upload(label)
+    };
+    let batch = [
+        tagged("A1", Some("k-a")),
+        tagged("B1", Some("k-b")),
+        tagged("WoW", None),
+        tagged("B2", Some("k-b")),
+    ];
+    let live = RefCell::new(BTreeMap::new());
+    let mut sent = Vec::new();
+    for p in still_ticked_by(&batch, || live.borrow().clone()) {
+        sent.push(p.label.clone());
+        if p.label == "A1" {
+            live.borrow_mut().insert("k-b".to_owned(), false);
+        }
+    }
+    assert_eq!(
+        sent,
+        ["A1", "WoW"],
+        "k-b was unticked after A1 was sent: no k-b save may upload"
+    );
 }

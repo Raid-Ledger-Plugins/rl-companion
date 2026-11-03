@@ -126,8 +126,9 @@ impl Bg3SaveCollector {
         }
         match build(&bytes, &folder, mtime) {
             Ok((body, blobs, label)) => Some((
-                campaign,
+                campaign.clone(),
                 Some(PendingUpload {
+                    campaign: Some(campaign.key),
                     contract: CONTRACT,
                     scope,
                     item: ITEM.to_owned(),

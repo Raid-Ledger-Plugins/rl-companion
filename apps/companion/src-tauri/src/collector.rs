@@ -31,6 +31,9 @@ pub struct PendingUpload {
     pub body: Value,
     /// Blobs the message references (e.g. a BG3 thumbnail), PUT before it.
     pub blobs: Vec<Blob>,
+    /// The BG3 campaign the save belongs to, so a batch can skip a campaign
+    /// the user unticks mid-batch (ROK-2068). `None` for other games.
+    pub campaign: Option<String>,
 }
 
 /// One content-addressed blob (`PUT /companion/v1/blobs/:sha256`).

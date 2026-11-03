@@ -4,10 +4,12 @@
 //! Unticking never deletes anything already uploaded.
 
 use crate::collector::PendingUpload;
+use crate::state::Shared;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
 
 /// A never-seen campaign starts ticked only if its newest save is this recent.
 pub const DEFAULT_ON_SECS: i64 = 30 * 24 * 60 * 60;
@@ -128,6 +130,31 @@ pub fn select(
         .filter_map(|(_, p)| p)
         .collect();
     (groups, pending)
+}
+
+/// `pending` in order, each BG3 save rechecked against the live picks just
+/// before it uploads, so unticking a campaign mid-batch stops the rest of
+/// that campaign (ROK-2068). `live` runs once per BG3 item; a key with no
+/// pick yet keeps the scan's verdict. Other games always pass.
+pub fn still_ticked_by<'a>(
+    pending: &'a [PendingUpload],
+    live: impl Fn() -> BTreeMap<String, bool> + 'a,
+) -> impl Iterator<Item = &'a PendingUpload> + 'a {
+    pending.iter().filter(move |p| {
+        p.campaign
+            .as_deref()
+            .is_none_or(|k| live().get(k).copied().unwrap_or(true))
+    })
+}
+
+/// [`still_ticked_by`] over the saved config: the upload loop's iterator.
+pub fn still_ticked<'a>(
+    pending: &'a [PendingUpload],
+    app: &'a AppHandle,
+) -> impl Iterator<Item = &'a PendingUpload> + 'a {
+    still_ticked_by(pending, move || {
+        app.state::<Shared>().config().bg3_campaigns
+    })
 }
 
 /// The last scan's groups, for the window's status (set by the BG3 scan).

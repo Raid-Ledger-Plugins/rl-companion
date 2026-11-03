@@ -214,6 +214,7 @@ fn a_cover_is_passed_through_and_none_sets_the_fallback() {
 
 fn upload(contract: &'static str, label: &str) -> PendingUpload {
     PendingUpload {
+        campaign: None,
         contract,
         scope: "https://rl.test|/shared".into(),
         item: "save".into(),

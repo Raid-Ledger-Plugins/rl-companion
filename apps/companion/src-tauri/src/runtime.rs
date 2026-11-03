@@ -656,7 +656,7 @@ async fn upload_all(
 ) -> (String, bool) {
     let waiting = pending.len();
     let mut sent = 0usize;
-    for p in pending {
+    for p in crate::bg3_campaigns::still_ticked(pending, app) {
         if app.state::<Shared>().is_paused() {
             return (
                 format!("Paused — uploaded {sent} of {waiting} export(s)"),
