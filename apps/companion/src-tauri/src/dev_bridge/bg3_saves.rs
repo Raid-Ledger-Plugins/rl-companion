@@ -10,8 +10,8 @@ use crate::collector::captured_at;
 use crate::manifest::BG3_SAVE;
 use crate::scope::WatchScope;
 use rl_collectors::{
-    campaign_key_from_package, extract_save_info, lsf_attribute_len, lsf_version, read_lspk,
-    Package, META_LSF_MAX_BYTES, META_LSF_NAME,
+    campaign_key_from_package, extract_save_info, lsf_attribute_len, lsf_parsed_version, read_lsf_attribute,
+    read_lspk, Package, META_LSF_MAX_BYTES, META_LSF_NAME,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -221,8 +221,12 @@ impl Bg3Source {
     ) -> Value {
         let (key, source) = campaign_key_from_package(package, folder);
         let meta = read_limited(package, META_LSF_NAME, META_LSF_MAX_BYTES);
-        let meta_version = meta.as_deref().and_then(lsf_version).filter(|v| (1..=255).contains(v));
-        let globals_version = globals.and_then(lsf_version).filter(|v| (1..=255).contains(v));
+        // A version is reported only for a file that parses (Codex P2): the
+        // small meta.lsf is read in full; Globals.lsf has its tables parsed
+        // and its values section bounds-checked (the decoder reads the blob).
+        let meta_ok = meta.as_deref().filter(|m| read_lsf_attribute(m, "\0").is_ok());
+        let meta_version = meta_ok.and_then(lsf_parsed_version).filter(|v| (1..=255).contains(v));
+        let globals_version = globals.and_then(lsf_parsed_version).filter(|v| (1..=255).contains(v));
         let newage = globals.map(|g| lsf_attribute_len(g, NEWAGE_ATTRIBUTE));
         let readable = globals.map_or(Readability::NotChecked, |g| self.decoder.readable(g));
         let fallback = fallback_reason(package.find(META_LSF_NAME).is_some(), meta_version, globals_version, &newage, readable);

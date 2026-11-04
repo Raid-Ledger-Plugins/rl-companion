@@ -125,10 +125,14 @@ fn source_with_globals(tag: &str, globals: Vec<u8>) -> (Bg3Source, String) {
 }
 
 fn source_full(tag: &str, save_info: &[u8], globals: Vec<u8>) -> (Bg3Source, String) {
+    source_files(tag, save_info, globals, META_LSF)
+}
+
+fn source_files(tag: &str, save_info: &[u8], globals: Vec<u8>, meta: &[u8]) -> (Bg3Source, String) {
     let story = temp_dir(tag);
     let dir = story.join("QuickSave_7");
     std::fs::create_dir_all(&dir).expect("mkdir");
-    let files: Vec<(&str, &[u8])> = vec![("SaveInfo.json", save_info), ("Globals.lsf", &globals), ("meta.lsf", META_LSF)];
+    let files: Vec<(&str, &[u8])> = vec![("SaveInfo.json", save_info), ("Globals.lsf", &globals), ("meta.lsf", meta)];
     std::fs::write(dir.join("QuickSave_7.lsv"), lspk(&files)).expect("write lsv");
     let r = save_ref(&KEY, &story, "QuickSave_7/QuickSave_7.lsv");
     (Bg3Source::with_key(vec![story], KEY, Arc::new(LsmfDecoder)), r)
@@ -159,21 +163,22 @@ fn a_synthetic_save_fills_types_checks_and_party_stats() {
     assert_eq!(types[0]["decoder"], json!("none"), "core.v0.Level is not decoded");
     assert_eq!(body["checks"]["partyEntitiesFound"], json!(5));
     // Codex P2: five members in entity order are NOT proven to be SaveInfo
-    // order, so the match is not claimed (rows are still filled, in entity order).
+    // order, so the match is not claimed and (review MINOR) no slot carries
+    // values that might belong to another character.
     assert_eq!(body["checks"]["partyMatchesSaveInfo"], json!(false), "order unproven for 5");
     assert_eq!(body["checks"]["portraitsFound"], json!(1));
-    assert_eq!(body["party"][1]["decoded"], json!({
-        "abilities": { "str": 11, "dex": 14, "con": 12, "int": 8, "wis": 13, "cha": 15 },
-        "proficiencyBonus": 3, "maxHp": 41 }));
+    for k in 0..5 {
+        assert_eq!(body["party"][k], json!({ "slot": k, "decoded": {} }), "slot {k} unproven");
+    }
     let saves = get(&src, "/dev/v1/bg3/saves");
     assert_eq!(saves["saves"][0]["fallbackReason"], Value::Null);
 }
 
 #[test]
 fn layout_drift_marks_the_type_unsupported_and_decodes_nothing_from_it() {
-    let (src, r) = source("bg3-newage-drift", &party_blob(40));
+    let (src, r) = source_full("bg3-newage-drift", SOLO_INFO, globals_lsf(&party_blob_of(40, 1)));
     let body = structure(&src, &r);
-    assert_eq!(body["types"][2]["decoder"], json!("unsupported"));
+    assert_eq!(body["types"][2]["decoder"], json!("unsupported"), "{}", body["types"]);
     assert_eq!(body["party"][0]["decoded"], json!({ "maxHp": 40 }), "stats skipped, health kept");
 }
 
@@ -212,7 +217,38 @@ fn a_solo_party_claims_the_save_info_match_and_decodes_slot_0() {
     let body = structure(&src, &r);
     assert_eq!(body["checks"]["partyEntitiesFound"], json!(1));
     assert_eq!(body["checks"]["partyMatchesSaveInfo"], json!(true), "one member: slot 0 is proven");
-    assert_eq!(body["party"][0]["decoded"]["maxHp"], json!(40));
+    assert_eq!(body["party"][0]["decoded"], json!({
+        "abilities": { "str": 10, "dex": 14, "con": 12, "int": 8, "wis": 13, "cha": 15 },
+        "proficiencyBonus": 3, "maxHp": 40 }));
+}
+
+/// Review MINOR: the LSF reads fine but `NewAge` is over the 32 MiB cap
+/// (a forged attribute length) — the blob, not the LSF, is unreadable.
+#[test]
+fn an_over_cap_newage_is_newage_unreadable() {
+    let mut globals = globals_lsf(&party_blob(36));
+    let len_at = 64 + 14 + 4; // header, the 14-byte strings section, the name ref
+    let forged = ((rl_collectors::LSMF_MAX_BYTES as u32 + 1) << 6) | 28;
+    globals[len_at..len_at + 4].copy_from_slice(&forged.to_le_bytes());
+    let (src, r) = source_with_globals("bg3-newage-over-cap", globals);
+    assert_eq!(structure(&src, &r)["types"], json!([]), "nothing decoded");
+    let row = &get(&src, "/dev/v1/bg3/saves")["saves"][0];
+    assert_eq!(row["fallbackReason"], json!("newage-unreadable"), "{row}");
+    assert_eq!(row["lsfVersions"]["globals"], json!(7), "the LSF itself parsed");
+}
+
+/// Codex P2: a meta.lsf that keeps its `LSOF` + version prefix but is
+/// truncated past it is unreadable — no version, `lsf-unreadable`.
+#[test]
+fn a_truncated_meta_lsf_is_lsf_unreadable_with_no_version() {
+    let globals = globals_lsf(&party_blob(36));
+    let (src, _) = source_files("bg3-meta-cut", SAVE_INFO, globals.clone(), &META_LSF[..META_LSF.len() - 1]);
+    let row = &get(&src, "/dev/v1/bg3/saves")["saves"][0];
+    assert_eq!(row["fallbackReason"], json!("lsf-unreadable"), "{row}");
+    assert_eq!(row["lsfVersions"], json!({ "meta": null, "globals": 7 }), "{row}");
+    let (whole, _) = source_files("bg3-meta-whole", SAVE_INFO, globals, META_LSF);
+    let row = &get(&whole, "/dev/v1/bg3/saves")["saves"][0];
+    assert_eq!(row["lsfVersions"]["meta"], json!(7), "an intact meta.lsf keeps its version: {row}");
 }
 
 /// Codex P2: a pinned version that differs is layout drift even at the

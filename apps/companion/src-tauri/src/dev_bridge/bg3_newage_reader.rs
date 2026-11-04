@@ -18,13 +18,13 @@
 //! records no real version values (it is never invented). The sweep reads the
 //! versions it saw from `types[].version` and pins them here.
 //!
-//! **Party order (UNVERIFIED).** Party rows are filled in ascending
-//! entity-index order of the `PlayerComponent` owners, and only when that
-//! count equals the `SaveInfo` party size. That order is not proven to be
-//! `SaveInfo` order (upstream joins on total XP through an experience
-//! component whose layout is not ported, and XP totals can tie), so
-//! `partyMatchesSaveInfo` is `true` only for a one-member party, where the
-//! slot correspondence is trivial. Class levels and equipment need game
+//! **Party order (UNVERIFIED).** Entity-index order of the `PlayerComponent`
+//! owners is not proven to be `SaveInfo` order (upstream joins on total XP
+//! through an experience component whose layout is not ported, and XP totals
+//! can tie), so `partyMatchesSaveInfo` is `true` only for a one-member party,
+//! where the slot correspondence is trivial, and only then is `party[0]`
+//! filled. A 2+ member party reports `decoded: {}` for every slot until the
+//! order is proven (or the contract says `decoded` is in entity order). Class levels and equipment need game
 //! data / the LSF `Items` tree and stay undecoded (`decoder: none`).
 
 use super::bg3_newage::{
@@ -56,17 +56,25 @@ pub const DECODED: [Layout; 3] = [
 /// The LSMF-backed decoder wired into `DevBridge::set_bg3_source`.
 pub struct LsmfDecoder;
 
-/// The `NewAge` bytes: `Ok(None)` when absent, `Err` when the LSF values
-/// cannot be read or the blob is over the cap. The size is checked from the
+/// Why the `NewAge` bytes were not returned.
+#[derive(Debug, PartialEq, Eq)]
+enum BlobError {
+    /// The LSF tables or values cannot be read → `lsf-unreadable`.
+    Lsf,
+    /// The LSF reads but the blob is over [`LSMF_MAX_BYTES`] → `newage-unreadable`.
+    OverCap,
+}
+
+/// The `NewAge` bytes: `Ok(None)` when absent. The size is checked from the
 /// attribute table BEFORE the values section is decompressed.
-fn blob(globals_lsf: &[u8]) -> Result<Option<Vec<u8>>, ()> {
-    let len = lsf_attribute_len(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| ())?;
+fn blob(globals_lsf: &[u8]) -> Result<Option<Vec<u8>>, BlobError> {
+    let len = lsf_attribute_len(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| BlobError::Lsf)?;
     if len.is_some_and(|n| n > LSMF_MAX_BYTES as u64) {
-        return Err(());
+        return Err(BlobError::OverCap);
     }
-    let bytes = read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| ())?;
+    let bytes = read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| BlobError::Lsf)?;
     if bytes.as_ref().is_some_and(|b| b.len() > LSMF_MAX_BYTES) {
-        return Err(());
+        return Err(BlobError::OverCap);
     }
     Ok(bytes)
 }
@@ -80,14 +88,15 @@ impl NewAgeDecoder for LsmfDecoder {
         }
     }
 
-    /// `LsfUnreadable` when the values (or an over-cap blob) cannot be read,
-    /// so the listing never advertises a full read the structure route lacks.
+    /// `LsfUnreadable` when the values cannot be read, so the listing never
+    /// advertises a full read the structure route lacks; an over-cap blob is
+    /// `NotLsmf` (the LSF read fine; the blob is what cannot be read).
     fn readable(&self, globals_lsf: &[u8]) -> Readability {
         match blob(globals_lsf) {
             Ok(Some(b)) if Lsmf::parse(&b).is_ok() => Readability::Lsmf,
-            Ok(Some(_)) => Readability::NotLsmf,
+            Ok(Some(_)) | Err(BlobError::OverCap) => Readability::NotLsmf,
             Ok(None) => Readability::NotChecked,
-            Err(()) => Readability::LsfUnreadable,
+            Err(BlobError::Lsf) => Readability::LsfUnreadable,
         }
     }
 }
@@ -160,17 +169,19 @@ fn types(l: &Lsmf) -> Vec<TypeRow> {
 
 fn decode(l: &Lsmf, bytes: &[u8], party_size: usize) -> NewAgeRead {
     let party: Vec<u32> = decodable(l, PLAYER).into_iter().map(|r| r.0).collect();
-    // Rows are filled when the counts agree; the correspondence is claimed
-    // only where it is proven (one member — see the module doc).
-    let fill = party_size > 0 && party.len() == party_size;
+    // The correspondence is proven only for one member (see the module doc).
+    // `party[k]` means SaveInfo slot k, so rows are filled only when it is
+    // proven; otherwise `decoded` stays `{}` rather than risk naming the
+    // wrong character (review MINOR).
+    let proven = party_size == 1 && party.len() == 1;
     let checks = Checks {
         party_entities_found: party.len() as u64,
-        party_matches_save_info: fill && party_size == 1,
+        party_matches_save_info: proven,
         portraits_found: count_webp_images(bytes),
         ..Checks::default()
     };
     let (stats, health) = (decodable(l, STATS), decodable(l, HEALTH));
-    let members = if fill {
+    let members = if proven {
         party.iter().map(|&e| member(find(&stats, e), find(&health, e))).collect()
     } else {
         Vec::new()
