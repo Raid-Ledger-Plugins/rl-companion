@@ -9,6 +9,8 @@ use super::bg3_saves::Bg3Source;
 use super::paging::{invalid, json_len, Query, PAGE_MAX_BYTES};
 use regex::Regex;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 type Res = Result<Value, (u16, Value)>;
@@ -23,6 +25,13 @@ const WORST_NEXT: &str = "p9999_types_999999";
 /// 64 MiB of decompressed sections, so concurrent connections queue here
 /// rather than multiply that (ROK-2078 review).
 static READS: Mutex<()> = Mutex::new(());
+/// The content digest each save's structure had when its first page was
+/// served, by saveRef. The contract fixes the cursor grammar (no room for a
+/// generation), so a continuation is checked here: it is served only while
+/// the save still digests the same, else 404 and the client restarts
+/// (Codex P2). Bounded; a restart or eviction also 404s a continuation.
+static GENERATIONS: LazyLock<Mutex<HashMap<String, [u8; 32]>>> = LazyLock::new(Default::default);
+const GENERATIONS_MAX: usize = 256;
 /// Saves opened per listing page (a row is ≤ ~450 bytes, so 32 fit 16 KiB).
 pub const SAVES_PER_PAGE: usize = 32;
 
@@ -134,15 +143,40 @@ fn structure_ep(src: &Bg3Source, save_ref: &str, q: &Query) -> Res {
         json!({ "saveRef": save_ref, "types": types, "checks": checks, "party": party, "next": next })
     };
     let pages = split(&items, json_len(&head(vec![], vec![], json!(WORST_NEXT))));
+    let generation = digest(&checks, &items);
     let index = match want {
-        None => 0,
-        Some(c) => page_index(&pages, &items, &c).ok_or_else(not_found)?,
+        None => {
+            remember(save_ref, generation);
+            0
+        }
+        Some(c) if same_generation(save_ref, &generation) => page_index(&pages, &items, &c).ok_or_else(not_found)?,
+        Some(_) => return Err(not_found()),
     };
     let (start, end) = pages.get(index).copied().unwrap_or((0, 0));
     let slice = items.get(start..end).unwrap_or_default();
     let pick = |s: &str| slice.iter().filter(|(k, _)| *k == s).map(|(_, v)| v.clone()).collect();
     let next = pages.get(index + 1).map(|&(s, _)| encode(&cursor_at(&items, index + 2, s)));
     Ok(head(pick("types"), pick("party"), json!(next)))
+}
+
+fn digest(checks: &Value, items: &[(&'static str, Value)]) -> [u8; 32] {
+    let mut h = Sha256::new().chain_update(checks.to_string());
+    for (kind, v) in items {
+        h.update([kind.as_bytes(), b"\0", v.to_string().as_bytes(), b"\n"].concat());
+    }
+    h.finalize().into()
+}
+
+fn remember(save_ref: &str, generation: [u8; 32]) {
+    let mut map = GENERATIONS.lock().unwrap_or_else(|p| p.into_inner());
+    if map.len() >= GENERATIONS_MAX && !map.contains_key(save_ref) {
+        map.clear();
+    }
+    map.insert(save_ref.to_owned(), generation);
+}
+
+fn same_generation(save_ref: &str, generation: &[u8; 32]) -> bool {
+    GENERATIONS.lock().unwrap_or_else(|p| p.into_inner()).get(save_ref) == Some(generation)
 }
 
 /// The cursor naming item `at` as the first row of page `page`.

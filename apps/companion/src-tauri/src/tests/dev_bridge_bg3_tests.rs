@@ -255,3 +255,36 @@ fn a_collector_root_change_rebinds_the_bg3_source() {
     on_collector_roots_changed(Some(&bridge), &cfg, None);
     assert_eq!(roots(), Some(vec![b]), "the new folder is served without a restart");
 }
+
+/// 400 type rows whose `count` is whatever the save "holds" now.
+struct Shifting(std::sync::atomic::AtomicU64);
+impl NewAgeDecoder for Shifting {
+    fn read(&self, _g: &[u8], _party: usize) -> NewAgeOutcome {
+        let count = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        let types = (0..400)
+            .map(|i| TypeRow { type_name: format!("game.stats.v{i}.StatsComponent"), version: 3,
+                element_size: 36, count, decoder: DecoderStatus::Ok })
+            .collect();
+        NewAgeOutcome::Read(NewAgeRead { types, checks: Checks::default(), party: Vec::new() })
+    }
+}
+
+/// Codex P2: a rewrite that keeps every page boundary (same row sizes) must
+/// still 404 a continuation, so pages of two save generations never mix.
+#[test]
+fn a_continuation_after_a_same_shape_rewrite_is_404() {
+    use std::sync::atomic::Ordering;
+    let story = temp_dir("bg3-generation");
+    install(&story, FOLDER, true);
+    let decoder = Arc::new(Shifting(1.into()));
+    let src = Bg3Source::with_key(vec![story.clone()], KEY, decoder.clone());
+    let path = format!("/dev/v1/bg3/saves/{}/structure", save_ref(&KEY, &story, &format!("{FOLDER}/QuickSave_1.lsv")));
+    let (_, first) = call(&src, &path, "");
+    let next = format!("cursor={}", first["next"].as_str().expect("page 1 has next"));
+    assert_eq!(call(&src, &path, &next).0, 200, "same contents continue");
+    decoder.0.store(2, Ordering::SeqCst);
+    assert_eq!(call(&src, &path, &next).0, 404, "the save changed since page 1");
+    let (_, again) = call(&src, &path, "");
+    assert_eq!(again["next"].as_str(), first["next"].as_str(), "same boundaries");
+    assert_eq!(call(&src, &path, &next).0, 200, "a fresh page 1 starts the new generation");
+}
