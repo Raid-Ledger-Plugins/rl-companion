@@ -26,7 +26,7 @@ const WORST_NEXT: &str = "p9999_types_999999";
 /// rather than multiply that (ROK-2078 review).
 static READS: Mutex<()> = Mutex::new(());
 /// The content digest each save's structure had when its first page was
-/// served, by saveRef. The contract fixes the cursor grammar (no room for a
+/// served, by saveRef (and each source's listing, by `saves:<roots>`). The contract fixes the cursor grammar (no room for a
 /// generation), so a continuation is checked here: it is served only while
 /// the save still digests the same, else 404 and the client restarts
 /// (Codex P2). Bounded; a restart or eviction also 404s a continuation.
@@ -102,9 +102,20 @@ fn guard(body: Value) -> Res {
 
 fn saves_ep(src: &Bg3Source, q: &Query) -> Res {
     let files = src.save_files();
+    let (key, generation) = (listing_key(src), listing_digest(&files));
     let (page, offset) = match cursor_arg(q)? {
-        None => (1, 0),
-        Some(c) if c.section == "saves" && c.offset == (c.page - 1) * SAVES_PER_PAGE && c.offset < files.len() => {
+        None => {
+            remember(&key, generation);
+            (1, 0)
+        }
+        // Codex P2: the offset is only valid against the listing page 1 saw;
+        // a save added, deleted or renamed since → 404 and the client restarts.
+        Some(c)
+            if c.section == "saves"
+                && c.offset == (c.page - 1) * SAVES_PER_PAGE
+                && c.offset < files.len()
+                && same_generation(&key, &generation) =>
+        {
             (c.page, c.offset)
         }
         Some(_) => return Err(not_found()),
@@ -163,6 +174,26 @@ fn digest(checks: &Value, items: &[(&'static str, Value)]) -> [u8; 32] {
     let mut h = Sha256::new().chain_update(checks.to_string());
     for (kind, v) in items {
         h.update([kind.as_bytes(), b"\0", v.to_string().as_bytes(), b"\n"].concat());
+    }
+    h.finalize().into()
+}
+
+/// The [`GENERATIONS`] key of one source's listing (by its roots; a saveRef
+/// is 12 hex, so a `saves:` key never collides with one).
+fn listing_key(src: &Bg3Source) -> String {
+    let mut h = Sha256::new();
+    for root in src.roots() {
+        h.update([root.to_string_lossy().as_bytes(), b"\0"].concat());
+    }
+    let d: [u8; 32] = h.finalize().into();
+    format!("saves:{}", d.iter().take(8).map(|b| format!("{b:02x}")).collect::<String>())
+}
+
+/// The ordered set of save files a listing pages over.
+fn listing_digest(files: &[(std::path::PathBuf, String)]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    for (abs, _) in files {
+        h.update([abs.to_string_lossy().as_bytes(), b"\0"].concat());
     }
     h.finalize().into()
 }

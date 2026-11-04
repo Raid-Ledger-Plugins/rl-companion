@@ -116,7 +116,7 @@ impl Bg3Source {
         src
     }
 
-    #[cfg(test)]
+    /// The configured save roots (server-side only; never in a body).
     pub fn roots(&self) -> &[PathBuf] {
         &self.roots
     }

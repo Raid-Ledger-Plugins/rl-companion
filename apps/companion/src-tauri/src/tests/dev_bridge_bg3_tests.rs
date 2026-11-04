@@ -288,3 +288,25 @@ fn a_continuation_after_a_same_shape_rewrite_is_404() {
     assert_eq!(again["next"].as_str(), first["next"].as_str(), "same boundaries");
     assert_eq!(call(&src, &path, &next).0, 200, "a fresh page 1 starts the new generation");
 }
+
+/// Codex P2: a save deleted between listing pages shifts every later offset;
+/// the continuation must 404 (restart) rather than silently skip a save.
+#[test]
+fn a_listing_continuation_after_a_delete_is_404() {
+    let story = temp_dir("bg3-listing-drift");
+    for i in 0..34 {
+        install(&story, &format!("Save_{i:02}"), true);
+    }
+    let src = Bg3Source::with_key(vec![story.clone()], KEY, Arc::new(NotYetDecoded));
+    let (_, first) = call(&src, "/dev/v1/bg3/saves", "");
+    assert_eq!(first["saves"].as_array().map(Vec::len), Some(32));
+    let next = format!("cursor={}", first["next"].as_str().expect("page 1 has next"));
+    let (status, second) = call(&src, "/dev/v1/bg3/saves", &next);
+    assert_eq!((status, second["saves"].as_array().map(Vec::len)), (200, Some(2)), "unchanged listing continues");
+    std::fs::remove_dir_all(story.join("Save_00")).expect("delete one save");
+    assert_eq!(call(&src, "/dev/v1/bg3/saves", &next).0, 404, "a save was deleted since page 1");
+    let (_, again) = call(&src, "/dev/v1/bg3/saves", "");
+    let next = format!("cursor={}", again["next"].as_str().expect("33 saves still page"));
+    let (status, rest) = call(&src, "/dev/v1/bg3/saves", &next);
+    assert_eq!((status, rest["saves"].as_array().map(Vec::len)), (200, Some(1)), "a fresh page 1 continues");
+}
