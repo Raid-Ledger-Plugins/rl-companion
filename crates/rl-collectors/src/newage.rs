@@ -97,7 +97,7 @@ fn records(data: &[u8], start: u64, end: u64, size: u64) -> Result<u64, LsmfErro
     if start == EMPTY {
         return Ok(0);
     }
-    if end < start || (end - start) % size != 0 {
+    if end < start || !(end - start).is_multiple_of(size) {
         return Err(LsmfError("range is not a whole number of records"));
     }
     rd(data, start, end - start)?;

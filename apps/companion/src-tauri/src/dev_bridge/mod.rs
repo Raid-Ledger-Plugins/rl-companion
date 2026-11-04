@@ -6,6 +6,7 @@
 
 pub mod addons;
 pub mod bg3_newage;
+pub mod bg3_newage_reader;
 pub mod bg3_redact;
 pub mod bg3_routes;
 pub mod bg3_saves;
@@ -242,7 +243,7 @@ impl DevBridge {
     /// Where `/dev/v1/bg3/*` reads saves from: the BG3 `Savegames/Story`
     /// roots; the `saveRef` secret lives under `key_dir` (ROK-2078).
     pub fn set_bg3_source(&self, roots: Vec<PathBuf>, key_dir: Option<PathBuf>) {
-        let decoder = Arc::new(bg3_newage::NotYetDecoded);
+        let decoder = Arc::new(bg3_newage_reader::LsmfDecoder);
         self.ctx.set_bg3(Arc::new(bg3_saves::Bg3Source::new(roots, key_dir, decoder)));
     }
 
