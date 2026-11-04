@@ -31,7 +31,7 @@ const SYNTHETIC_GAME_ID: &str = "00000000-2070-4000-8000-000000000001";
 
 /// A synthetic LSPK v18 package of stored entries (the layout `read_lspk`
 /// parses: header, data, LZ4 file table last). Never a real user save.
-fn lspk(files: &[(&str, &[u8])]) -> Vec<u8> {
+pub(super) fn lspk(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut out = vec![0u8; 40];
     let mut table = Vec::new();
     for (name, data) in files {
