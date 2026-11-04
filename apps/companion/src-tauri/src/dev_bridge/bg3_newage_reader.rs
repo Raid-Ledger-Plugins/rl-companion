@@ -13,11 +13,18 @@
 //!   unknown bytes.
 //! - `game.v0.PlayerComponent`: a marker; its owners are the active party.
 //!
-//! The allowlist pins `(type, elementSize)`; the version column is reported
-//! but not pinned, because upstream does not record the real version values.
-//! Party rows map to `SaveInfo` slots in ascending entity-index order, and
-//! only when the party count matches `SaveInfo` (upstream joins on total XP
-//! instead; the order is UNVERIFIED). Class levels and equipment need game
+//! The allowlist pins `(type, version, elementSize)` where a version is
+//! known: [`Layout::version`] `None` means "not pinned yet", because upstream
+//! records no real version values (it is never invented). The sweep reads the
+//! versions it saw from `types[].version` and pins them here.
+//!
+//! **Party order (UNVERIFIED).** Party rows are filled in ascending
+//! entity-index order of the `PlayerComponent` owners, and only when that
+//! count equals the `SaveInfo` party size. That order is not proven to be
+//! `SaveInfo` order (upstream joins on total XP through an experience
+//! component whose layout is not ported, and XP totals can tie), so
+//! `partyMatchesSaveInfo` is `true` only for a one-member party, where the
+//! slot correspondence is trivial. Class levels and equipment need game
 //! data / the LSF `Items` tree and stay undecoded (`decoder: none`).
 
 use super::bg3_newage::{
@@ -29,8 +36,22 @@ pub const NEWAGE_ATTRIBUTE: &str = "NewAge";
 const STATS: &str = "game.stats.v3.StatsComponent";
 const HEALTH: &str = "game.stats.v0.HealthComponent";
 const PLAYER: &str = "game.v0.PlayerComponent";
-/// `(type, elementSize)` pairs this reader decodes; `None` = any size (marker).
-const DECODED: [(&str, Option<u32>); 3] = [(STATS, Some(36)), (HEALTH, Some(32)), (PLAYER, None)];
+
+/// One decoded layout; `None` = not pinned (any value is accepted).
+#[derive(Debug, Clone, Copy)]
+pub struct Layout {
+    pub name: &'static str,
+    pub version: Option<u32>,
+    pub element_size: Option<u32>,
+}
+
+/// The layouts this reader decodes. No version is pinned yet (see the module
+/// doc); the PlayerComponent marker is any size.
+pub const DECODED: [Layout; 3] = [
+    Layout { name: STATS, version: None, element_size: Some(36) },
+    Layout { name: HEALTH, version: None, element_size: Some(32) },
+    Layout { name: PLAYER, version: None, element_size: None },
+];
 
 /// The LSMF-backed decoder wired into `DevBridge::set_bg3_source`.
 pub struct LsmfDecoder;
@@ -71,11 +92,18 @@ impl NewAgeDecoder for LsmfDecoder {
     }
 }
 
-pub fn status(name: &str, element_size: u32) -> DecoderStatus {
-    match DECODED.iter().find(|(n, _)| *n == name) {
-        Some((_, Some(size))) if *size != element_size => DecoderStatus::Unsupported,
-        Some(_) => DecoderStatus::Ok,
-        None => DecoderStatus::None,
+pub fn status(name: &str, version: u32, element_size: u32) -> DecoderStatus {
+    status_in(&DECODED, name, version, element_size)
+}
+
+/// `Ok` only when every pinned field of the layout matches the triple.
+pub fn status_in(table: &[Layout], name: &str, version: u32, element_size: u32) -> DecoderStatus {
+    let Some(l) = table.iter().find(|l| l.name == name) else { return DecoderStatus::None };
+    let pinned = |want: Option<u32>, got: u32| want.is_none_or(|w| w == got);
+    if pinned(l.version, version) && pinned(l.element_size, element_size) {
+        DecoderStatus::Ok
+    } else {
+        DecoderStatus::Unsupported
     }
 }
 
@@ -90,7 +118,7 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
 
 /// Elements of `name` by entity, only when its layout is on the allowlist.
 fn decodable<'a>(l: &Lsmf<'a>, name: &str) -> Vec<(u32, &'a [u8])> {
-    let ok = l.component(name).is_some_and(|c| status(name, c.element_size) == DecoderStatus::Ok);
+    let ok = l.component(name).is_some_and(|c| status(name, c.version, c.element_size) == DecoderStatus::Ok);
     if !ok {
         return Vec::new();
     }
@@ -124,7 +152,7 @@ fn types(l: &Lsmf) -> Vec<TypeRow> {
                 version: u16::try_from(c.version).ok()?,
                 element_size: c.element_size,
                 count: c.element_count,
-                decoder: status(&c.name, c.element_size),
+                decoder: status(&c.name, c.version, c.element_size),
             })
         })
         .collect()
@@ -132,15 +160,17 @@ fn types(l: &Lsmf) -> Vec<TypeRow> {
 
 fn decode(l: &Lsmf, bytes: &[u8], party_size: usize) -> NewAgeRead {
     let party: Vec<u32> = decodable(l, PLAYER).into_iter().map(|r| r.0).collect();
-    let matches = party_size > 0 && party.len() == party_size;
+    // Rows are filled when the counts agree; the correspondence is claimed
+    // only where it is proven (one member — see the module doc).
+    let fill = party_size > 0 && party.len() == party_size;
     let checks = Checks {
         party_entities_found: party.len() as u64,
-        party_matches_save_info: matches,
+        party_matches_save_info: fill && party_size == 1,
         portraits_found: count_webp_images(bytes),
         ..Checks::default()
     };
     let (stats, health) = (decodable(l, STATS), decodable(l, HEALTH));
-    let members = if matches {
+    let members = if fill {
         party.iter().map(|&e| member(find(&stats, e), find(&health, e))).collect()
     } else {
         Vec::new()

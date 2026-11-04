@@ -17,6 +17,8 @@ const SAVE_INFO: &[u8] =
     include_bytes!("../../../../../contracts/bg3-save/v1/fixtures/saveinfo/act2-party-4p-summon.saveinfo.json");
 const META_LSF: &[u8] =
     include_bytes!("../../../../../crates/rl-collectors/tests/fixtures/meta/real-shape-string.meta.lsf");
+const SOLO_INFO: &[u8] =
+    include_bytes!("../../../../../contracts/bg3-save/v1/fixtures/saveinfo/act1-solo-no-thumbnail.saveinfo.json");
 const KEY: [u8; 32] = [9; 32];
 const PARTY: u32 = 5;
 
@@ -86,7 +88,11 @@ fn lsmf(comps: &[(&str, u32, Vec<u8>, Vec<u32>)], entities: usize) -> Vec<u8> {
 
 /// Five party entities (2..=6) with Stats and Health; `stats_size` drifts the layout.
 fn party_blob(stats_size: u32) -> Vec<u8> {
-    let owners: Vec<u32> = (2..2 + PARTY).collect();
+    party_blob_of(stats_size, PARTY)
+}
+
+fn party_blob_of(stats_size: u32, party: u32) -> Vec<u8> {
+    let owners: Vec<u32> = (2..2 + party).collect();
     let mut stats = Vec::new();
     let mut health = Vec::new();
     for (i, _) in owners.iter().enumerate() {
@@ -101,7 +107,7 @@ fn party_blob(stats_size: u32) -> Vec<u8> {
         health.extend(h);
     }
     let comps = [
-        ("game.v0.PlayerComponent", 1, vec![1u8; PARTY as usize], owners.clone()),
+        ("game.v0.PlayerComponent", 1, vec![1u8; party as usize], owners.clone()),
         ("game.stats.v3.StatsComponent", stats_size, stats, owners.clone()),
         ("game.stats.v0.HealthComponent", 32, health, owners),
     ];
@@ -115,10 +121,14 @@ fn source(tag: &str, newage: &[u8]) -> (Bg3Source, String) {
 }
 
 fn source_with_globals(tag: &str, globals: Vec<u8>) -> (Bg3Source, String) {
+    source_full(tag, SAVE_INFO, globals)
+}
+
+fn source_full(tag: &str, save_info: &[u8], globals: Vec<u8>) -> (Bg3Source, String) {
     let story = temp_dir(tag);
     let dir = story.join("QuickSave_7");
     std::fs::create_dir_all(&dir).expect("mkdir");
-    let files: Vec<(&str, &[u8])> = vec![("SaveInfo.json", SAVE_INFO), ("Globals.lsf", &globals), ("meta.lsf", META_LSF)];
+    let files: Vec<(&str, &[u8])> = vec![("SaveInfo.json", save_info), ("Globals.lsf", &globals), ("meta.lsf", META_LSF)];
     std::fs::write(dir.join("QuickSave_7.lsv"), lspk(&files)).expect("write lsv");
     let r = save_ref(&KEY, "QuickSave_7/QuickSave_7.lsv");
     (Bg3Source::with_key(vec![story], KEY, Arc::new(LsmfDecoder)), r)
@@ -148,7 +158,9 @@ fn a_synthetic_save_fills_types_checks_and_party_stats() {
         "elementSize": 36, "count": 5, "decoder": "ok" }));
     assert_eq!(types[0]["decoder"], json!("none"), "core.v0.Level is not decoded");
     assert_eq!(body["checks"]["partyEntitiesFound"], json!(5));
-    assert_eq!(body["checks"]["partyMatchesSaveInfo"], json!(true));
+    // Codex P2: five members in entity order are NOT proven to be SaveInfo
+    // order, so the match is not claimed (rows are still filled, in entity order).
+    assert_eq!(body["checks"]["partyMatchesSaveInfo"], json!(false), "order unproven for 5");
     assert_eq!(body["checks"]["portraitsFound"], json!(1));
     assert_eq!(body["party"][1]["decoded"], json!({
         "abilities": { "str": 11, "dex": 14, "con": 12, "int": 8, "wis": 13, "cha": 15 },
@@ -190,4 +202,31 @@ fn a_truncated_values_section_is_lsf_unreadable_in_the_listing() {
     assert_eq!(body["types"], json!([]), "the structure read decodes nothing");
     let saves = get(&src, "/dev/v1/bg3/saves");
     assert_eq!(saves["saves"][0]["fallbackReason"], json!("lsf-unreadable"), "{saves}");
+}
+
+/// Codex P2: a one-member party is the only case whose slot correspondence
+/// is proven, so it is the only one that claims `partyMatchesSaveInfo`.
+#[test]
+fn a_solo_party_claims_the_save_info_match_and_decodes_slot_0() {
+    let (src, r) = source_full("bg3-newage-solo", SOLO_INFO, globals_lsf(&party_blob_of(36, 1)));
+    let body = structure(&src, &r);
+    assert_eq!(body["checks"]["partyEntitiesFound"], json!(1));
+    assert_eq!(body["checks"]["partyMatchesSaveInfo"], json!(true), "one member: slot 0 is proven");
+    assert_eq!(body["party"][0]["decoded"]["maxHp"], json!(40));
+}
+
+/// Codex P2: a pinned version that differs is layout drift even at the
+/// pinned size; an unpinned version accepts any value.
+#[test]
+fn a_pinned_version_mismatch_is_unsupported_at_the_same_size() {
+    use crate::dev_bridge::bg3_newage::DecoderStatus;
+    use crate::dev_bridge::bg3_newage_reader::{status_in, Layout};
+    let pinned = [Layout { name: "game.stats.v3.StatsComponent", version: Some(2), element_size: Some(36) }];
+    let s = |v, size| status_in(&pinned, "game.stats.v3.StatsComponent", v, size);
+    assert_eq!(s(2, 36), DecoderStatus::Ok);
+    assert_eq!(s(3, 36), DecoderStatus::Unsupported, "same size, other version");
+    assert_eq!(s(2, 40), DecoderStatus::Unsupported);
+    assert_eq!(status_in(&pinned, "game.v0.Other", 2, 36), DecoderStatus::None);
+    let unpinned = [Layout { name: "game.stats.v3.StatsComponent", version: None, element_size: Some(36) }];
+    assert_eq!(status_in(&unpinned, "game.stats.v3.StatsComponent", 9, 36), DecoderStatus::Ok);
 }
