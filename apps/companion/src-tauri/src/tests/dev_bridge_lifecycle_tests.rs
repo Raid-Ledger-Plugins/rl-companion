@@ -283,3 +283,28 @@ async fn serve_runs_the_bound_ip_check_and_reports_why_it_closed() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// ROK-2078 review §4: the bg3 routes sit behind the same admission as every
+/// other dev route — off the allowlist → 403, no or wrong token → 401, and
+/// only a good token reaches the bg3 handler.
+#[test]
+fn bg3_routes_refuse_callers_without_a_good_token() {
+    use crate::dev_bridge::bg3_newage::NotYetDecoded;
+    use crate::dev_bridge::bg3_saves::Bg3Source;
+    let (ctx, _) = audited_ctx();
+    let story = super::temp_dir("bg3-auth");
+    ctx.set_bg3(std::sync::Arc::new(Bg3Source::with_key(vec![story], [3; 32], std::sync::Arc::new(NotYetDecoded))));
+    let good = format!("Bearer {}", good());
+    for path in ["/dev/v1/bg3/saves", "/dev/v1/bg3/saves/0123456789ab/structure"] {
+        let status = |ip: Ipv4Addr, auth: Option<&str>| {
+            ctx.route_audited(IpAddr::V4(ip), &Method::GET, path, None, auth).status
+        };
+        assert_eq!(status(CALLER, None), 401, "{path}: no token");
+        assert_eq!(status(CALLER, Some("Bearer rlcdev_wrong")), 401, "{path}: wrong token");
+        assert_eq!(status(STRANGER, Some(&good)), 403, "{path}: off the allowlist");
+    }
+    let ctx2 = audited_ctx().0;
+    ctx2.set_bg3(std::sync::Arc::new(Bg3Source::with_key(vec![super::temp_dir("bg3-auth-ok")], [3; 32], std::sync::Arc::new(NotYetDecoded))));
+    let ok = ctx2.route_audited(IpAddr::V4(CALLER), &Method::GET, "/dev/v1/bg3/saves", None, Some(&good));
+    assert_eq!(ok.status, 200, "a good token reaches the bg3 listing");
+}
