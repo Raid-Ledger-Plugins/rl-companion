@@ -72,6 +72,51 @@ struct Sizes {
 /// string types without their NUL terminator, a UUID in LSLib's display form.
 /// `Ok(None)` when no attribute has that name.
 pub fn read_lsf_attribute(bytes: &[u8], name: &str) -> Result<Option<String>, LsfError> {
+    let t = tables(bytes)?;
+    let mut at = t.values_at;
+    let values = section(bytes, &mut at, t.values, t.flags)?;
+    find_attribute(&t.names, &t.attributes, &values, t.v3, name)
+}
+
+/// The LSF format version (header bytes 4..8) when `bytes` starts with `LSOF`.
+pub fn lsf_version(bytes: &[u8]) -> Option<u32> {
+    if bytes.get(0..4)? != LSF_MAGIC {
+        return None;
+    }
+    Some(le_u32(bytes.get(0..8)?, 4))
+}
+
+/// The byte length of the first attribute called `name`, read from the
+/// attribute records only: the values section is never decompressed, so a
+/// large blob (`Globals.lsf` → `NewAge`) is measured without being read.
+pub fn lsf_attribute_len(bytes: &[u8], name: &str) -> Result<Option<u64>, LsfError> {
+    let t = tables(bytes)?;
+    let record = if t.v3 { 16 } else { 12 };
+    for rec in t.attributes.chunks_exact(record) {
+        let name_ref = le_u32(rec, 0);
+        let found = t
+            .names
+            .get((name_ref >> 16) as usize)
+            .and_then(|b| b.get((name_ref & 0xFFFF) as usize))
+            .ok_or(LsfError::BadStringRef(name_ref))?;
+        if found == name {
+            return Ok(Some(u64::from(le_u32(rec, 4) >> 6)));
+        }
+    }
+    Ok(None)
+}
+
+/// Header, string table and attribute records; where the values section starts.
+struct Tables {
+    names: Vec<Vec<String>>,
+    attributes: Vec<u8>,
+    values: Sizes,
+    values_at: usize,
+    flags: u8,
+    v3: bool,
+}
+
+fn tables(bytes: &[u8]) -> Result<Tables, LsfError> {
     if let Some(m) = bytes.get(0..4)
         && m != LSF_MAGIC
     {
@@ -88,17 +133,21 @@ pub fn read_lsf_attribute(bytes: &[u8], name: &str) -> Result<Option<String>, Ls
         on_disk: le_u32(head, METADATA_START + i * 8 + 4),
     });
     let flags = head[56];
-    // MetadataFormat 1 = KeysAndAdjacency (LSLib), the 16-byte V3 records.
     let v3 = le_u32(head, 60) == 1;
     let mut at = SECTIONS_START;
     let names = read_strings(&section(bytes, &mut at, strings, flags)?)?;
     skip(bytes, &mut at, nodes, flags)?;
     let attributes = section(bytes, &mut at, attrs, flags)?;
-    let values = section(bytes, &mut at, values, flags)?;
-    find_attribute(&names, &attributes, &values, v3, name)
+    Ok(Tables {
+        names,
+        attributes,
+        values,
+        values_at: at,
+        flags,
+        v3,
+    })
 }
 
-/// Bytes a section occupies on disk (mirrors LSLib `Decompress`).
 fn disk_len(s: Sizes, flags: u8) -> usize {
     if s.on_disk == 0 || flags & 0x0F == 0 {
         s.size as usize
