@@ -47,7 +47,7 @@ pub use extract::{
 };
 pub use lsf::{
     LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION,
-    LZ4_FRAME_MAX_BLOCKS, lsf_attribute_len, lsf_version, read_lsf_attribute,
+    LZ4_FRAME_MAX_BLOCKS, lsf_attribute_len, lsf_parsed_version, lsf_version, read_lsf_attribute,
     read_lsf_attribute_bytes,
 };
 pub use newage::{LSMF_MAGIC, LSMF_MAX_BYTES, Lsmf, LsmfComponent, LsmfError, count_webp_images};

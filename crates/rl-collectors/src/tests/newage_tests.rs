@@ -2,7 +2,7 @@
 //! bytes: [`lsmf`] writes the layout `newage.rs` documents.
 
 use super::lsf_writer::{Attr, Codec, lsf};
-use crate::{LSF_MAX_SECTION_BYTES, Lsmf, count_webp_images, read_lsf_attribute_bytes};
+use crate::{LSF_MAX_SECTION_BYTES, Lsmf, count_webp_images, lsf_parsed_version, read_lsf_attribute_bytes};
 
 /// One synthetic component (index ≥ 1; `core.v0.Level` is added first).
 #[derive(Clone)]
@@ -180,7 +180,23 @@ fn reads_a_blob_attribute_larger_than_the_section_cap() {
         let got = read_lsf_attribute_bytes(&file, "NewAge").expect("read").expect("present");
         assert_eq!(got.len(), big.len());
         assert!(got == big);
+        assert_eq!(got.capacity(), got.len(), "the blob keeps no spare section capacity");
         assert!(read_lsf_attribute_bytes(&file, "Missing").expect("read").is_none());
+    }
+}
+
+/// Codex P2: a file that keeps its `LSOF` + version prefix but is truncated
+/// or corrupt past it has no parsed version.
+#[test]
+fn a_truncated_lsf_has_no_parsed_version() {
+    let attrs = [Attr { name: "Other", type_id: 4, value: vec![1, 2, 3, 4] }];
+    for codec in [Codec::Stored, Codec::Zstd] {
+        let file = lsf(&attrs, codec, false);
+        assert_eq!(lsf_parsed_version(&file), Some(7), "the whole file parses");
+        for cut in [8, 64, file.len() - 1] {
+            assert_eq!(lsf_parsed_version(&file[..cut]), None, "cut at {cut} of {}", file.len());
+        }
+        assert_eq!(crate::lsf_version(&file[..8]), Some(7), "the header alone still reads");
     }
 }
 
