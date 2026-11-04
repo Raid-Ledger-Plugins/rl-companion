@@ -3,7 +3,8 @@
 //!
 //! Field layouts are ported from **bg3-newage** (`src/bg3_newage/party.py`),
 //! MIT licence, Copyright (c) 2026 Jessica Smith,
-//! <https://github.com/NodeJSmith/bg3-newage>. SOURCED (one Patch 8 save),
+//! <https://github.com/NodeJSmith/bg3-newage> (full licence text:
+//! `THIRD_PARTY_NOTICES.md`). SOURCED (one Patch 8 save),
 //! not yet VERIFIED on the operator's saves:
 //!
 //! - `game.stats.v3.StatsComponent` (36 B): 8 unknown bytes, six i32 ability

@@ -3,7 +3,8 @@
 //! bounds-checked element access. No field decoding lives here.
 //!
 //! Ported from **bg3-newage** (`src/bg3_newage/lsmf.py`), MIT licence,
-//! Copyright (c) 2026 Jessica Smith, <https://github.com/NodeJSmith/bg3-newage>.
+//! Copyright (c) 2026 Jessica Smith, <https://github.com/NodeJSmith/bg3-newage>;
+//! full licence text in `THIRD_PARTY_NOTICES.md` at the repo root.
 //! The layout is SOURCED from that project (reversed against one Patch 8
 //! save), not yet VERIFIED against the operator's saves (ROK-2078 sweep):
 //!
