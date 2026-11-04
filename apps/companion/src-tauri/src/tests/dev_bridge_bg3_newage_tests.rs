@@ -130,7 +130,7 @@ fn source_full(tag: &str, save_info: &[u8], globals: Vec<u8>) -> (Bg3Source, Str
     std::fs::create_dir_all(&dir).expect("mkdir");
     let files: Vec<(&str, &[u8])> = vec![("SaveInfo.json", save_info), ("Globals.lsf", &globals), ("meta.lsf", META_LSF)];
     std::fs::write(dir.join("QuickSave_7.lsv"), lspk(&files)).expect("write lsv");
-    let r = save_ref(&KEY, "QuickSave_7/QuickSave_7.lsv");
+    let r = save_ref(&KEY, &story, "QuickSave_7/QuickSave_7.lsv");
     (Bg3Source::with_key(vec![story], KEY, Arc::new(LsmfDecoder)), r)
 }
 

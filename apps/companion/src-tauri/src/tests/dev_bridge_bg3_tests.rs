@@ -65,10 +65,11 @@ fn hmac_matches_rfc4231_and_save_ref_is_12_hex() {
     let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
     let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
-    let r = save_ref(&KEY, &format!("{FOLDER}/QuickSave_1.lsv"));
+    let root = Path::new("/story");
+    let r = save_ref(&KEY, root, &format!("{FOLDER}/QuickSave_1.lsv"));
     assert_eq!(r.len(), 12);
     assert!(r.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "{r}");
-    assert_ne!(r, save_ref(&[8; 32], &format!("{FOLDER}/QuickSave_1.lsv")), "keyed");
+    assert_ne!(r, save_ref(&[8; 32], root, &format!("{FOLDER}/QuickSave_1.lsv")), "keyed");
 }
 
 #[test]
@@ -151,7 +152,7 @@ fn structure_pages_types_then_party_and_redacts_decoded_values() {
     let story = temp_dir("bg3-structure");
     install(&story, FOLDER, true);
     let src = Bg3Source::with_key(vec![story.clone()], KEY, Arc::new(Leaky));
-    let r = save_ref(&KEY, &format!("{FOLDER}/QuickSave_1.lsv"));
+    let r = save_ref(&KEY, &story, &format!("{FOLDER}/QuickSave_1.lsv"));
     let path = format!("/dev/v1/bg3/saves/{r}/structure");
     let all = pages(&src, &path, "bg3-save-structure");
     assert!(all.len() > 1, "400 type rows need more than one page");
@@ -176,7 +177,7 @@ fn structure_not_yet_decoded_is_the_allowed_empty_form() {
     let story = temp_dir("bg3-structure-empty");
     install(&story, FOLDER, true);
     let src = Bg3Source::with_key(vec![story.clone()], KEY, Arc::new(NotYetDecoded));
-    let r = save_ref(&KEY, &format!("{FOLDER}/QuickSave_1.lsv"));
+    let r = save_ref(&KEY, &story, &format!("{FOLDER}/QuickSave_1.lsv"));
     let all = pages(&src, &format!("/dev/v1/bg3/saves/{r}/structure"), "bg3-save-structure");
     assert_eq!(all.len(), 1);
     assert_eq!(all[0]["types"], json!([]));
@@ -210,4 +211,24 @@ fn the_key_file_is_written_once_owner_only_and_reused() {
     }
     let again = load_or_create_key_with(Some(&dir), |_| panic!("an existing key is reused, not regenerated"));
     assert_eq!(again, Some(first));
+}
+
+/// Codex P2: the same folder/file pair under two roots gets two refs, both
+/// listed and both findable; a root configured twice lists its file once.
+#[test]
+fn the_same_save_under_two_roots_gets_two_refs() {
+    let (a, b) = (temp_dir("bg3-root-a"), temp_dir("bg3-root-b"));
+    install(&a, FOLDER, true);
+    install(&b, FOLDER, true);
+    let src = Bg3Source::with_key(vec![a.clone(), b.clone(), a.clone()], KEY, Arc::new(NotYetDecoded));
+    let all = pages(&src, "/dev/v1/bg3/saves", "bg3-saves");
+    let refs: Vec<&str> = all[0]["saves"].as_array().expect("saves").iter().filter_map(|s| s["saveRef"].as_str()).collect();
+    assert_eq!(refs.len(), 2, "one row per physical file: {refs:?}");
+    assert_ne!(refs[0], refs[1], "same folder/file under two roots must not share a saveRef");
+    for r in refs {
+        let found = src.find(r).map(|(abs, _)| abs);
+        assert!(found.is_some(), "{r} is findable");
+    }
+    let rel = format!("{FOLDER}/QuickSave_1.lsv");
+    assert_eq!(src.find(&save_ref(&KEY, &b, &rel)).map(|f| f.0), Some(b.join(&rel)));
 }

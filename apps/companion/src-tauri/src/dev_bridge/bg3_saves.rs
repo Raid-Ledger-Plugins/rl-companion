@@ -53,9 +53,13 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
     Sha256::new().chain_update(pad(0x5c)).chain_update(inner).finalize().into()
 }
 
-/// `saveRef`: the first 12 lowercase hex chars of HMAC-SHA256(key, rel).
-pub fn save_ref(key: &[u8], rel: &str) -> String {
-    hmac_sha256(key, rel.as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect()
+/// `saveRef`: the first 12 lowercase hex chars of
+/// HMAC-SHA256(key, `<root>` NUL `<rel>`). The configured root is the
+/// namespace, so the same folder/file pair under two roots gets two refs
+/// (Codex P2); it is inside the keyed MAC, so it never reaches a body.
+pub fn save_ref(key: &[u8], root: &Path, rel: &str) -> String {
+    let msg = [root.to_string_lossy().as_bytes(), b"\0", rel.as_bytes()].concat();
+    hmac_sha256(key, &msg).iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
 /// The persisted secret, created on first use; in-memory when `dir` is unset
@@ -126,12 +130,16 @@ impl Bg3Source {
         src
     }
 
-    pub fn save_ref(&self, rel: &str) -> Option<String> {
-        self.key().map(|k| save_ref(k, rel))
+    /// The ref of `abs` (`<root>/<folder>/<file>`, as [`Self::save_files`]
+    /// lists it); its root is the namespace.
+    pub fn save_ref(&self, abs: &Path, rel: &str) -> Option<String> {
+        let root = abs.parent()?.parent()?;
+        self.key().map(|k| save_ref(k, root, rel))
     }
 
     /// Every `<root>/<SaveFolder>/<*.lsv>` as `(absolute, "<folder>/<file>")`,
-    /// sorted by the relative path so offsets are stable between pages.
+    /// sorted by the relative path (then the absolute one) so offsets are
+    /// stable between pages; a root configured twice lists each file once.
     pub fn save_files(&self) -> Vec<(PathBuf, String)> {
         let mut out = Vec::new();
         for root in &self.roots {
@@ -148,13 +156,14 @@ impl Bg3Source {
                 }
             }
         }
-        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        out.dedup_by(|a, b| a.0 == b.0);
         out
     }
 
     /// The save whose `saveRef` is `wanted`.
     pub fn find(&self, wanted: &str) -> Option<(PathBuf, String)> {
-        self.save_files().into_iter().find(|(_, rel)| self.save_ref(rel).as_deref() == Some(wanted))
+        self.save_files().into_iter().find(|(abs, rel)| self.save_ref(abs, rel).as_deref() == Some(wanted))
     }
 
     /// Run `f` over one save's package; `None` when it is too large or not a
@@ -176,7 +185,8 @@ impl Bg3Source {
             let info = extract_save_info(package).ok();
             let party = party_counts(info.as_ref());
             let globals = read_limited(package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
-            let row = self.row(package, rel, folder, info.as_ref(), party, meta.modified().ok(), globals.as_deref());
+            let save_ref = self.save_ref(abs, rel);
+            let row = self.row(package, save_ref, folder, info.as_ref(), party, meta.modified().ok(), globals.as_deref());
             Opened { row, globals, party_size: party.0.unwrap_or(0) }
         })
     }
@@ -197,7 +207,7 @@ impl Bg3Source {
     fn row(
         &self,
         package: &Package<'_>,
-        rel: &str,
+        save_ref: Option<String>,
         folder: &str,
         info: Option<&Value>,
         (party, non_summon): (Option<usize>, Option<usize>),
@@ -216,7 +226,7 @@ impl Bg3Source {
             .and_then(Value::as_str)
             .and_then(game_version);
         json!({
-            "saveRef": self.save_ref(rel),
+            "saveRef": save_ref,
             "campaignKeyPrefix": key.get(..8).unwrap_or("00000000"),
             "campaignKeySource": serde_json::to_value(source).unwrap_or(Value::Null),
             "gameVersion": version,
