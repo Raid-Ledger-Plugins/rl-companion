@@ -74,6 +74,12 @@ pub fn run() {
                 app.path().app_data_dir().ok().as_deref(),
             ));
             app.manage(bridge.clone());
+            // `/dev/v1/bg3/*` (ROK-2078): the same Story roots the bg3-save collector watches.
+            let bg3_roots = registry::CollectorRegistry::from_config(&start_cfg)
+                .get(manifest::BG3_SAVE.id)
+                .map(|e| e.roots.clone())
+                .unwrap_or_default();
+            bridge.set_bg3_source(bg3_roots, app.path().app_data_dir().ok());
             tray::build(app.handle())?;
             let (tray_app, start_bridge) = (app.handle().clone(), bridge.clone());
             tauri::async_runtime::spawn(async move {

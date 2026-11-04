@@ -5,6 +5,10 @@
 //! [`DevBridge::reconcile`] is the only place the listener starts or stops.
 
 pub mod addons;
+pub mod bg3_newage;
+pub mod bg3_redact;
+pub mod bg3_routes;
+pub mod bg3_saves;
 pub mod auth;
 pub mod bind;
 pub mod collectors;
@@ -233,6 +237,13 @@ impl DevBridge {
             snap.snapshot_cache = self.cache.clone();
         }
         self.ctx.set_snapshot(snap);
+    }
+
+    /// Where `/dev/v1/bg3/*` reads saves from: the BG3 `Savegames/Story`
+    /// roots; the `saveRef` secret lives under `key_dir` (ROK-2078).
+    pub fn set_bg3_source(&self, roots: Vec<PathBuf>, key_dir: Option<PathBuf>) {
+        let decoder = Arc::new(bg3_newage::NotYetDecoded);
+        self.ctx.set_bg3(Arc::new(bg3_saves::Bg3Source::new(roots, key_dir, decoder)));
     }
 
     /// Where `/dev/v1/collectors` reads the runtime's state from.
