@@ -232,3 +232,26 @@ fn the_same_save_under_two_roots_gets_two_refs() {
     let rel = format!("{FOLDER}/QuickSave_1.lsv");
     assert_eq!(src.find(&save_ref(&KEY, &b, &rel)).map(|f| f.0), Some(b.join(&rel)));
 }
+
+/// Codex P2: changing the BG3 folder (`set_collector_root` → this hook)
+/// rebinds `/dev/v1/bg3/*` at once instead of keeping the startup folder.
+#[test]
+fn a_collector_root_change_rebinds_the_bg3_source() {
+    use crate::collector_view::apply_root;
+    use crate::config::AppConfig;
+    use crate::dev_bridge::{on_collector_roots_changed, DevBridge};
+    use crate::manifest::BG3_SAVE;
+    let (a, b) = (temp_dir("bg3-rebind-a"), temp_dir("bg3-rebind-b"));
+    let bridge = DevBridge::new(a.join("tls.json"), None);
+    let env = |_: &str| None;
+    let mut cfg = AppConfig::default();
+    apply_root(&mut cfg, BG3_SAVE.id, &a.to_string_lossy(), &env).expect("root a");
+    bridge.set_bg3_from_config(&cfg, None);
+    let roots = || bridge.ctx().bg3().map(|s| s.roots().to_vec());
+    assert_eq!(roots(), Some(vec![a.clone()]));
+    apply_root(&mut cfg, BG3_SAVE.id, &b.to_string_lossy(), &env).expect("root b");
+    on_collector_roots_changed(None, &cfg, None);
+    assert_eq!(roots(), Some(vec![a.clone()]), "None bridge is a no-op");
+    on_collector_roots_changed(Some(&bridge), &cfg, None);
+    assert_eq!(roots(), Some(vec![b]), "the new folder is served without a restart");
+}

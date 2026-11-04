@@ -116,6 +116,11 @@ impl Bg3Source {
         src
     }
 
+    #[cfg(test)]
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
     /// The `saveRef` secret; `None` when it could not be generated.
     pub fn key(&self) -> Option<&[u8; 32]> {
         self.key.get_or_init(|| load_or_create_key(self.key_dir.as_deref())).as_ref()

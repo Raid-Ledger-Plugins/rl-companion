@@ -140,6 +140,11 @@ impl ServerCtx {
         *self.bg3.write().unwrap_or_else(|p| p.into_inner()) = Some(src);
     }
 
+    #[cfg(test)]
+    pub(crate) fn bg3(&self) -> Option<Arc<Bg3Source>> {
+        self.bg3.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
     pub fn set_collectors(&self, f: CollectorsFn) {
         *self.collectors.write().unwrap_or_else(|p| p.into_inner()) = Some(f);
     }
