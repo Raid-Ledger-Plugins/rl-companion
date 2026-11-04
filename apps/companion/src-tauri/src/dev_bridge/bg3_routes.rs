@@ -61,6 +61,9 @@ fn cursor_arg(q: &Query) -> Result<Option<Cursor>, (u16, Value)> {
 pub fn get(src: Option<&Bg3Source>, path: &str, q: &Query) -> Option<(u16, Value)> {
     let rest = path.strip_prefix("/dev/v1/bg3/saves")?;
     let _one_at_a_time = src.map(|_| READS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    if src.is_some_and(|s| s.key().is_none()) {
+        return Some((500, json!({ "error": "internal" })));
+    }
     let res = match (src, rest) {
         (None, "" | "/") => Ok(json!({ "saves": [], "next": null })),
         (None, _) => Err(not_found()),

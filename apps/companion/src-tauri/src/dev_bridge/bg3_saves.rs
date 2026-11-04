@@ -29,7 +29,7 @@ pub struct Bg3Source {
     roots: Vec<PathBuf>,
     scope: WatchScope,
     key_dir: Option<PathBuf>,
-    key: OnceLock<[u8; 32]>,
+    key: OnceLock<Option<[u8; 32]>>,
     pub decoder: Arc<dyn NewAgeDecoder>,
 }
 
@@ -60,26 +60,43 @@ pub fn save_ref(key: &[u8], rel: &str) -> String {
 
 /// The persisted secret, created on first use; in-memory when `dir` is unset
 /// or unwritable (refs then change per run, which only restarts paging).
-fn load_or_create_key(dir: Option<&Path>) -> [u8; 32] {
+/// `None` when the OS RNG fails: an all-zero key would make every `saveRef`
+/// computable from guessable folder names, so the routes refuse instead.
+fn load_or_create_key(dir: Option<&Path>) -> Option<[u8; 32]> {
+    load_or_create_key_with(dir, |k| getrandom::getrandom(k).is_ok())
+}
+
+/// [`load_or_create_key`] with the RNG injected (`fill` → `false` = failed).
+pub(crate) fn load_or_create_key_with(dir: Option<&Path>, fill: impl FnOnce(&mut [u8]) -> bool) -> Option<[u8; 32]> {
     let path = dir.map(|d| KEY_FILE.iter().fold(d.to_path_buf(), |p, s| p.join(s)));
-    let parse = |t: &str| -> Option<[u8; 32]> {
-        let t = t.trim();
-        let bytes: Option<Vec<u8>> = (0..t.len()).step_by(2)
-            .map(|i| t.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
-            .collect();
-        bytes?.try_into().ok()
-    };
-    if let Some(key) = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| parse(&t)) {
-        return key;
+    if let Some(key) = path.as_deref().and_then(read_key) {
+        return Some(key);
     }
     let mut key = [0u8; 32];
-    let _ = getrandom::getrandom(&mut key);
+    if !fill(&mut key) {
+        super::logbuf::log("warn", "dev_bridge::bg3", "no OS randomness for the saveRef key; bg3 routes refused");
+        return None;
+    }
     if let Some(p) = path {
         let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
         let _ = p.parent().map(std::fs::create_dir_all);
-        let _ = std::fs::write(&p, hex);
+        // Atomic (temp + rename) and 0600 on unix; on failure the key stays
+        // in memory for this run.
+        let _ = super::write_guard::write_private(&p, hex.as_bytes());
     }
-    key
+    Some(key)
+}
+
+/// A stored key: 64 hex chars (the file is read at most 128 bytes).
+fn read_key(path: &Path) -> Option<[u8; 32]> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(path).ok()?.take(128).read_to_string(&mut text).ok()?;
+    let t = text.trim();
+    let bytes: Option<Vec<u8>> = (0..t.len()).step_by(2)
+        .map(|i| t.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .collect();
+    bytes?.try_into().ok()
 }
 
 impl Bg3Source {
@@ -91,12 +108,26 @@ impl Bg3Source {
     /// A source with a fixed key (tests).
     pub fn with_key(roots: Vec<PathBuf>, key: [u8; 32], decoder: Arc<dyn NewAgeDecoder>) -> Self {
         let src = Self::new(roots, None, decoder);
-        let _ = src.key.set(key);
+        let _ = src.key.set(Some(key));
         src
     }
 
-    pub fn save_ref(&self, rel: &str) -> String {
-        save_ref(self.key.get_or_init(|| load_or_create_key(self.key_dir.as_deref())), rel)
+    /// The `saveRef` secret; `None` when it could not be generated.
+    pub fn key(&self) -> Option<&[u8; 32]> {
+        self.key.get_or_init(|| load_or_create_key(self.key_dir.as_deref())).as_ref()
+    }
+
+    /// `None` only when [`Self::key`] is unavailable (the routes refuse first).
+    /// A source whose key generation failed (tests).
+    #[cfg(test)]
+    pub fn without_key(roots: Vec<PathBuf>, decoder: Arc<dyn NewAgeDecoder>) -> Self {
+        let src = Self::new(roots, None, decoder);
+        let _ = src.key.set(None);
+        src
+    }
+
+    pub fn save_ref(&self, rel: &str) -> Option<String> {
+        self.key().map(|k| save_ref(k, rel))
     }
 
     /// Every `<root>/<SaveFolder>/<*.lsv>` as `(absolute, "<folder>/<file>")`,
@@ -123,7 +154,7 @@ impl Bg3Source {
 
     /// The save whose `saveRef` is `wanted`.
     pub fn find(&self, wanted: &str) -> Option<(PathBuf, String)> {
-        self.save_files().into_iter().find(|(_, rel)| self.save_ref(rel) == wanted)
+        self.save_files().into_iter().find(|(_, rel)| self.save_ref(rel).as_deref() == Some(wanted))
     }
 
     /// Run `f` over one save's package; `None` when it is too large or not a

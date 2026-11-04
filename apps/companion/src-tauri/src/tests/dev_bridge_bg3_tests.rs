@@ -7,7 +7,7 @@ use super::temp_dir;
 use crate::dev_bridge::bg3_newage::*;
 use crate::dev_bridge::bg3_redact::{body_is_clean, class_id, holds_guid, holds_long_digits, stats_id};
 use crate::dev_bridge::bg3_routes::{self, decode, encode, Cursor};
-use crate::dev_bridge::bg3_saves::{hmac_sha256, save_ref, Bg3Source};
+use crate::dev_bridge::bg3_saves::{hmac_sha256, load_or_create_key_with, save_ref, Bg3Source, KEY_FILE};
 use crate::dev_bridge::paging::{parse_query, PAGE_MAX_BYTES};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -182,4 +182,32 @@ fn structure_not_yet_decoded_is_the_allowed_empty_form() {
     assert_eq!(all[0]["types"], json!([]));
     assert_eq!(all[0]["party"][0], json!({ "slot": 0, "decoded": {} }));
     assert_eq!(all[0]["checks"]["partyEntitiesFound"], json!(0));
+}
+
+/// Review MINOR: a failed RNG must not persist (or use) an all-zero key.
+#[test]
+fn a_failed_rng_refuses_rather_than_saving_a_zero_key() {
+    let dir = temp_dir("bg3-key-rng-fail");
+    assert_eq!(load_or_create_key_with(Some(&dir), |_| false), None);
+    let path = KEY_FILE.iter().fold(dir.clone(), |p, s| p.join(s));
+    assert!(!path.exists(), "no key file is written when the RNG fails");
+    let src = Bg3Source::without_key(vec![dir], Arc::new(NotYetDecoded));
+    let (status, _) = bg3_routes::get(Some(&src), "/dev/v1/bg3/saves", &parse_query(Some(""))).expect("bg3 route");
+    assert_eq!(status, 500, "no key → the bg3 routes refuse");
+}
+
+#[test]
+fn the_key_file_is_written_once_owner_only_and_reused() {
+    let dir = temp_dir("bg3-key-file");
+    let first = load_or_create_key_with(Some(&dir), |k| { k.fill(0x42); true }).expect("key");
+    let path = KEY_FILE.iter().fold(dir.clone(), |p, s| p.join(s));
+    assert_eq!(std::fs::read_to_string(&path).expect("written"), "42".repeat(32));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the saveRef key is owner-only");
+    }
+    let again = load_or_create_key_with(Some(&dir), |_| panic!("an existing key is reused, not regenerated"));
+    assert_eq!(again, Some(first));
 }
