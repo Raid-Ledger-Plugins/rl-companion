@@ -24,6 +24,13 @@ fn put32(b: &mut [u8], at: usize, v: u32) {
 
 /// Header, name block, table, element data, entity GUIDs, indices, owner maps.
 pub(crate) fn lsmf(comps: &[Comp], entities: u32) -> Vec<u8> {
+    build(comps, entities, false)
+}
+
+/// As [`lsmf`], but every owner map points at the FIRST map's indices range
+/// (a hostile layout: one range, many maps). A zero-size component's element
+/// count is its owner count.
+fn build(comps: &[Comp], entities: u32, share: bool) -> Vec<u8> {
     let level = Comp { name: "core.v0.Level", version: 0, size: 32, data: vec![0; 32], owners: None };
     let all: Vec<Comp> = std::iter::once(level).chain(comps.iter().cloned()).collect();
     let mut body: Vec<u8> = all.iter().flat_map(|c| c.name.bytes()).collect();
@@ -42,8 +49,13 @@ pub(crate) fn lsmf(comps: &[Comp], entities: u32) -> Vec<u8> {
     let mut maps = Vec::new();
     for (i, c) in all.iter().enumerate() {
         if let Some(o) = &c.owners {
-            maps.push((body.len(), i, o.len()));
-            o.iter().for_each(|x| body.extend_from_slice(&x.to_le_bytes()));
+            match maps.first() {
+                Some(&(s, _, _)) if share => maps.push((s, i, o.len())),
+                _ => {
+                    maps.push((body.len(), i, o.len()));
+                    o.iter().for_each(|x| body.extend_from_slice(&x.to_le_bytes()));
+                }
+            }
         }
     }
     let maps_start = body.len();
@@ -64,7 +76,8 @@ pub(crate) fn lsmf(comps: &[Comp], entities: u32) -> Vec<u8> {
         put32(&mut body, e + 12, 0xDEAD_BEEF);
         put32(&mut body, e + 24, c.size);
         put32(&mut body, e + 28, c.version);
-        put64(&mut body, e + 32, (c.data.len() / c.size as usize) as u64);
+        let count = if c.size == 0 { c.owners.as_ref().map_or(0, Vec::len) } else { c.data.len() / c.size as usize };
+        put64(&mut body, e + 32, count as u64);
         put64(&mut body, e + 40, offsets[i] as u64);
         name_at += c.name.len() as u64;
     }
@@ -169,4 +182,51 @@ fn reads_a_blob_attribute_larger_than_the_section_cap() {
         assert!(got == big);
         assert!(read_lsf_attribute_bytes(&file, "Missing").expect("read").is_none());
     }
+}
+
+fn zero_size(name: &'static str, owners: usize) -> Comp {
+    Comp { name, version: 0, size: 0, data: Vec::new(), owners: Some(vec![0; owners]) }
+}
+
+/// The ROK-2078 review's MAJOR: 64 zero-size components whose owner maps all
+/// share ONE indices range. Each passes every per-map check, but together
+/// they claim far more owners than the blob holds (the real-world version is
+/// gigabytes from ≤ 32 MiB, and an allocation failure aborts the process).
+#[test]
+fn shared_range_owner_maps_cannot_amplify_past_the_blob() {
+    let (per_map, entities) = (2_000usize, 2_000u32);
+    let names: Vec<&'static str> = (0..64).map(|i| &*Box::leak(format!("z.v0.C{i:02}").into_boxed_str())).collect();
+    let comps: Vec<Comp> = names.iter().map(|n| zero_size(n, per_map)).collect();
+    let blob = build(&comps, entities, true);
+    let claimed = names.len() * per_map;
+    assert!(claimed > blob.len() / 4, "the fixture must claim more owners ({claimed}) than blob/4 ({})", blob.len() / 4);
+    let err = Lsmf::parse(&blob).err().expect("an amplifying blob must be refused");
+    assert_eq!(err.0, "owner maps exceed the blob");
+}
+
+#[test]
+fn a_second_owner_map_for_one_component_is_refused() {
+    let mut blob = build(&[zero_size("z.v0.A", 2), zero_size("z.v0.B", 2)], 2, true);
+    // The owner maps are the blob's last bytes: re-point the second map
+    // (component 2) at component 1.
+    let tail = blob.len() - 32;
+    blob[tail + 16..tail + 24].copy_from_slice(&1u64.to_le_bytes());
+    let err = Lsmf::parse(&blob).err().expect("refused");
+    assert_eq!(err.0, "component has two owner maps");
+}
+
+#[test]
+fn an_owner_map_larger_than_the_entity_table_is_refused() {
+    let err = Lsmf::parse(&lsmf(&[zero_size("z.v0.A", 5)], 2)).err().expect("refused");
+    assert_eq!(err.0, "owner map is larger than the entity table");
+}
+
+#[test]
+fn an_owner_map_end_that_disagrees_with_its_count_is_refused() {
+    let mut blob = lsmf(&[zero_size("z.v0.A", 2)], 2);
+    let tail = blob.len() - 32;
+    let end = u64::from_le_bytes(blob[tail + 8..tail + 16].try_into().expect("8 bytes")) + 4;
+    blob[tail + 8..tail + 16].copy_from_slice(&end.to_le_bytes());
+    let err = Lsmf::parse(&blob).err().expect("refused");
+    assert_eq!(err.0, "owner map end does not match its count");
 }

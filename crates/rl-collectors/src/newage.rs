@@ -26,7 +26,9 @@
 //! empty range.
 //!
 //! Hostile input: every read is bounds-checked with checked arithmetic, every
-//! allocation is bounded by the blob length, and nothing panics. Entity GUIDs
+//! allocation is bounded by the blob length (owner maps: one per component,
+//! `count ≤ entities`, `Σ count ≤ blob / 4`, reserved fallibly), and nothing
+//! panics. Entity GUIDs
 //! are counted, never kept.
 
 use std::fmt;
@@ -131,25 +133,55 @@ impl<'a> Lsmf<'a> {
         Ok(me)
     }
 
+    /// Every owner map, under three bounds that together cap the owners held
+    /// at `blob / 4` u32s: one map per component, `count ≤ entity_count`, and
+    /// a running total. Zero-size components pass the element bounds check at
+    /// any count, and maps may share one indices range, so without these a
+    /// ≤ 32 MiB blob could materialise gigabytes of owners (ROK-2078 review).
     fn owner_maps(&mut self, start: u64, end: u64) -> Result<(), LsmfError> {
         let n = records(self.data, start, end, 32)?;
+        let budget = (self.data.len() / 4) as u64;
+        let mut total = 0u64;
         for i in 0..n {
             let m = rd(self.data, start + i * 32, 32)?;
-            let (indices, comp, count) = (u64_at(m, 0), u64_at(m, 16), u64_at(m, 24));
+            let (indices, indices_end) = (u64_at(m, 0), u64_at(m, 8));
+            let (comp, count) = (u64_at(m, 16), u64_at(m, 24));
             let Some(c) = usize::try_from(comp).ok().filter(|&c| c < self.components.len()) else {
                 return Err(LsmfError("owner map names a missing component"));
             };
+            if self.components[c].owners.is_some() {
+                return Err(LsmfError("component has two owner maps"));
+            }
             if count != self.components[c].element_count {
                 return Err(LsmfError("owner map size differs from the element count"));
             }
-            let raw = if count == 0 { &[][..] } else { rd(self.data, indices, count.saturating_mul(4))? };
-            let owners: Vec<u32> = raw.chunks_exact(4).map(|b| u32_at(b, 0)).collect();
-            if owners.iter().any(|&o| u64::from(o) >= self.entity_count) {
-                return Err(LsmfError("owner index is past the entity table"));
+            if count > self.entity_count {
+                return Err(LsmfError("owner map is larger than the entity table"));
             }
+            total = total.checked_add(count).filter(|&t| t <= budget).ok_or(LsmfError("owner maps exceed the blob"))?;
+            let owners = self.owners_at(indices, indices_end, count)?;
             self.components[c].owners = Some(owners);
         }
         Ok(())
+    }
+
+    /// `count` u32 owners at `[indices, indices_end)`, allocated fallibly.
+    fn owners_at(&self, indices: u64, indices_end: u64, count: u64) -> Result<Vec<u32>, LsmfError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let bytes = count.checked_mul(4).ok_or(LsmfError("owner map overflows"))?;
+        if indices_end.checked_sub(indices) != Some(bytes) {
+            return Err(LsmfError("owner map end does not match its count"));
+        }
+        let raw = rd(self.data, indices, bytes)?;
+        let mut owners: Vec<u32> = Vec::new();
+        owners.try_reserve_exact(raw.len() / 4).map_err(|_| LsmfError("owner map allocation failed"))?;
+        owners.extend(raw.chunks_exact(4).map(|b| u32_at(b, 0)));
+        if owners.iter().any(|&o| u64::from(o) >= self.entity_count) {
+            return Err(LsmfError("owner index is past the entity table"));
+        }
+        Ok(owners)
     }
 
     pub fn components(&self) -> &[LsmfComponent] {
@@ -170,7 +202,8 @@ impl<'a> Lsmf<'a> {
         let c = self.component(name)?;
         let owners = c.owners.as_ref()?;
         let size = u64::from(c.element_size);
-        let mut out: Vec<(u32, &'a [u8])> = Vec::with_capacity(owners.len());
+        let mut out: Vec<(u32, &'a [u8])> = Vec::new();
+        out.try_reserve_exact(owners.len()).ok()?;
         for (k, &owner) in owners.iter().enumerate() {
             let at = (k as u64).checked_mul(size).and_then(|o| o.checked_add(c.data_offset))?;
             out.push((owner, rd(self.data, at, size).ok()?));
