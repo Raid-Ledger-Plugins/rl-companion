@@ -207,6 +207,7 @@ fn a_truncated_values_section_is_lsf_unreadable_in_the_listing() {
     assert_eq!(body["types"], json!([]), "the structure read decodes nothing");
     let saves = get(&src, "/dev/v1/bg3/saves");
     assert_eq!(saves["saves"][0]["fallbackReason"], json!("lsf-unreadable"), "{saves}");
+    assert_eq!(saves["saves"][0]["lsfVersions"]["globals"], json!(null), "an undecodable Globals reports no version: {saves}");
 }
 
 /// Codex P2: a one-member party is the only case whose slot correspondence

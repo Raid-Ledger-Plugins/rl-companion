@@ -226,9 +226,13 @@ impl Bg3Source {
         // and its values section bounds-checked (the decoder reads the blob).
         let meta_ok = meta.as_deref().filter(|m| read_lsf_attribute(m, "\0").is_ok());
         let meta_version = meta_ok.and_then(lsf_parsed_version).filter(|v| (1..=255).contains(v));
-        let globals_version = globals.and_then(lsf_parsed_version).filter(|v| (1..=255).contains(v));
         let newage = globals.map(|g| lsf_attribute_len(g, NEWAGE_ATTRIBUTE));
         let readable = globals.map_or(Readability::NotChecked, |g| self.decoder.readable(g));
+        // A Globals values section that fails to decode reports no version.
+        let globals_version = globals
+            .and_then(lsf_parsed_version)
+            .filter(|v| (1..=255).contains(v))
+            .filter(|_| readable != Readability::LsfUnreadable);
         let fallback = fallback_reason(package.find(META_LSF_NAME).is_some(), meta_version, globals_version, &newage, readable);
         let version = info
             .and_then(|i| i.get("Game Version"))
