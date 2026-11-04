@@ -111,10 +111,13 @@ fn party_blob(stats_size: u32) -> Vec<u8> {
 }
 
 fn source(tag: &str, newage: &[u8]) -> (Bg3Source, String) {
+    source_with_globals(tag, globals_lsf(newage))
+}
+
+fn source_with_globals(tag: &str, globals: Vec<u8>) -> (Bg3Source, String) {
     let story = temp_dir(tag);
     let dir = story.join("QuickSave_7");
     std::fs::create_dir_all(&dir).expect("mkdir");
-    let globals = globals_lsf(newage);
     let files: Vec<(&str, &[u8])> = vec![("SaveInfo.json", SAVE_INFO), ("Globals.lsf", &globals), ("meta.lsf", META_LSF)];
     std::fs::write(dir.join("QuickSave_7.lsv"), lspk(&files)).expect("write lsv");
     let r = save_ref(&KEY, "QuickSave_7/QuickSave_7.lsv");
@@ -173,4 +176,18 @@ fn a_garbage_or_truncated_newage_is_unreadable_not_a_crash() {
         let saves = get(&src, "/dev/v1/bg3/saves");
         assert_eq!(saves["saves"][0]["fallbackReason"], json!("newage-unreadable"));
     }
+}
+
+/// Codex P2 / review MINOR: the attribute table reads but the values section
+/// is truncated. The listing must say `lsf-unreadable`, not advertise a full
+/// read (`null`) while the structure read comes back empty.
+#[test]
+fn a_truncated_values_section_is_lsf_unreadable_in_the_listing() {
+    let mut globals = globals_lsf(&party_blob(36));
+    globals.truncate(globals.len() - 64);
+    let (src, r) = source_with_globals("bg3-newage-lsf-cut", globals);
+    let body = structure(&src, &r);
+    assert_eq!(body["types"], json!([]), "the structure read decodes nothing");
+    let saves = get(&src, "/dev/v1/bg3/saves");
+    assert_eq!(saves["saves"][0]["fallbackReason"], json!("lsf-unreadable"), "{saves}");
 }

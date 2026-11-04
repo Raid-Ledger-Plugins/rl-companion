@@ -9,7 +9,7 @@ use super::bg3_saves::Bg3Source;
 use super::paging::{invalid, json_len, Query, PAGE_MAX_BYTES};
 use regex::Regex;
 use serde_json::{json, Value};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
 type Res = Result<Value, (u16, Value)>;
 
@@ -19,6 +19,10 @@ static CURSOR: LazyLock<Regex> = LazyLock::new(|| {
 static SAVE_REF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-f]{12}$").expect("regex"));
 /// The longest cursor the grammar allows; pages reserve room for it.
 const WORST_NEXT: &str = "p9999_types_999999";
+/// One BG3 read at a time: a request may hold a 256 MiB `.lsv` plus up to
+/// 64 MiB of decompressed sections, so concurrent connections queue here
+/// rather than multiply that (ROK-2078 review).
+static READS: Mutex<()> = Mutex::new(());
 /// Saves opened per listing page (a row is ≤ ~450 bytes, so 32 fit 16 KiB).
 pub const SAVES_PER_PAGE: usize = 32;
 
@@ -56,6 +60,7 @@ fn cursor_arg(q: &Query) -> Result<Option<Cursor>, (u16, Value)> {
 /// Route a `/dev/v1/bg3/*` GET; `None` when the path is not one of ours.
 pub fn get(src: Option<&Bg3Source>, path: &str, q: &Query) -> Option<(u16, Value)> {
     let rest = path.strip_prefix("/dev/v1/bg3/saves")?;
+    let _one_at_a_time = src.map(|_| READS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     let res = match (src, rest) {
         (None, "" | "/") => Ok(json!({ "saves": [], "next": null })),
         (None, _) => Err(not_found()),
@@ -103,8 +108,8 @@ fn saves_ep(src: &Bg3Source, q: &Query) -> Res {
 
 fn structure_ep(src: &Bg3Source, save_ref: &str, q: &Query) -> Res {
     let want = cursor_arg(q)?;
-    let (abs, rel) = src.find(save_ref).ok_or_else(not_found)?;
-    let opened = src.open(&abs, &rel).ok_or_else(not_found)?;
+    let (abs, _) = src.find(save_ref).ok_or_else(not_found)?;
+    let opened = src.open_structure(&abs).ok_or_else(not_found)?;
     let outcome = match &opened.globals {
         Some(g) => src.decoder.read(g, opened.party_size),
         None => NewAgeOutcome::NotDecoded,

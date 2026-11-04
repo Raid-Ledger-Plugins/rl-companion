@@ -3,7 +3,7 @@
 //! save-relative path under a per-install secret). Reads are confined to the
 //! roots by [`WatchScope`]; nothing is ingested — every read is on request.
 
-use super::bg3_newage::NewAgeDecoder;
+use super::bg3_newage::{NewAgeDecoder, Readability};
 use super::bg3_redact::game_version;
 use crate::bg3_collector::MAX_LSV_BYTES;
 use crate::collector::captured_at;
@@ -126,20 +126,40 @@ impl Bg3Source {
         self.save_files().into_iter().find(|(_, rel)| self.save_ref(rel) == wanted)
     }
 
-    /// Open one save; `None` when it is too large or not a readable LSPK.
-    pub fn open(&self, abs: &Path, rel: &str) -> Option<Opened> {
+    /// Run `f` over one save's package; `None` when it is too large or not a
+    /// readable LSPK.
+    fn with_package<T>(&self, abs: &Path, f: impl FnOnce(&Package<'_>, std::fs::Metadata) -> T) -> Option<T> {
         let meta = self.scope.metadata(abs).ok()?;
         if meta.len() > MAX_LSV_BYTES {
             return None;
         }
         let bytes = self.scope.read(abs).ok()?;
         let package = read_lspk(&bytes).ok()?;
-        let folder = rel.split('/').next().unwrap_or_default();
-        let info = extract_save_info(&package).ok();
-        let party = party_counts(info.as_ref());
-        let globals = read_limited(&package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
-        let row = self.row(&package, rel, folder, info.as_ref(), party, meta.modified().ok(), globals.as_deref());
-        Some(Opened { row, globals, party_size: party.0.unwrap_or(0) })
+        Some(f(&package, meta))
+    }
+
+    /// Open one save for the listing: its row (which runs the NewAge check).
+    pub fn open(&self, abs: &Path, rel: &str) -> Option<Opened> {
+        self.with_package(abs, |package, meta| {
+            let folder = rel.split('/').next().unwrap_or_default();
+            let info = extract_save_info(package).ok();
+            let party = party_counts(info.as_ref());
+            let globals = read_limited(package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
+            let row = self.row(package, rel, folder, info.as_ref(), party, meta.modified().ok(), globals.as_deref());
+            Opened { row, globals, party_size: party.0.unwrap_or(0) }
+        })
+    }
+
+    /// Open one save for the structure read: `Globals.lsf` and the party
+    /// size only, with no listing row, so `NewAge` is decompressed ONCE (by
+    /// the decoder's `read`) per request.
+    pub fn open_structure(&self, abs: &Path) -> Option<Opened> {
+        self.with_package(abs, |package, _| {
+            let info = extract_save_info(package).ok();
+            let party = party_counts(info.as_ref());
+            let globals = read_limited(package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
+            Opened { row: Value::Null, globals, party_size: party.0.unwrap_or(0) }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -158,7 +178,7 @@ impl Bg3Source {
         let meta_version = meta.as_deref().and_then(lsf_version).filter(|v| (1..=255).contains(v));
         let globals_version = globals.and_then(lsf_version).filter(|v| (1..=255).contains(v));
         let newage = globals.map(|g| lsf_attribute_len(g, NEWAGE_ATTRIBUTE));
-        let readable = globals.and_then(|g| self.decoder.readable(g));
+        let readable = globals.map_or(Readability::NotChecked, |g| self.decoder.readable(g));
         let fallback = fallback_reason(package.find(META_LSF_NAME).is_some(), meta_version, globals_version, &newage, readable);
         let version = info
             .and_then(|i| i.get("Game Version"))
@@ -187,7 +207,7 @@ fn fallback_reason(
     meta_version: Option<u32>,
     globals_version: Option<u32>,
     newage: &Option<Result<Option<u64>, rl_collectors::LsfError>>,
-    readable: Option<bool>,
+    readable: Readability,
 ) -> Option<&'static str> {
     if !has_meta {
         return Some("meta-missing");
@@ -196,7 +216,8 @@ fn fallback_reason(
         _ if meta_version.is_none() || globals_version.is_none() => Some("lsf-unreadable"),
         None | Some(Err(_)) => Some("lsf-unreadable"),
         Some(Ok(None | Some(0))) => Some("no-newage"),
-        Some(Ok(Some(_))) if readable == Some(false) => Some("newage-unreadable"),
+        Some(Ok(Some(_))) if readable == Readability::LsfUnreadable => Some("lsf-unreadable"),
+        Some(Ok(Some(_))) if readable == Readability::NotLsmf => Some("newage-unreadable"),
         Some(Ok(Some(_))) => None,
     }
 }

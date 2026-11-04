@@ -19,8 +19,10 @@
 //! instead; the order is UNVERIFIED). Class levels and equipment need game
 //! data / the LSF `Items` tree and stay undecoded (`decoder: none`).
 
-use super::bg3_newage::{Checks, DecoderStatus, NewAgeDecoder, NewAgeOutcome, NewAgeRead, PartyDecoded, TypeRow};
-use rl_collectors::{count_webp_images, read_lsf_attribute_bytes, Lsmf, LSMF_MAX_BYTES};
+use super::bg3_newage::{
+    Checks, DecoderStatus, NewAgeDecoder, NewAgeOutcome, NewAgeRead, PartyDecoded, Readability, TypeRow,
+};
+use rl_collectors::{count_webp_images, lsf_attribute_len, read_lsf_attribute_bytes, Lsmf, LSMF_MAX_BYTES};
 
 pub const NEWAGE_ATTRIBUTE: &str = "NewAge";
 const STATS: &str = "game.stats.v3.StatsComponent";
@@ -32,28 +34,38 @@ const DECODED: [(&str, Option<u32>); 3] = [(STATS, Some(36)), (HEALTH, Some(32))
 /// The LSMF-backed decoder wired into `DevBridge::set_bg3_source`.
 pub struct LsmfDecoder;
 
-fn blob(globals_lsf: &[u8]) -> Option<Vec<u8>> {
-    read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE)
-        .ok()
-        .flatten()
-        .filter(|b| b.len() <= LSMF_MAX_BYTES)
+/// The `NewAge` bytes: `Ok(None)` when absent, `Err` when the LSF values
+/// cannot be read or the blob is over the cap. The size is checked from the
+/// attribute table BEFORE the values section is decompressed.
+fn blob(globals_lsf: &[u8]) -> Result<Option<Vec<u8>>, ()> {
+    let len = lsf_attribute_len(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| ())?;
+    if len.is_some_and(|n| n > LSMF_MAX_BYTES as u64) {
+        return Err(());
+    }
+    let bytes = read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| ())?;
+    if bytes.as_ref().is_some_and(|b| b.len() > LSMF_MAX_BYTES) {
+        return Err(());
+    }
+    Ok(bytes)
 }
 
 impl NewAgeDecoder for LsmfDecoder {
     fn read(&self, globals_lsf: &[u8], party_size: usize) -> NewAgeOutcome {
-        let Some(bytes) = blob(globals_lsf) else { return NewAgeOutcome::Unreadable };
+        let Ok(Some(bytes)) = blob(globals_lsf) else { return NewAgeOutcome::Unreadable };
         match Lsmf::parse(&bytes) {
             Ok(l) => NewAgeOutcome::Read(decode(&l, &bytes, party_size)),
             Err(_) => NewAgeOutcome::Unreadable,
         }
     }
 
-    /// `Some(false)` when the `NewAge` bytes were extracted but are not LSMF;
-    /// `None` when the LSF itself could not be read (that has its own reason).
-    fn readable(&self, globals_lsf: &[u8]) -> Option<bool> {
-        match read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE) {
-            Ok(Some(b)) => Some(b.len() <= LSMF_MAX_BYTES && Lsmf::parse(&b).is_ok()),
-            Ok(None) | Err(_) => None,
+    /// `LsfUnreadable` when the values (or an over-cap blob) cannot be read,
+    /// so the listing never advertises a full read the structure route lacks.
+    fn readable(&self, globals_lsf: &[u8]) -> Readability {
+        match blob(globals_lsf) {
+            Ok(Some(b)) if Lsmf::parse(&b).is_ok() => Readability::Lsmf,
+            Ok(Some(_)) => Readability::NotLsmf,
+            Ok(None) => Readability::NotChecked,
+            Err(()) => Readability::LsfUnreadable,
         }
     }
 }

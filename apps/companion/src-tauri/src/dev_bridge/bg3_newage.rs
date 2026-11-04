@@ -81,11 +81,24 @@ pub enum NewAgeOutcome {
 /// Lane B implements this over the `Globals.lsf` bytes (≤ 64 MiB) of one save.
 pub trait NewAgeDecoder: Send + Sync {
     fn read(&self, globals_lsf: &[u8], party_size: usize) -> NewAgeOutcome;
-    /// Cheap LSMF check for the `bg3-saves` listing: `Some(false)` sets
-    /// `fallbackReason: newage-unreadable`; `None` = not checked (layer 1).
-    fn readable(&self, _globals_lsf: &[u8]) -> Option<bool> {
-        None
+    /// LSMF check for the `bg3-saves` listing (`fallbackReason`).
+    fn readable(&self, _globals_lsf: &[u8]) -> Readability {
+        Readability::NotChecked
     }
+}
+
+/// What the listing's NewAge check found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readability {
+    /// No check made (layer 1): no fallback is reported for it.
+    NotChecked,
+    /// The blob parsed as LSMF.
+    Lsmf,
+    /// The bytes were extracted but are not LSMF → `newage-unreadable`.
+    NotLsmf,
+    /// The LSF values could not be read (corrupt, truncated, over the cap)
+    /// → `lsf-unreadable`, the same reason the structure read implies.
+    LsfUnreadable,
 }
 
 /// Layer 1's decoder: nothing is decoded yet.
