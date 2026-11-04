@@ -9,16 +9,21 @@ use std::sync::LazyLock;
 
 static STATS_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Z][A-Z0-9]{1,5}_[A-Za-z0-9_]{1,57}$").expect("regex"));
-static CLASS_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.]+$").expect("regex"));
+static CLASS_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.]+$").expect("regex"));
 static TYPE_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[a-z][a-z0-9_]*(\.[A-Za-z0-9_]+){2,}|E[A-Z][A-Za-z0-9]{1,80})$").expect("regex")
+    Regex::new(r"^(?:[a-z][a-z0-9_]*(\.[A-Za-z0-9_]+){2,}|E[A-Z][A-Za-z0-9]{1,80})$")
+        .expect("regex")
 });
-static ALL_HEX8: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9A-Fa-f]{8,}$").expect("regex"));
+static ALL_HEX8: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[0-9A-Fa-f]{8,}$").expect("regex"));
 static GAME_VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\d{1,4}(\.\d{1,10}){1,3}$").expect("regex"));
 static GUID: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)[0-9a-f]{8}[-_.]?[0-9a-f]{4}[-_.]?[0-9a-f]{4}[-_.]?[0-9a-f]{4}[-_.]?[0-9a-f]{12}")
-        .expect("regex")
+    Regex::new(
+        r"(?i)[0-9a-f]{8}[-_.]?[0-9a-f]{4}[-_.]?[0-9a-f]{4}[-_.]?[0-9a-f]{4}[-_.]?[0-9a-f]{12}",
+    )
+    .expect("regex")
 });
 static HANDLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)h[0-9a-f]{8}g[0-9a-f]{4}").expect("regex"));
@@ -27,14 +32,33 @@ static DIGITS10: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[0-9]{10,}").ex
 
 /// The 19 BG3 `ItemSlot` names the contract allows (closed enum).
 pub const EQUIPMENT_SLOTS: [&str; 19] = [
-    "Helmet", "Breast", "Cloak", "MeleeMainHand", "MeleeOffHand", "RangedMainHand",
-    "RangedOffHand", "Ring", "Underwear", "Boots", "Gloves", "Amulet", "Ring2", "Wings", "Horns",
-    "Overhead", "MusicalInstrument", "VanityBody", "VanityBoots",
+    "Helmet",
+    "Breast",
+    "Cloak",
+    "MeleeMainHand",
+    "MeleeOffHand",
+    "RangedMainHand",
+    "RangedOffHand",
+    "Ring",
+    "Underwear",
+    "Boots",
+    "Gloves",
+    "Amulet",
+    "Ring2",
+    "Wings",
+    "Horns",
+    "Overhead",
+    "MusicalInstrument",
+    "VanityBody",
+    "VanityBoots",
 ];
 
 /// A GUID (any separator run, braced or not), a Larian handle, or ≥ 32 hex.
 pub fn holds_guid(s: &str) -> bool {
-    let stripped: String = s.chars().filter(|c| !matches!(c, '-' | '_' | '.' | '{' | '}')).collect();
+    let stripped: String = s
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_' | '.' | '{' | '}'))
+        .collect();
     GUID.is_match(s) || HANDLE.is_match(s) || HEX32.is_match(s) || HEX32.is_match(&stripped)
 }
 

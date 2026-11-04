@@ -28,9 +28,12 @@
 //! data / the LSF `Items` tree and stay undecoded (`decoder: none`).
 
 use super::bg3_newage::{
-    Checks, DecoderStatus, NewAgeDecoder, NewAgeOutcome, NewAgeRead, PartyDecoded, Readability, TypeRow,
+    Checks, DecoderStatus, NewAgeDecoder, NewAgeOutcome, NewAgeRead, PartyDecoded, Readability,
+    TypeRow,
 };
-use rl_collectors::{count_webp_images, lsf_attribute_len, read_lsf_attribute_bytes, Lsmf, LSMF_MAX_BYTES};
+use rl_collectors::{
+    count_webp_images, lsf_attribute_len, read_lsf_attribute_bytes, Lsmf, LSMF_MAX_BYTES,
+};
 
 pub const NEWAGE_ATTRIBUTE: &str = "NewAge";
 const STATS: &str = "game.stats.v3.StatsComponent";
@@ -48,9 +51,21 @@ pub struct Layout {
 /// The layouts this reader decodes. No version is pinned yet (see the module
 /// doc); the PlayerComponent marker is any size.
 pub const DECODED: [Layout; 3] = [
-    Layout { name: STATS, version: None, element_size: Some(36) },
-    Layout { name: HEALTH, version: None, element_size: Some(32) },
-    Layout { name: PLAYER, version: None, element_size: None },
+    Layout {
+        name: STATS,
+        version: None,
+        element_size: Some(36),
+    },
+    Layout {
+        name: HEALTH,
+        version: None,
+        element_size: Some(32),
+    },
+    Layout {
+        name: PLAYER,
+        version: None,
+        element_size: None,
+    },
 ];
 
 /// The LSMF-backed decoder wired into `DevBridge::set_bg3_source`.
@@ -72,7 +87,8 @@ fn blob(globals_lsf: &[u8]) -> Result<Option<Vec<u8>>, BlobError> {
     if len.is_some_and(|n| n > LSMF_MAX_BYTES as u64) {
         return Err(BlobError::OverCap);
     }
-    let bytes = read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| BlobError::Lsf)?;
+    let bytes =
+        read_lsf_attribute_bytes(globals_lsf, NEWAGE_ATTRIBUTE).map_err(|_| BlobError::Lsf)?;
     if bytes.as_ref().is_some_and(|b| b.len() > LSMF_MAX_BYTES) {
         return Err(BlobError::OverCap);
     }
@@ -81,7 +97,9 @@ fn blob(globals_lsf: &[u8]) -> Result<Option<Vec<u8>>, BlobError> {
 
 impl NewAgeDecoder for LsmfDecoder {
     fn read(&self, globals_lsf: &[u8], party_size: usize) -> NewAgeOutcome {
-        let Ok(Some(bytes)) = blob(globals_lsf) else { return NewAgeOutcome::Unreadable };
+        let Ok(Some(bytes)) = blob(globals_lsf) else {
+            return NewAgeOutcome::Unreadable;
+        };
         match Lsmf::parse(&bytes) {
             Ok(l) => NewAgeOutcome::Read(decode(&l, &bytes, party_size)),
             Err(_) => NewAgeOutcome::Unreadable,
@@ -107,7 +125,9 @@ pub fn status(name: &str, version: u32, element_size: u32) -> DecoderStatus {
 
 /// `Ok` only when every pinned field of the layout matches the triple.
 pub fn status_in(table: &[Layout], name: &str, version: u32, element_size: u32) -> DecoderStatus {
-    let Some(l) = table.iter().find(|l| l.name == name) else { return DecoderStatus::None };
+    let Some(l) = table.iter().find(|l| l.name == name) else {
+        return DecoderStatus::None;
+    };
     let pinned = |want: Option<u32>, got: u32| want.is_none_or(|w| w == got);
     if pinned(l.version, version) && pinned(l.element_size, element_size) {
         DecoderStatus::Ok
@@ -127,7 +147,9 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
 
 /// Elements of `name` by entity, only when its layout is on the allowlist.
 fn decodable<'a>(l: &Lsmf<'a>, name: &str) -> Vec<(u32, &'a [u8])> {
-    let ok = l.component(name).is_some_and(|c| status(name, c.version, c.element_size) == DecoderStatus::Ok);
+    let ok = l
+        .component(name)
+        .is_some_and(|c| status(name, c.version, c.element_size) == DecoderStatus::Ok);
     if !ok {
         return Vec::new();
     }
@@ -135,7 +157,9 @@ fn decodable<'a>(l: &Lsmf<'a>, name: &str) -> Vec<(u32, &'a [u8])> {
 }
 
 fn find<'a>(rows: &[(u32, &'a [u8])], entity: u32) -> Option<&'a [u8]> {
-    rows.binary_search_by_key(&entity, |r| r.0).ok().map(|i| rows[i].1)
+    rows.binary_search_by_key(&entity, |r| r.0)
+        .ok()
+        .map(|i| rows[i].1)
 }
 
 fn member(stats: Option<&[u8]>, health: Option<&[u8]>) -> PartyDecoded {
@@ -182,9 +206,16 @@ fn decode(l: &Lsmf, bytes: &[u8], party_size: usize) -> NewAgeRead {
     };
     let (stats, health) = (decodable(l, STATS), decodable(l, HEALTH));
     let members = if proven {
-        party.iter().map(|&e| member(find(&stats, e), find(&health, e))).collect()
+        party
+            .iter()
+            .map(|&e| member(find(&stats, e), find(&health, e)))
+            .collect()
     } else {
         Vec::new()
     };
-    NewAgeRead { types: types(l), checks, party: members }
+    NewAgeRead {
+        types: types(l),
+        checks,
+        party: members,
+    }
 }

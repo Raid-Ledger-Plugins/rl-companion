@@ -131,7 +131,11 @@ pub fn set_collector_root(
     save(&state, |c| c.collector_roots = cfg.collector_roots)?;
     let bridge = app.try_state::<Arc<crate::dev_bridge::DevBridge>>();
     let key_dir = app.path().app_data_dir().ok();
-    crate::dev_bridge::on_collector_roots_changed(bridge.as_deref().map(|b| &**b), &state.config(), key_dir);
+    crate::dev_bridge::on_collector_roots_changed(
+        bridge.as_deref().map(|b| &**b),
+        &state.config(),
+        key_dir,
+    );
     rt.kick();
     Ok(status(&app, &rt))
 }

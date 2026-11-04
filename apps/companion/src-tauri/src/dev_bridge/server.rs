@@ -1,9 +1,9 @@
 //! The HTTPS listener and `/dev/v1/*` router. Admission (auth.rs) runs before
 //! routing, so an unauthenticated caller learns nothing about which paths exist.
 
+use super::auth::{admit, AuthPolicy, Lockout};
 use super::bg3_routes;
 use super::bg3_saves::Bg3Source;
-use super::auth::{admit, AuthPolicy, Lockout};
 use super::bind;
 use super::conn_budget::{ConnBudget, Slot};
 use super::health::{health, HealthInput};

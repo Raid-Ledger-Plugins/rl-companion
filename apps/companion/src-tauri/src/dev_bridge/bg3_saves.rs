@@ -10,8 +10,8 @@ use crate::collector::captured_at;
 use crate::manifest::BG3_SAVE;
 use crate::scope::WatchScope;
 use rl_collectors::{
-    campaign_key_from_package, extract_save_info, lsf_attribute_len, lsf_parsed_version, read_lsf_attribute,
-    read_lspk, Package, META_LSF_MAX_BYTES, META_LSF_NAME,
+    campaign_key_from_package, extract_save_info, lsf_attribute_len, lsf_parsed_version,
+    read_lsf_attribute, read_lspk, Package, META_LSF_MAX_BYTES, META_LSF_NAME,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -49,8 +49,15 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
         k[..key.len()].copy_from_slice(key);
     }
     let pad = |b: u8| k.map(|x| x ^ b);
-    let inner = Sha256::new().chain_update(pad(0x36)).chain_update(msg).finalize();
-    Sha256::new().chain_update(pad(0x5c)).chain_update(inner).finalize().into()
+    let inner = Sha256::new()
+        .chain_update(pad(0x36))
+        .chain_update(msg)
+        .finalize();
+    Sha256::new()
+        .chain_update(pad(0x5c))
+        .chain_update(inner)
+        .finalize()
+        .into()
 }
 
 /// `saveRef`: the first 12 lowercase hex chars of
@@ -59,7 +66,11 @@ pub fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; 32] {
 /// (Codex P2); it is inside the keyed MAC, so it never reaches a body.
 pub fn save_ref(key: &[u8], root: &Path, rel: &str) -> String {
     let msg = [root.to_string_lossy().as_bytes(), b"\0", rel.as_bytes()].concat();
-    hmac_sha256(key, &msg).iter().take(6).map(|b| format!("{b:02x}")).collect()
+    hmac_sha256(key, &msg)
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The persisted secret, created on first use; in-memory when `dir` is unset
@@ -71,14 +82,21 @@ fn load_or_create_key(dir: Option<&Path>) -> Option<[u8; 32]> {
 }
 
 /// [`load_or_create_key`] with the RNG injected (`fill` → `false` = failed).
-pub(crate) fn load_or_create_key_with(dir: Option<&Path>, fill: impl FnOnce(&mut [u8]) -> bool) -> Option<[u8; 32]> {
+pub(crate) fn load_or_create_key_with(
+    dir: Option<&Path>,
+    fill: impl FnOnce(&mut [u8]) -> bool,
+) -> Option<[u8; 32]> {
     let path = dir.map(|d| KEY_FILE.iter().fold(d.to_path_buf(), |p, s| p.join(s)));
     if let Some(key) = path.as_deref().and_then(read_key) {
         return Some(key);
     }
     let mut key = [0u8; 32];
     if !fill(&mut key) {
-        super::logbuf::log("warn", "dev_bridge::bg3", "no OS randomness for the saveRef key; bg3 routes refused");
+        super::logbuf::log(
+            "warn",
+            "dev_bridge::bg3",
+            "no OS randomness for the saveRef key; bg3 routes refused",
+        );
         return None;
     }
     if let Some(p) = path {
@@ -95,18 +113,33 @@ pub(crate) fn load_or_create_key_with(dir: Option<&Path>, fill: impl FnOnce(&mut
 fn read_key(path: &Path) -> Option<[u8; 32]> {
     use std::io::Read;
     let mut text = String::new();
-    std::fs::File::open(path).ok()?.take(128).read_to_string(&mut text).ok()?;
+    std::fs::File::open(path)
+        .ok()?
+        .take(128)
+        .read_to_string(&mut text)
+        .ok()?;
     let t = text.trim();
-    let bytes: Option<Vec<u8>> = (0..t.len()).step_by(2)
+    let bytes: Option<Vec<u8>> = (0..t.len())
+        .step_by(2)
         .map(|i| t.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()))
         .collect();
     bytes?.try_into().ok()
 }
 
 impl Bg3Source {
-    pub fn new(roots: Vec<PathBuf>, key_dir: Option<PathBuf>, decoder: Arc<dyn NewAgeDecoder>) -> Self {
+    pub fn new(
+        roots: Vec<PathBuf>,
+        key_dir: Option<PathBuf>,
+        decoder: Arc<dyn NewAgeDecoder>,
+    ) -> Self {
         let scope = WatchScope::new(&roots);
-        Self { roots, scope, key_dir, key: OnceLock::new(), decoder }
+        Self {
+            roots,
+            scope,
+            key_dir,
+            key: OnceLock::new(),
+            decoder,
+        }
     }
 
     /// A source with a fixed key (tests).
@@ -123,7 +156,9 @@ impl Bg3Source {
 
     /// The `saveRef` secret; `None` when it could not be generated.
     pub fn key(&self) -> Option<&[u8; 32]> {
-        self.key.get_or_init(|| load_or_create_key(self.key_dir.as_deref())).as_ref()
+        self.key
+            .get_or_init(|| load_or_create_key(self.key_dir.as_deref()))
+            .as_ref()
     }
 
     /// `None` only when [`Self::key`] is unavailable (the routes refuse first).
@@ -152,9 +187,13 @@ impl Bg3Source {
                 if !self.scope.is_dir(&folder) {
                     continue;
                 }
-                let Some(fname) = folder.file_name().and_then(|n| n.to_str()) else { continue };
+                let Some(fname) = folder.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
                 for f in self.scope.read_dir(&folder).unwrap_or_default() {
-                    let Some(name) = f.file_name().and_then(|n| n.to_str()) else { continue };
+                    let Some(name) = f.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
                     if BG3_SAVE.matches_file(name) && self.scope.is_file(&f) {
                         out.push((f.clone(), format!("{fname}/{name}")));
                     }
@@ -168,12 +207,18 @@ impl Bg3Source {
 
     /// The save whose `saveRef` is `wanted`.
     pub fn find(&self, wanted: &str) -> Option<(PathBuf, String)> {
-        self.save_files().into_iter().find(|(abs, rel)| self.save_ref(abs, rel).as_deref() == Some(wanted))
+        self.save_files()
+            .into_iter()
+            .find(|(abs, rel)| self.save_ref(abs, rel).as_deref() == Some(wanted))
     }
 
     /// Run `f` over one save's package; `None` when it is too large or not a
     /// readable LSPK.
-    fn with_package<T>(&self, abs: &Path, f: impl FnOnce(&Package<'_>, std::fs::Metadata) -> T) -> Option<T> {
+    fn with_package<T>(
+        &self,
+        abs: &Path,
+        f: impl FnOnce(&Package<'_>, std::fs::Metadata) -> T,
+    ) -> Option<T> {
         let meta = self.scope.metadata(abs).ok()?;
         if meta.len() > MAX_LSV_BYTES {
             return None;
@@ -191,8 +236,20 @@ impl Bg3Source {
             let party = party_counts(info.as_ref());
             let globals = read_limited(package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
             let save_ref = self.save_ref(abs, rel);
-            let row = self.row(package, save_ref, folder, info.as_ref(), party, meta.modified().ok(), globals.as_deref());
-            Opened { row, globals, party_size: party.0.unwrap_or(0) }
+            let row = self.row(
+                package,
+                save_ref,
+                folder,
+                info.as_ref(),
+                party,
+                meta.modified().ok(),
+                globals.as_deref(),
+            );
+            Opened {
+                row,
+                globals,
+                party_size: party.0.unwrap_or(0),
+            }
         })
     }
 
@@ -204,7 +261,11 @@ impl Bg3Source {
             let info = extract_save_info(package).ok();
             let party = party_counts(info.as_ref());
             let globals = read_limited(package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
-            Opened { row: Value::Null, globals, party_size: party.0.unwrap_or(0) }
+            Opened {
+                row: Value::Null,
+                globals,
+                party_size: party.0.unwrap_or(0),
+            }
         })
     }
 
@@ -224,8 +285,12 @@ impl Bg3Source {
         // A version is reported only for a file that parses (Codex P2): the
         // small meta.lsf is read in full; Globals.lsf has its tables parsed
         // and its values section bounds-checked (the decoder reads the blob).
-        let meta_ok = meta.as_deref().filter(|m| read_lsf_attribute(m, "\0").is_ok());
-        let meta_version = meta_ok.and_then(lsf_parsed_version).filter(|v| (1..=255).contains(v));
+        let meta_ok = meta
+            .as_deref()
+            .filter(|m| read_lsf_attribute(m, "\0").is_ok());
+        let meta_version = meta_ok
+            .and_then(lsf_parsed_version)
+            .filter(|v| (1..=255).contains(v));
         let newage = globals.map(|g| lsf_attribute_len(g, NEWAGE_ATTRIBUTE));
         let readable = globals.map_or(Readability::NotChecked, |g| self.decoder.readable(g));
         // A Globals values section that fails to decode reports no version.
@@ -233,7 +298,13 @@ impl Bg3Source {
             .and_then(lsf_parsed_version)
             .filter(|v| (1..=255).contains(v))
             .filter(|_| readable != Readability::LsfUnreadable);
-        let fallback = fallback_reason(package.find(META_LSF_NAME).is_some(), meta_version, globals_version, &newage, readable);
+        let fallback = fallback_reason(
+            package.find(META_LSF_NAME).is_some(),
+            meta_version,
+            globals_version,
+            &newage,
+            readable,
+        );
         let version = info
             .and_then(|i| i.get("Game Version"))
             .and_then(Value::as_str)
@@ -287,7 +358,9 @@ fn party_counts(info: Option<&Value>) -> (Option<usize>, Option<usize>) {
         .and_then(|i| i.get("Active Party"))
         .and_then(|p| p.get("Characters"))
         .and_then(Value::as_array);
-    let Some(chars) = chars else { return (None, None) };
+    let Some(chars) = chars else {
+        return (None, None);
+    };
     let non_summon = chars.iter().filter(|c| c.get("Classes").is_some()).count();
     let cap = |n: usize| (n <= 16).then_some(n);
     (cap(chars.len()), cap(non_summon))

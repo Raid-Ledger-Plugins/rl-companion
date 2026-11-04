@@ -95,7 +95,13 @@ pub fn lsf_version(bytes: &[u8]) -> Option<u32> {
 /// corrupt file that still carries the 8-byte `LSOF` + version prefix.
 pub fn lsf_parsed_version(bytes: &[u8]) -> Option<u32> {
     let t = tables(bytes).ok()?;
-    take(bytes, t.values_at, disk_len(t.values, t.flags), t.values.name).ok()?;
+    take(
+        bytes,
+        t.values_at,
+        disk_len(t.values, t.flags),
+        t.values.name,
+    )
+    .ok()?;
     lsf_version(bytes)
 }
 
@@ -129,7 +135,13 @@ pub fn read_lsf_attribute_bytes(bytes: &[u8], name: &str) -> Result<Option<Vec<u
         return Ok(None);
     };
     let mut at = t.values_at;
-    let values = section_capped(bytes, &mut at, t.values, t.flags, LSF_MAX_BLOB_SECTION_BYTES)?;
+    let values = section_capped(
+        bytes,
+        &mut at,
+        t.values,
+        t.flags,
+        LSF_MAX_BLOB_SECTION_BYTES,
+    )?;
     let end = offset.checked_add(len).filter(|&e| e <= values.len());
     let Some(end) = end else {
         return Err(LsfError::Decode {
@@ -139,7 +151,10 @@ pub fn read_lsf_attribute_bytes(bytes: &[u8], name: &str) -> Result<Option<Vec<u
     };
     // An exact-size copy: the ≤ 64 MiB section buffer is freed here rather
     // than riding along as the blob's spare capacity (ROK-2078 review).
-    let blob = values.get(offset..end).map(<[u8]>::to_vec).unwrap_or_default();
+    let blob = values
+        .get(offset..end)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
     drop(values);
     Ok(Some(blob))
 }
@@ -151,7 +166,11 @@ fn attribute_span(t: &Tables, name: &str) -> Result<Option<(usize, usize)>, LsfE
     for rec in t.attributes.chunks_exact(record) {
         let name_ref = le_u32(rec, 0);
         let len = (le_u32(rec, 4) >> 6) as usize;
-        let offset = if t.v3 { le_u32(rec, 12) as usize } else { cumulative };
+        let offset = if t.v3 {
+            le_u32(rec, 12) as usize
+        } else {
+            cumulative
+        };
         cumulative = cumulative.saturating_add(len);
         let found = t
             .names

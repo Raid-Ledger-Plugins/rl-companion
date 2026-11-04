@@ -133,8 +133,10 @@ pub fn type_row(r: &TypeRow) -> Option<Value> {
         DecoderStatus::Unsupported => "unsupported",
         DecoderStatus::None => "none",
     };
-    Some(json!({ "type": ty, "version": r.version, "elementSize": r.element_size,
-        "count": r.count, "decoder": decoder }))
+    Some(
+        json!({ "type": ty, "version": r.version, "elementSize": r.element_size,
+        "count": r.count, "decoder": decoder }),
+    )
 }
 
 fn in_range(v: u32, lo: u32, hi: u32) -> Option<u32> {
@@ -144,9 +146,15 @@ fn in_range(v: u32, lo: u32, hi: u32) -> Option<u32> {
 /// The `decoded` object: each field present only when it fits the contract.
 pub fn decoded_json(d: &PartyDecoded) -> Value {
     let mut out = Map::new();
-    if let Some(a) = d.abilities.filter(|a| a.iter().all(|v| (1..=30).contains(v))) {
+    if let Some(a) = d
+        .abilities
+        .filter(|a| a.iter().all(|v| (1..=30).contains(v)))
+    {
         let [s, dx, c, i, w, ch] = a;
-        out.insert("abilities".into(), json!({"str": s, "dex": dx, "con": c, "int": i, "wis": w, "cha": ch}));
+        out.insert(
+            "abilities".into(),
+            json!({"str": s, "dex": dx, "con": c, "int": i, "wis": w, "cha": ch}),
+        );
     }
     if let Some(p) = d.proficiency_bonus.and_then(|p| in_range(p, 1, 10)) {
         out.insert("proficiencyBonus".into(), p.into());
@@ -182,7 +190,9 @@ fn equipment(items: &[(String, String)]) -> Vec<Value> {
     let mut seen: Vec<&str> = Vec::new();
     let mut out = Vec::new();
     for (slot, id) in items {
-        let Some(slot) = equipment_slot(slot) else { continue };
+        let Some(slot) = equipment_slot(slot) else {
+            continue;
+        };
         if seen.contains(&slot) {
             continue;
         }

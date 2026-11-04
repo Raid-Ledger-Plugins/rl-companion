@@ -5,12 +5,12 @@
 //! [`DevBridge::reconcile`] is the only place the listener starts or stops.
 
 pub mod addons;
+pub mod auth;
 pub mod bg3_newage;
 pub mod bg3_newage_reader;
 pub mod bg3_redact;
 pub mod bg3_routes;
 pub mod bg3_saves;
-pub mod auth;
 pub mod bind;
 pub mod collectors;
 pub mod commands;
@@ -244,7 +244,8 @@ impl DevBridge {
     /// roots; the `saveRef` secret lives under `key_dir` (ROK-2078).
     pub fn set_bg3_source(&self, roots: Vec<PathBuf>, key_dir: Option<PathBuf>) {
         let decoder = Arc::new(bg3_newage_reader::LsmfDecoder);
-        self.ctx.set_bg3(Arc::new(bg3_saves::Bg3Source::new(roots, key_dir, decoder)));
+        self.ctx
+            .set_bg3(Arc::new(bg3_saves::Bg3Source::new(roots, key_dir, decoder)));
     }
 
     /// [`Self::set_bg3_source`] over the bg3-save collector's CURRENT Story
@@ -283,7 +284,11 @@ pub fn bg3_roots(cfg: &AppConfig) -> Vec<PathBuf> {
 /// A collector folder changed (`set_collector_root`): rebind
 /// `/dev/v1/bg3/*` to the new Story roots at once (Codex P2), instead of
 /// serving the startup folder until a restart.
-pub fn on_collector_roots_changed(bridge: Option<&DevBridge>, cfg: &AppConfig, key_dir: Option<PathBuf>) {
+pub fn on_collector_roots_changed(
+    bridge: Option<&DevBridge>,
+    cfg: &AppConfig,
+    key_dir: Option<PathBuf>,
+) {
     if let Some(b) = bridge {
         b.set_bg3_from_config(cfg, key_dir);
     }

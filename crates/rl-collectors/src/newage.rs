@@ -74,8 +74,12 @@ pub struct Lsmf<'a> {
 }
 
 fn rd(data: &[u8], offset: u64, len: u64) -> Result<&[u8], LsmfError> {
-    let start = offset.checked_add(HEADER as u64).ok_or(LsmfError("offset overflows"))?;
-    let end = start.checked_add(len).ok_or(LsmfError("length overflows"))?;
+    let start = offset
+        .checked_add(HEADER as u64)
+        .ok_or(LsmfError("offset overflows"))?;
+    let end = start
+        .checked_add(len)
+        .ok_or(LsmfError("length overflows"))?;
     let (start, end) = (usize::try_from(start), usize::try_from(end));
     match (start, end) {
         (Ok(s), Ok(e)) => data.get(s..e).ok_or(LsmfError("read is out of bounds")),
@@ -118,7 +122,9 @@ impl<'a> Lsmf<'a> {
         let block = u64_at(data, 16);
         let name_block = u64::from(u32_at(data, 32));
         let count = u64::from(u16::from_le_bytes([data[36], data[37]]));
-        let table_at = block.checked_add(name_block).ok_or(LsmfError("table offset overflows"))?;
+        let table_at = block
+            .checked_add(name_block)
+            .ok_or(LsmfError("table offset overflows"))?;
         let table = rd(data, table_at, count * ENTRY as u64)?;
         let mut components = Vec::with_capacity(count as usize);
         for e in table.chunks_exact(ENTRY) {
@@ -129,7 +135,11 @@ impl<'a> Lsmf<'a> {
         }
         let level = rd(data, components[0].data_offset, 32)?;
         let entity_count = records(data, u64_at(level, 0), u64_at(level, 8), 16)?;
-        let mut me = Self { data, components, entity_count };
+        let mut me = Self {
+            data,
+            components,
+            entity_count,
+        };
         me.owner_maps(u64_at(level, 16), u64_at(level, 24))?;
         Ok(me)
     }
@@ -147,7 +157,10 @@ impl<'a> Lsmf<'a> {
             let m = rd(self.data, start + i * 32, 32)?;
             let (indices, indices_end) = (u64_at(m, 0), u64_at(m, 8));
             let (comp, count) = (u64_at(m, 16), u64_at(m, 24));
-            let Some(c) = usize::try_from(comp).ok().filter(|&c| c < self.components.len()) else {
+            let Some(c) = usize::try_from(comp)
+                .ok()
+                .filter(|&c| c < self.components.len())
+            else {
                 return Err(LsmfError("owner map names a missing component"));
             };
             if self.components[c].owners.is_some() {
@@ -159,7 +172,10 @@ impl<'a> Lsmf<'a> {
             if count > self.entity_count {
                 return Err(LsmfError("owner map is larger than the entity table"));
             }
-            total = total.checked_add(count).filter(|&t| t <= budget).ok_or(LsmfError("owner maps exceed the blob"))?;
+            total = total
+                .checked_add(count)
+                .filter(|&t| t <= budget)
+                .ok_or(LsmfError("owner maps exceed the blob"))?;
             let owners = self.owners_at(indices, indices_end, count)?;
             self.components[c].owners = Some(owners);
         }
@@ -171,13 +187,17 @@ impl<'a> Lsmf<'a> {
         if count == 0 {
             return Ok(Vec::new());
         }
-        let bytes = count.checked_mul(4).ok_or(LsmfError("owner map overflows"))?;
+        let bytes = count
+            .checked_mul(4)
+            .ok_or(LsmfError("owner map overflows"))?;
         if indices_end.checked_sub(indices) != Some(bytes) {
             return Err(LsmfError("owner map end does not match its count"));
         }
         let raw = rd(self.data, indices, bytes)?;
         let mut owners: Vec<u32> = Vec::new();
-        owners.try_reserve_exact(raw.len() / 4).map_err(|_| LsmfError("owner map allocation failed"))?;
+        owners
+            .try_reserve_exact(raw.len() / 4)
+            .map_err(|_| LsmfError("owner map allocation failed"))?;
         owners.extend(raw.chunks_exact(4).map(|b| u32_at(b, 0)));
         if owners.iter().any(|&o| u64::from(o) >= self.entity_count) {
             return Err(LsmfError("owner index is past the entity table"));
@@ -206,7 +226,9 @@ impl<'a> Lsmf<'a> {
         let mut out: Vec<(u32, &'a [u8])> = Vec::new();
         out.try_reserve_exact(owners.len()).ok()?;
         for (k, &owner) in owners.iter().enumerate() {
-            let at = (k as u64).checked_mul(size).and_then(|o| o.checked_add(c.data_offset))?;
+            let at = (k as u64)
+                .checked_mul(size)
+                .and_then(|o| o.checked_add(c.data_offset))?;
             out.push((owner, rd(self.data, at, size).ok()?));
         }
         out.sort_by_key(|(o, _)| *o);
@@ -217,17 +239,27 @@ impl<'a> Lsmf<'a> {
     }
 }
 
-fn component(data: &[u8], block: u64, name_block: u64, e: &[u8]) -> Result<LsmfComponent, LsmfError> {
+fn component(
+    data: &[u8],
+    block: u64,
+    name_block: u64,
+    e: &[u8],
+) -> Result<LsmfComponent, LsmfError> {
     let (name_at, name_len) = (u64_at(e, 0), u64::from(u32_at(e, 8)));
     if name_len as usize > MAX_NAME || name_at.saturating_add(name_len) > name_block {
         return Err(LsmfError("component name is outside the name block"));
     }
-    let off = block.checked_add(name_at).ok_or(LsmfError("name offset overflows"))?;
-    let name = std::str::from_utf8(rd(data, off, name_len)?).map_err(|_| LsmfError("component name is not UTF-8"))?;
+    let off = block
+        .checked_add(name_at)
+        .ok_or(LsmfError("name offset overflows"))?;
+    let name = std::str::from_utf8(rd(data, off, name_len)?)
+        .map_err(|_| LsmfError("component name is not UTF-8"))?;
     let (element_size, element_count) = (u32_at(e, 24), u64_at(e, 32));
     let data_offset = u64_at(e, 40);
     if element_count > 0 {
-        let bytes = element_count.checked_mul(u64::from(element_size)).ok_or(LsmfError("element array overflows"))?;
+        let bytes = element_count
+            .checked_mul(u64::from(element_size))
+            .ok_or(LsmfError("element array overflows"))?;
         rd(data, data_offset, bytes)?;
     }
     Ok(LsmfComponent {
@@ -244,7 +276,10 @@ fn component(data: &[u8], block: u64, name_block: u64, e: &[u8]) -> Result<LsmfC
 pub fn count_webp_images(data: &[u8]) -> u64 {
     let mut n = 0u64;
     let mut at = 0usize;
-    while let Some(i) = data.get(at..).and_then(|d| d.windows(4).position(|w| w == b"RIFF")) {
+    while let Some(i) = data
+        .get(at..)
+        .and_then(|d| d.windows(4).position(|w| w == b"RIFF"))
+    {
         let start = at + i;
         if data.get(start + 8..start + 12) == Some(b"WEBP") {
             n += 1;

@@ -62,14 +62,20 @@ fn not_found() -> (u16, Value) {
 fn cursor_arg(q: &Query) -> Result<Option<Cursor>, (u16, Value)> {
     match q.get("cursor") {
         None => Ok(None),
-        Some(raw) => decode(raw).map(Some).ok_or_else(|| (400, invalid("cursor", "Unknown cursor"))),
+        Some(raw) => decode(raw)
+            .map(Some)
+            .ok_or_else(|| (400, invalid("cursor", "Unknown cursor"))),
     }
 }
 
 /// Route a `/dev/v1/bg3/*` GET; `None` when the path is not one of ours.
 pub fn get(src: Option<&Bg3Source>, path: &str, q: &Query) -> Option<(u16, Value)> {
     let rest = path.strip_prefix("/dev/v1/bg3/saves")?;
-    let _one_at_a_time = src.map(|_| READS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let _one_at_a_time = src.map(|_| {
+        READS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
     if src.is_some_and(|s| s.key().is_none()) {
         return Some((500, json!({ "error": "internal" })));
     }
@@ -125,7 +131,13 @@ fn saves_ep(src: &Bg3Source, q: &Query) -> Res {
         .iter()
         .filter_map(|(abs, rel)| src.open(abs, rel).map(|o| o.row))
         .collect();
-    let next = (end < files.len()).then(|| encode(&Cursor { page: page + 1, section: "saves".into(), offset: end }));
+    let next = (end < files.len()).then(|| {
+        encode(&Cursor {
+            page: page + 1,
+            section: "saves".into(),
+            offset: end,
+        })
+    });
     Ok(json!({ "saves": rows, "next": next }))
 }
 
@@ -150,9 +162,7 @@ fn structure_ep(src: &Bg3Source, save_ref: &str, q: &Query) -> Res {
         let decoded = read.as_ref().and_then(|r| r.party.get(slot));
         items.push(("party", party_row(slot, decoded)));
     }
-    let head = |types: Vec<Value>, party: Vec<Value>, next: Value| {
-        json!({ "saveRef": save_ref, "types": types, "checks": checks, "party": party, "next": next })
-    };
+    let head = |types: Vec<Value>, party: Vec<Value>, next: Value| json!({ "saveRef": save_ref, "types": types, "checks": checks, "party": party, "next": next });
     let pages = split(&items, json_len(&head(vec![], vec![], json!(WORST_NEXT))));
     let generation = digest(&checks, &items);
     let index = match want {
@@ -160,13 +170,23 @@ fn structure_ep(src: &Bg3Source, save_ref: &str, q: &Query) -> Res {
             remember(save_ref, generation);
             0
         }
-        Some(c) if same_generation(save_ref, &generation) => page_index(&pages, &items, &c).ok_or_else(not_found)?,
+        Some(c) if same_generation(save_ref, &generation) => {
+            page_index(&pages, &items, &c).ok_or_else(not_found)?
+        }
         Some(_) => return Err(not_found()),
     };
     let (start, end) = pages.get(index).copied().unwrap_or((0, 0));
     let slice = items.get(start..end).unwrap_or_default();
-    let pick = |s: &str| slice.iter().filter(|(k, _)| *k == s).map(|(_, v)| v.clone()).collect();
-    let next = pages.get(index + 1).map(|&(s, _)| encode(&cursor_at(&items, index + 2, s)));
+    let pick = |s: &str| {
+        slice
+            .iter()
+            .filter(|(k, _)| *k == s)
+            .map(|(_, v)| v.clone())
+            .collect()
+    };
+    let next = pages
+        .get(index + 1)
+        .map(|&(s, _)| encode(&cursor_at(&items, index + 2, s)));
     Ok(head(pick("types"), pick("party"), json!(next)))
 }
 
@@ -186,7 +206,13 @@ fn listing_key(src: &Bg3Source) -> String {
         h.update([root.to_string_lossy().as_bytes(), b"\0"].concat());
     }
     let d: [u8; 32] = h.finalize().into();
-    format!("saves:{}", d.iter().take(8).map(|b| format!("{b:02x}")).collect::<String>())
+    format!(
+        "saves:{}",
+        d.iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
 }
 
 /// The ordered set of save files a listing pages over.
@@ -207,19 +233,31 @@ fn remember(save_ref: &str, generation: [u8; 32]) {
 }
 
 fn same_generation(save_ref: &str, generation: &[u8; 32]) -> bool {
-    GENERATIONS.lock().unwrap_or_else(|p| p.into_inner()).get(save_ref) == Some(generation)
+    GENERATIONS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(save_ref)
+        == Some(generation)
 }
 
 /// The cursor naming item `at` as the first row of page `page`.
 fn cursor_at(items: &[(&'static str, Value)], page: usize, at: usize) -> Cursor {
     let section = items.get(at).map_or("types", |(k, _)| *k);
     let offset = items[..at].iter().filter(|(k, _)| *k == section).count();
-    Cursor { page, section: section.into(), offset }
+    Cursor {
+        page,
+        section: section.into(),
+        offset,
+    }
 }
 
 /// The page a cursor names, only if recomputing the pages lands exactly on
 /// it — a save rewritten since the first page gets 404 and restarts.
-fn page_index(pages: &[(usize, usize)], items: &[(&'static str, Value)], c: &Cursor) -> Option<usize> {
+fn page_index(
+    pages: &[(usize, usize)],
+    items: &[(&'static str, Value)],
+    c: &Cursor,
+) -> Option<usize> {
     let index = c.page.checked_sub(1)?;
     let &(start, _) = pages.get(index)?;
     (index > 0 && cursor_at(items, c.page, start) == *c).then_some(index)
@@ -234,7 +272,11 @@ fn split(items: &[(&'static str, Value)], head: usize) -> Vec<(usize, usize)> {
         let (mut used, mut end, mut types, mut party) = (head, start, 0usize, 0usize);
         while let Some((kind, v)) = items.get(end) {
             let add = json_len(v) + 1;
-            let (t, p) = if *kind == "types" { (types + 1, party) } else { (types, party + 1) };
+            let (t, p) = if *kind == "types" {
+                (types + 1, party)
+            } else {
+                (types, party + 1)
+            };
             if used + add > PAGE_MAX_BYTES || t > 512 || p > 16 {
                 break;
             }
