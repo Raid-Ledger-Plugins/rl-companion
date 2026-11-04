@@ -20,6 +20,7 @@ mod lsf_frame_tests;
 mod lsf_tests;
 mod lsf_writer;
 mod lspk_tests;
+mod newage_tests;
 mod normalise_tests;
 mod real_zstd;
 mod robustness_tests;

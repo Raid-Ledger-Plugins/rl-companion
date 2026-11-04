@@ -47,6 +47,9 @@ pub const LSF_MAGIC: [u8; 4] = *b"LSOF";
 pub const LSF_VERSION: u32 = 7;
 /// Cap on one decompressed section (spec D4).
 pub const LSF_MAX_SECTION_BYTES: u64 = 1024 * 1024;
+/// Cap on the decompressed values section when a blob attribute is read with
+/// [`read_lsf_attribute_bytes`] (`NewAge` is ~6.7 MB in a real save).
+pub const LSF_MAX_BLOB_SECTION_BYTES: u64 = 64 * 1024 * 1024;
 /// Cap on string-table entries, buckets and strings alike (spec D4).
 pub const LSF_MAX_STRINGS: usize = 65_536;
 
@@ -101,6 +104,50 @@ pub fn lsf_attribute_len(bytes: &[u8], name: &str) -> Result<Option<u64>, LsfErr
             .ok_or(LsfError::BadStringRef(name_ref))?;
         if found == name {
             return Ok(Some(u64::from(le_u32(rec, 4) >> 6)));
+        }
+    }
+    Ok(None)
+}
+
+/// The raw bytes of the first attribute called `name` (a ScratchBuffer such as
+/// `Globals.lsf` → `NewAge`). Unlike [`read_lsf_attribute`] the values section
+/// may be up to [`LSF_MAX_BLOB_SECTION_BYTES`]; strings and attribute records
+/// keep the 1 MiB cap. `Ok(None)` when no attribute has that name.
+pub fn read_lsf_attribute_bytes(bytes: &[u8], name: &str) -> Result<Option<Vec<u8>>, LsfError> {
+    let t = tables(bytes)?;
+    let Some((offset, len)) = attribute_span(&t, name)? else {
+        return Ok(None);
+    };
+    let mut at = t.values_at;
+    let mut values = section_capped(bytes, &mut at, t.values, t.flags, LSF_MAX_BLOB_SECTION_BYTES)?;
+    let end = offset.checked_add(len).filter(|&e| e <= values.len());
+    let Some(end) = end else {
+        return Err(LsfError::Decode {
+            section: "values",
+            reason: format!("{name} value {offset}+{len} is outside the values section"),
+        });
+    };
+    values.truncate(end);
+    values.drain(..offset);
+    Ok(Some(values))
+}
+
+/// `(offset, len)` of the first attribute called `name` within the values section.
+fn attribute_span(t: &Tables, name: &str) -> Result<Option<(usize, usize)>, LsfError> {
+    let record = if t.v3 { 16 } else { 12 };
+    let mut cumulative = 0usize;
+    for rec in t.attributes.chunks_exact(record) {
+        let name_ref = le_u32(rec, 0);
+        let len = (le_u32(rec, 4) >> 6) as usize;
+        let offset = if t.v3 { le_u32(rec, 12) as usize } else { cumulative };
+        cumulative = cumulative.saturating_add(len);
+        let found = t
+            .names
+            .get((name_ref >> 16) as usize)
+            .and_then(|b| b.get((name_ref & 0xFFFF) as usize))
+            .ok_or(LsfError::BadStringRef(name_ref))?;
+        if found == name {
+            return Ok(Some((offset, len)));
         }
     }
     Ok(None)
@@ -165,12 +212,23 @@ fn skip(bytes: &[u8], at: &mut usize, s: Sizes, flags: u8) -> Result<(), LsfErro
 
 /// Read and decompress one section, advancing `at` past it.
 fn section(bytes: &[u8], at: &mut usize, s: Sizes, flags: u8) -> Result<Vec<u8>, LsfError> {
+    section_capped(bytes, at, s, flags, LSF_MAX_SECTION_BYTES)
+}
+
+/// [`section`] with an explicit decompressed-size cap.
+fn section_capped(
+    bytes: &[u8],
+    at: &mut usize,
+    s: Sizes,
+    flags: u8,
+    limit: u64,
+) -> Result<Vec<u8>, LsfError> {
     let size = u64::from(s.size);
-    if size > LSF_MAX_SECTION_BYTES {
+    if size > limit {
         return Err(LsfError::SectionTooLarge {
             section: s.name,
             size,
-            limit: LSF_MAX_SECTION_BYTES,
+            limit,
         });
     }
     let raw = take(bytes, *at, disk_len(s, flags), s.name)?;
