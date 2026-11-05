@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { manifest } from "./latest-json.mjs";
 import { plan, tauriOverlay } from "./release-plan.mjs";
+import crypto from "node:crypto";
+import { parsePubkey, verify } from "./verify-sigs.mjs";
 
 test("a test tag publishes a signed build to the test channel only", () => {
   const p = plan("refs/tags/v0.1.0-test.6", "41", true);
@@ -65,4 +67,43 @@ test("latest.json refuses a release missing a platform or a signature", () => {
   const noMac = files("1.0.0");
   delete noMac["rl-companion_1.0.0_aarch64.app.tar.gz"];
   assert.throws(() => manifest({ ...args, files: noMac }), /aarch64\.app\.tar\.gz/);
+});
+
+// A throwaway minisign keypair in tauri's encoding (base64 of the text files).
+function keypair(id = Buffer.from("0123456789abcdef", "hex")) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const raw = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url");
+  const pubFile = `untrusted comment: minisign public key\n${Buffer.concat([Buffer.from("Ed"), id, raw]).toString("base64")}\n`;
+  const sign = (data, prehash = true) => {
+    const msg = prehash ? crypto.createHash("blake2b512").update(data).digest() : data;
+    const sig = crypto.sign(null, msg, privateKey);
+    const trusted = "timestamp:1793903486\tfile:x";
+    const global = crypto.sign(null, Buffer.concat([sig, Buffer.from(trusted)]), privateKey);
+    const text = `untrusted comment: signature from tauri secret key\n${Buffer.concat([Buffer.from(prehash ? "ED" : "Ed"), id, sig]).toString("base64")}\ntrusted comment: ${trusted}\n${global.toString("base64")}\n`;
+    return Buffer.from(text).toString("base64");
+  };
+  return { pubkey: Buffer.from(pubFile).toString("base64"), sign };
+}
+
+test("a release signature made with the app's key verifies (prehashed and raw)", () => {
+  const k = keypair();
+  const pub = parsePubkey(k.pubkey);
+  verify(pub, Buffer.from("installer bytes"), k.sign(Buffer.from("installer bytes")));
+  verify(pub, Buffer.from("installer bytes"), k.sign(Buffer.from("installer bytes"), false));
+});
+
+test("a signature over other bytes, or by another key, is refused", () => {
+  const k = keypair();
+  const pub = parsePubkey(k.pubkey);
+  assert.throws(() => verify(pub, Buffer.from("tampered"), k.sign(Buffer.from("original"))), /does not match/);
+  const other = keypair(Buffer.from("fedcba9876543210", "hex"));
+  assert.throws(() => verify(pub, Buffer.from("x"), other.sign(Buffer.from("x"))), /different key/);
+  const sameId = keypair();
+  assert.throws(() => verify(pub, Buffer.from("x"), sameId.sign(Buffer.from("x"))), /does not match/);
+});
+
+test("the app's committed public key parses", async () => {
+  const { readFileSync } = await import("node:fs");
+  const conf = JSON.parse(readFileSync(new URL("../../apps/companion/src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  assert.equal(parsePubkey(conf.plugins.updater.pubkey).id.length, 8);
 });

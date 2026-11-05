@@ -164,6 +164,10 @@ jobs:
           node scripts/release/release-plan.mjs "$GITHUB_REF" "$GITHUB_RUN_NUMBER" \
             "${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}" /tmp/release.conf.json \
             | tee -a "$GITHUB_OUTPUT"
+      # Refuse to publish an update the installed copies would reject.
+      - name: Verify signatures against the app's public key
+        if: steps.plan.outputs.sign == 'true'
+        run: node scripts/release/verify-sigs.mjs apps/companion/src-tauri/tauri.conf.json dist
       - name: Write latest.json
         if: steps.plan.outputs.sign == 'true'
         run: |
