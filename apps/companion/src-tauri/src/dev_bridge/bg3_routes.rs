@@ -143,8 +143,8 @@ fn saves_ep(src: &Bg3Source, q: &Query) -> Res {
 
 fn structure_ep(src: &Bg3Source, save_ref: &str, q: &Query) -> Res {
     let want = cursor_arg(q)?;
-    let (abs, _) = src.find(save_ref).ok_or_else(not_found)?;
-    let opened = src.open_structure(&abs).ok_or_else(not_found)?;
+    let (abs, rel) = src.find(save_ref).ok_or_else(not_found)?;
+    let opened = src.open_structure(&abs, &rel).ok_or_else(not_found)?;
     let outcome = match &opened.globals {
         Some(g) => src.decoder.read(g, opened.party_size),
         None => NewAgeOutcome::NotDecoded,
@@ -160,7 +160,8 @@ fn structure_ep(src: &Bg3Source, save_ref: &str, q: &Query) -> Res {
     }
     for slot in 0..opened.party_size.min(16) {
         let decoded = read.as_ref().and_then(|r| r.party.get(slot));
-        items.push(("party", party_row(slot, decoded)));
+        let key = opened.campaign_key.as_deref();
+        items.push(("party", party_row(slot, decoded, key)));
     }
     let head = |types: Vec<Value>, party: Vec<Value>, next: Value| json!({ "saveRef": save_ref, "types": types, "checks": checks, "party": party, "next": next });
     let pages = split(&items, json_len(&head(vec![], vec![], json!(WORST_NEXT))));

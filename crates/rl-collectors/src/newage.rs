@@ -30,7 +30,8 @@
 //! allocation is bounded by the blob length (owner maps: one per component,
 //! `count ≤ entities`, `Σ count ≤ blob / 4`, reserved fallibly), and nothing
 //! panics. Entity GUIDs
-//! are counted, never kept.
+//! are counted, never kept; [`Lsmf::entity_guid`] reads one on demand
+//! (ROK-2079 OQ-4 hashes it into a character key — it never leaves the PC).
 
 use std::fmt;
 
@@ -71,6 +72,7 @@ pub struct Lsmf<'a> {
     data: &'a [u8],
     components: Vec<LsmfComponent>,
     entity_count: u64,
+    entities_start: u64,
 }
 
 fn rd(data: &[u8], offset: u64, len: u64) -> Result<&[u8], LsmfError> {
@@ -139,6 +141,7 @@ impl<'a> Lsmf<'a> {
             data,
             components,
             entity_count,
+            entities_start: u64_at(level, 0),
         };
         me.owner_maps(u64_at(level, 16), u64_at(level, 24))?;
         Ok(me)
@@ -211,6 +214,18 @@ impl<'a> Lsmf<'a> {
 
     pub fn entity_count(&self) -> u64 {
         self.entity_count
+    }
+
+    /// The raw 16 bytes of entity `index`'s GUID as stored (no byte-order
+    /// conversion), read on demand and never kept; `None` past the table.
+    pub fn entity_guid(&self, index: u32) -> Option<[u8; 16]> {
+        if u64::from(index) >= self.entity_count {
+            return None;
+        }
+        let at = u64::from(index)
+            .checked_mul(16)?
+            .checked_add(self.entities_start)?;
+        <[u8; 16]>::try_from(rd(self.data, at, 16).ok()?).ok()
     }
 
     pub fn component(&self, name: &str) -> Option<&LsmfComponent> {

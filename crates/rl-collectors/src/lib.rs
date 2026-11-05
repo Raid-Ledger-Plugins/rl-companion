@@ -48,7 +48,7 @@ pub use extract::{
 pub use lsf::{
     LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION,
     LZ4_FRAME_MAX_BLOCKS, lsf_attribute_len, lsf_parsed_version, lsf_version, read_lsf_attribute,
-    read_lsf_attribute_bytes,
+    read_lsf_attribute_bytes, uuid_display,
 };
 pub use lspk::{
     CompressionMethod, DEFAULT_MAX_ENTRY_BYTES, Entry, LSPK_VERSION, MAX_FILES, Package, read_lspk,

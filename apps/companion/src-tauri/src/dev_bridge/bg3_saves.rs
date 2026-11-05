@@ -38,6 +38,8 @@ pub struct Opened {
     pub row: Value,
     pub globals: Option<Vec<u8>>,
     pub party_size: usize,
+    /// The save's 64-hex campaign key; set by the structure read only.
+    pub campaign_key: Option<String>,
 }
 
 /// RFC 2104 HMAC-SHA256 (sha2 only; no extra dependency).
@@ -249,6 +251,7 @@ impl Bg3Source {
                 row,
                 globals,
                 party_size: party.0.unwrap_or(0),
+                campaign_key: None,
             }
         })
     }
@@ -256,8 +259,10 @@ impl Bg3Source {
     /// Open one save for the structure read: `Globals.lsf` and the party
     /// size only, with no listing row, so `NewAge` is decompressed ONCE (by
     /// the decoder's `read`) per request.
-    pub fn open_structure(&self, abs: &Path) -> Option<Opened> {
+    pub fn open_structure(&self, abs: &Path, rel: &str) -> Option<Opened> {
         self.with_package(abs, |package, _| {
+            let folder = rel.split('/').next().unwrap_or_default();
+            let (campaign_key, _) = campaign_key_from_package(package, folder);
             let info = extract_save_info(package).ok();
             let party = party_counts(info.as_ref());
             let globals = read_limited(package, GLOBALS_LSF_NAME, GLOBALS_MAX_BYTES);
@@ -265,6 +270,7 @@ impl Bg3Source {
                 row: Value::Null,
                 globals,
                 party_size: party.0.unwrap_or(0),
+                campaign_key: Some(campaign_key),
             }
         })
     }

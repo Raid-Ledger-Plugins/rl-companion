@@ -406,3 +406,43 @@ fn a_pinned_version_mismatch_is_unsupported_at_the_same_size() {
         DecoderStatus::Ok
     );
 }
+
+/// ROK-2079 OQ-4: the proven solo slot carries `characterKeyPrefix` (the
+/// synthetic entity GUIDs are all `0x11` bytes); the GUID itself never does.
+#[test]
+fn a_solo_party_slot_carries_a_character_key_prefix_but_never_the_guid() {
+    let (src, r) = source_full(
+        "bg3-newage-charkey",
+        SOLO_INFO,
+        globals_lsf(&party_blob_of(36, 1)),
+    );
+    let body = structure(&src, &r);
+    let prefix = body["party"][0]["characterKeyPrefix"]
+        .as_str()
+        .expect("a proven slot with a GUID has a prefix");
+    assert!(
+        prefix.len() == 8
+            && prefix
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+        "{prefix}"
+    );
+    let text = body.to_string();
+    assert!(
+        !text.contains("11111111-1111-1111-1111-111111111111"),
+        "{text}"
+    );
+    assert!(!text.contains(&"1".repeat(32)), "{text}");
+}
+
+/// An unproven multi-member party names no slot, so no slot gets a prefix.
+#[test]
+fn an_unproven_party_has_no_character_key_prefix() {
+    let (src, r) = source("bg3-newage-charkey-5", &party_blob(36));
+    let body = structure(&src, &r);
+    let rows = body["party"].as_array().expect("party");
+    assert!(
+        rows.iter().all(|p| p.get("characterKeyPrefix").is_none()),
+        "{rows:?}"
+    );
+}

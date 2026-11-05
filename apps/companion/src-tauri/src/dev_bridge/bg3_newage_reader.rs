@@ -27,6 +27,7 @@
 //! order is proven (or the contract says `decoded` is in entity order). Class levels and equipment need game
 //! data / the LSF `Items` tree and stay undecoded (`decoder: none`).
 
+use super::bg3_character_key::EntityGuid;
 use super::bg3_newage::{
     Checks, DecoderStatus, NewAgeDecoder, NewAgeOutcome, NewAgeRead, PartyDecoded, Readability,
     TypeRow,
@@ -162,7 +163,7 @@ fn find<'a>(rows: &[(u32, &'a [u8])], entity: u32) -> Option<&'a [u8]> {
         .map(|i| rows[i].1)
 }
 
-fn member(stats: Option<&[u8]>, health: Option<&[u8]>) -> PartyDecoded {
+fn member(stats: Option<&[u8]>, health: Option<&[u8]>, guid: Option<[u8; 16]>) -> PartyDecoded {
     let abilities = stats.and_then(|s| {
         let v: Vec<u32> = (0..6).filter_map(|k| u32_at(s, 8 + k * 4)).collect();
         <[u32; 6]>::try_from(v).ok()
@@ -173,6 +174,7 @@ fn member(stats: Option<&[u8]>, health: Option<&[u8]>) -> PartyDecoded {
         max_hp: health.and_then(|h| u32_at(h, 4)),
         class_levels: None,
         equipment: None,
+        entity_guid: guid.map(EntityGuid),
     }
 }
 
@@ -208,7 +210,7 @@ fn decode(l: &Lsmf, bytes: &[u8], party_size: usize) -> NewAgeRead {
     let members = if proven {
         party
             .iter()
-            .map(|&e| member(find(&stats, e), find(&health, e)))
+            .map(|&e| member(find(&stats, e), find(&health, e), l.entity_guid(e)))
             .collect()
     } else {
         Vec::new()

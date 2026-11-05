@@ -7,6 +7,7 @@
 //! contract's redaction (drop, never rewrite), so a decoder cannot leak by
 //! shape. It must still emit only values it read from game data.
 
+use super::bg3_character_key::{character_key_prefix, EntityGuid};
 use super::bg3_redact::{class_id, equipment_slot, stats_id, type_name};
 use serde_json::{json, Map, Value};
 
@@ -59,6 +60,9 @@ pub struct PartyDecoded {
     pub class_levels: Option<Vec<ClassLevel>>,
     /// `(ItemSlot name, stats id)`.
     pub equipment: Option<Vec<(String, String)>>,
+    /// The member's entity GUID (ROK-2079 OQ-4). Only its hash prefix is
+    /// ever sent; `None` = the GUID could not be read.
+    pub entity_guid: Option<EntityGuid>,
 }
 
 /// What one save's NewAge read produced.
@@ -203,7 +207,16 @@ fn equipment(items: &[(String, String)]) -> Vec<Value> {
 }
 
 /// One `party[]` row; `decoded` is `{}` when nothing was decoded for it.
-pub fn party_row(slot: usize, d: Option<&PartyDecoded>) -> Value {
+/// `characterKeyPrefix` is present only when both the member's entity GUID
+/// and the save's 64-hex `campaign_key` are known; the GUID never is.
+pub fn party_row(slot: usize, d: Option<&PartyDecoded>, campaign_key: Option<&str>) -> Value {
     let decoded = d.map_or_else(|| json!({}), decoded_json);
-    json!({ "slot": slot, "decoded": decoded })
+    let mut row = json!({ "slot": slot, "decoded": decoded });
+    let prefix = d
+        .and_then(|d| d.entity_guid.as_ref())
+        .and_then(|g| character_key_prefix(campaign_key, g));
+    if let Some(p) = prefix {
+        row["characterKeyPrefix"] = Value::String(p);
+    }
+    row
 }
