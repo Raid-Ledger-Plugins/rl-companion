@@ -109,7 +109,8 @@ fn tag_end(b: &[u8], i: usize, start: usize) -> Result<Option<(bool, usize)>, Ca
     }
 }
 
-/// One `key="value"` at `i`; returns the index just past it.
+/// One `key="value"` (or `key = 'value'`; XML whitespace is allowed around
+/// `=`) at `i`; returns the index just past it.
 fn read_attr<'a>(
     text: &'a str,
     i: usize,
@@ -118,11 +119,13 @@ fn read_attr<'a>(
     let b = text.as_bytes();
     let key_end = scan_name(b, i);
     let key = &text[i..key_end];
-    let quote = match (key.is_empty(), b.get(key_end), b.get(key_end + 1)) {
+    let eq = skip_xml_ws(b, key_end);
+    let open = skip_xml_ws(b, eq + 1);
+    let quote = match (key.is_empty(), b.get(eq), b.get(open)) {
         (false, Some(b'='), Some(&q)) if q == b'"' || q == b'\'' => q,
         _ => return Err(parse_err(i, "malformed tag attribute")),
     };
-    let v_start = key_end + 2;
+    let v_start = open + 1;
     let v_len = text[v_start..]
         .find(char::from(quote))
         .ok_or_else(|| parse_err(i, "unterminated attribute value"))?;
@@ -138,6 +141,18 @@ fn read_attr<'a>(
         _ => {}
     }
     Ok(v_start + v_len + 1)
+}
+
+/// The first index at or after `i` that is not XML whitespace
+/// (space, tab, CR, LF).
+fn skip_xml_ws(b: &[u8], mut i: usize) -> usize {
+    while b
+        .get(i)
+        .is_some_and(|c| matches!(c, b' ' | b'\t' | b'\r' | b'\n'))
+    {
+        i += 1;
+    }
+    i
 }
 
 pub(super) fn scan_name(b: &[u8], mut i: usize) -> usize {

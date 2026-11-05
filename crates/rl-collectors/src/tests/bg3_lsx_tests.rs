@@ -286,3 +286,27 @@ rl_test! {
         assert!(read_lsx_nodes(&doc(LSX_MAX_RETAINED_BYTES), "Other").unwrap().is_empty());
     }
 }
+
+rl_test! {
+    fn lsx_whitespace_around_equals_and_both_quote_styles_are_accepted() {
+        let doc = "<node id = \"Origin\">\
+                   <attribute id\t=\t'Name' type =\r\n\"FixedString\" value=\n'Spaced'/>\
+                   <attribute id=\"Plain\" value =  \"p\" />\
+                   </node>";
+        let nodes = read_lsx_nodes(doc, "Origin").unwrap();
+        assert_eq!(nodes.len(), 1, "{nodes:?}");
+        assert_eq!(nodes[0].attr("Name").and_then(|a| a.value.as_deref()), Some("Spaced"));
+        assert_eq!(nodes[0].attr("Plain").and_then(|a| a.value.as_deref()), Some("p"));
+        for bad in ["<node id = >", "<node id \"x\">", "<node = \"x\">", "<node id =\u{c}\"x\">"] {
+            assert_eq!(parse_reason(read_lsx_nodes(bad, "N")), "malformed tag attribute", "doc {bad:?}");
+        }
+    }
+}
+
+rl_test! {
+    fn lsx_tag_attribute_cap_holds_with_spaced_attributes() {
+        let spaced = |n| tag_with("node", n).replace("=\"", " =\n\t\"");
+        assert_eq!(read_lsx_nodes(&spaced(LSX_MAX_TAG_ATTRS), "T").unwrap().len(), 1);
+        assert_eq!(read_lsx_nodes(&spaced(LSX_MAX_TAG_ATTRS + 1), "T"), tag_cap_err());
+    }
+}
