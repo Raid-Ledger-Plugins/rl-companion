@@ -1,7 +1,8 @@
 //! `GET /dev/v1/ledgerlink/sv` (`$defs/sv-raw`) and `/sv/parsed`
 //! (`$defs/sv-parsed`). Reads only
 //! `<flavor>/WTF/Account/*/(*/*/)SavedVariables/LedgerLink.lua` (§7); every
-//! path in a body is relative to the WoW folder.
+//! path in a body is relative to the WoW folder. The `*_named` variants serve
+//! `/dev/v1/addons/<folder>/sv` for the fixed allowlist in `addon_sv`.
 
 use super::paging::{clip, json_len, text_slice, wrap_next, PAGE_MAX_BYTES};
 use super::token::sha256_hex;
@@ -12,7 +13,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-const SV_FILE: &str = "LedgerLink.lua";
+/// LedgerLink's SavedVariables file (`/dev/v1/ledgerlink/sv`).
+pub const SV_FILE: &str = "LedgerLink.lua";
 /// `sv-raw.text` maxLength (chars).
 const RAW_TEXT_MAX_CHARS: usize = 12_288;
 const MAX_OUTBOX: usize = 40;
@@ -49,6 +51,12 @@ fn dirs(p: &Path) -> Vec<String> {
 
 /// Every LedgerLink SavedVariables file of `flavor`, account files first.
 pub fn sv_files(wow_dir: &Path, flavor: &str) -> Vec<SvFile> {
+    sv_files_named(wow_dir, flavor, SV_FILE)
+}
+
+/// Every `SavedVariables/<file>` of `flavor`, account files first. `file` is
+/// a constant (`LedgerLink.lua` or an allowlisted addon's), never caller input.
+pub fn sv_files_named(wow_dir: &Path, flavor: &str, file: &str) -> Vec<SvFile> {
     let accounts = wow_dir.join(flavor).join("WTF").join("Account");
     let mut out = Vec::new();
     for acct in dirs(&accounts) {
@@ -58,9 +66,9 @@ pub fn sv_files(wow_dir: &Path, flavor: &str) -> Vec<SvFile> {
                 (Some(r), Some(c)) => format!("/{r}/{c}"),
                 _ => String::new(),
             };
-            let rel = format!("{base}{mid}/SavedVariables/{SV_FILE}");
+            let rel = format!("{base}{mid}/SavedVariables/{file}");
             let abs = wow_dir.join(&rel);
-            // `symlink_metadata`: a symlinked `LedgerLink.lua` is not followed (§7).
+            // `symlink_metadata`: a symlinked SV file is not followed (§7).
             let plain_file = std::fs::symlink_metadata(&abs).is_ok_and(|m| m.file_type().is_file());
             if plain_file && rel.chars().count() <= 512 {
                 out.push(SvFile {
@@ -154,14 +162,16 @@ fn read_capped(p: &Path) -> Option<Vec<u8>> {
 /// The newest file of `scope`, one text page from the cursor's offset. A
 /// cursor carries the file's length + mtime, so a file rewritten mid-paging
 /// is refused instead of splicing two versions together.
-pub fn raw(
+/// `sv_file` is [`SV_FILE`] or an allowlisted addon's file, never caller input.
+pub fn raw_named(
     wow_dir: &Path,
     flavor: &str,
+    sv_file: &str,
     scope: &str,
     cursor: Option<&str>,
 ) -> Result<Value, RawError> {
     let parsed = parse_raw_cursor(cursor)?;
-    let file = sv_files(wow_dir, flavor)
+    let file = sv_files_named(wow_dir, flavor, sv_file)
         .into_iter()
         .filter(|f| f.scope == scope)
         .max_by_key(|f| mtime(&f.abs).1)
