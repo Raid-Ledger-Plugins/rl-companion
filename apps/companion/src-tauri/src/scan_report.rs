@@ -3,8 +3,9 @@
 //! the server last accepted an upload from it. The accepted-upload time is
 //! persisted next to `sent-state.json`, so a restart does not blank it.
 //!
-//! Also the bridge-safe form of an Activity line ([`bridge_line`]), mirrored
-//! into the dev-bridge log ring.
+//! Also the bridge-safe form of an Activity line ([`scrub_paths`], [`note_body`]), mirrored
+//! into the dev-bridge log ring: no subject (a character, account, save or
+//! campaign name) and no absolute path.
 
 use crate::collector::{PendingUpload, SentState};
 use regex::Regex;
@@ -44,7 +45,10 @@ impl UploadTimes {
         }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, json)?;
+        let mut file = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut file, json.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
         std::fs::rename(&tmp, path)
     }
 }
@@ -107,32 +111,52 @@ impl ScanBook {
 pub fn unsettled(sent: &SentState, pending: &[PendingUpload]) -> usize {
     pending
         .iter()
-        .filter(|p| sent.scope(&p.scope).get(&p.item) != Some(&p.sha256))
+        .filter(|p| sent.0.get(&p.scope).and_then(|m| m.get(&p.item)) != Some(&p.sha256))
         .count()
 }
 
 fn abs_path() -> &'static Regex {
     static P: OnceLock<Regex> = OnceLock::new();
-    // A drive-letter or UNC path, or a rooted Unix path of 2+ segments, that
-    // starts a word. It runs to the last non-space before `(`, a quote or the
-    // line end, so a folder with spaces (`World of Warcraft`) goes too.
+    // Where an absolute path starts: a drive (`C:\`, `C:/`), UNC or verbatim
+    // (`\\host\share`, `\\?\C:\`), home (`~/`), or a rooted Unix path.
+    const HEAD: &str = r#"(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/[^\s\\/"'()\[\]{},;])"#;
+    // Quoted (`"D:\Program Files (x86)\x"`, notify's `about ["…"]`, Rust's
+    // `{:?}`): everything up to the closing quote is the path.
+    const QUOTED: &str = r#"(?P<dq>")HEAD[^"\r\n]*|(?P<sq>')HEAD[^'\r\n]*"#;
+    // Bare: after a word break, every segment that a separator follows may
+    // hold spaces and parentheses (`World of Warcraft\`, `Program Files
+    // (x86)\`); the last one runs to the next space, so ` (denied)` stays.
+    const BARE: &str = r#"(?P<b>^|[\s(\[{=,;])HEAD(?:[^\\/"'\r\n]*[\\/])*[^\s\\/"'()\[\]{},;]*"#;
     P.get_or_init(|| {
-        let tail = r#"(?:[^()"'\r\n]*[^\s()"'])?"#;
-        let head = r#"(^|[\s(])((?:[A-Za-z]:[\\/]|\\\\|/[^\s()"'/]+/)"#;
-        Regex::new(&format!("{head}{tail})")).unwrap_or_else(|_| unreachable!("static pattern"))
+        let pattern = format!("{QUOTED}|{BARE}").replace("HEAD", HEAD);
+        Regex::new(&pattern).unwrap_or_else(|_| unreachable!("static pattern"))
     })
 }
 
-/// An Activity line as the dev bridge may store it. A collector line's
-/// `<subject>: ` prefix is a character, account, save or campaign name
-/// (`Thrall: Uploaded`), so it is dropped; any absolute path becomes
-/// `<path>`. The ring then applies its own redaction (tokens, GUIDs, homes).
-pub fn bridge_line(collector_id: Option<&str>, text: &str) -> String {
-    let body = match (collector_id, text.split_once(": ")) {
-        (Some(_), Some((_, rest))) => rest,
-        _ => text,
-    };
-    abs_path().replace_all(body, "$1<path>").into_owned()
+/// `text` with every absolute path replaced by `<path>`, to the end of the
+/// path (a quoted path to its closing quote): an Activity line as the dev
+/// bridge may store it, once the caller has left its subject out. The ring
+/// then applies its own redaction (tokens, GUIDs, homes).
+pub fn scrub_paths(text: &str) -> String {
+    abs_path()
+        .replace_all(text, |c: &regex::Captures<'_>| {
+            let lead = ["dq", "sq", "b"]
+                .iter()
+                .find_map(|g| c.name(g))
+                .map_or("", |m| m.as_str());
+            format!("{lead}<path>")
+        })
+        .into_owned()
+}
+
+/// A collector scan note's text without its `<account or file>: ` prefix.
+/// Notes are built as `"{subject}: {text}"` from a WoW account folder or a
+/// save file's name; neither can hold `": "` on Windows, so the first one ends
+/// the subject. (Names typed by the player — save or campaign names — never
+/// go through here: their callers pass the subject apart, see
+/// `Runtime::log_about`.)
+pub fn note_body(note: &str) -> &str {
+    note.split_once(": ").map_or(note, |(_, rest)| rest)
 }
 
 /// The ring's `target` for an Activity line.

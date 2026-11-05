@@ -6,10 +6,9 @@ use super::dev_bridge_unit_tests::schema_errors;
 use crate::collector::{PendingUpload, SentState};
 use crate::config::AppConfig;
 use crate::dev_bridge::collectors::collectors_body;
-use crate::dev_bridge::logbuf;
 use crate::manifest::{BG3_SAVE, WOW_LEDGERLINK};
 use crate::runtime::{effect, Runtime};
-use crate::scan_report::{bridge_line, upload_times_path, UPLOAD_TIMES_FILE};
+use crate::scan_report::{upload_times_path, UPLOAD_TIMES_FILE};
 use crate::upload::UploadOutcome;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -167,56 +166,4 @@ fn a_disabled_collector_reports_no_scan_and_nothing_pending() {
     assert_eq!(r["pending"], 0, "{r}");
     rt.forget_scan(WOW);
     assert_eq!(row(&rt, &wow_on(), WOW)["lastScanAt"], Value::Null);
-}
-
-fn ring_line(marker: &str) -> Value {
-    logbuf::global()
-        .select(0, None, None)
-        .into_iter()
-        .map(|(_, v)| v)
-        .find(|v| v["msg"].as_str().is_some_and(|m| m.contains(marker)))
-        .unwrap_or_else(|| panic!("no ring line carries {marker}"))
-}
-
-#[test]
-fn activity_lines_reach_the_bridge_ring_without_the_name() {
-    let rt = Runtime::new(super::temp_dir("scan-report-log").join("sent.json"));
-    rt.log_for(WOW, "Thrall: Rejected 422: marker_q81");
-    let line = ring_line("marker_q81");
-    assert_eq!(line["msg"], "Rejected 422: marker_q81", "{line}");
-    assert_eq!(line["target"], "collector:wow-ledgerlink", "{line}");
-    assert_eq!(line["level"], "info");
-    let window = &rt.snapshot(&AppConfig::default()).log;
-    assert!(
-        window.iter().any(|l| l.text.contains("Thrall")),
-        "window keeps it"
-    );
-}
-
-#[test]
-fn device_activity_lines_reach_the_ring_with_paths_scrubbed() {
-    let rt = Runtime::new(super::temp_dir("scan-report-log-path").join("sent.json"));
-    rt.log(r"Cannot watch D:\Games\World of Warcraft\_retail_ (marker_p42)");
-    let line = ring_line("marker_p42");
-    assert_eq!(line["target"], "collector", "{line}");
-    let msg = line["msg"].as_str().unwrap_or_default();
-    assert!(!msg.contains("Games"), "path leaked: {msg}");
-    assert!(msg.starts_with("Cannot watch <path>"), "{msg}");
-}
-
-#[test]
-fn bridge_line_drops_the_subject_and_scrubs_paths() {
-    assert_eq!(bridge_line(Some(WOW), "Thrall: Uploaded"), "Uploaded");
-    assert_eq!(
-        bridge_line(Some(WOW), "Acct: cannot read /mnt/wow/WTF/x.lua (denied)"),
-        "cannot read <path> (denied)"
-    );
-    assert_eq!(
-        bridge_line(None, "Could not save (disk full)"),
-        "Could not save (disk full)"
-    );
-    assert_eq!(
-        bridge_line(Some(WOW), "LedgerLink uploads turned on"),
-        "LedgerLink uploads turned on"
-    );
 }

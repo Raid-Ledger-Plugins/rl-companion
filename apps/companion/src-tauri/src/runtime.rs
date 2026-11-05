@@ -224,18 +224,47 @@ impl Runtime {
 
     /// A device-level activity line.
     pub fn log(&self, text: impl Into<String>) {
-        self.push_log(None, text.into());
+        self.push_log(None, None, text.into());
     }
 
-    /// An activity line about one collector (D12).
+    /// An activity line about one collector (D12) that names no one: the dev
+    /// bridge gets all of it (paths scrubbed).
     pub fn log_for(&self, collector_id: &str, text: impl Into<String>) {
-        self.push_log(Some(collector_id.to_owned()), text.into());
+        self.push_log(Some(collector_id.to_owned()), None, text.into());
     }
 
-    fn push_log(&self, collector_id: Option<String>, text: String) {
-        let id = collector_id.as_deref();
-        let line = scan_report::bridge_line(id, &text);
-        crate::dev_bridge::logbuf::log("info", &scan_report::bridge_target(id), &line);
+    /// `subject: text` about one collector, where `subject` is a character,
+    /// save or campaign name. The window shows both; the dev bridge only
+    /// `text`, so a name holding `": "` cannot leak its tail.
+    pub fn log_about(&self, collector_id: &str, subject: &str, text: impl Into<String>) {
+        self.push_log(Some(collector_id.to_owned()), Some(subject), text.into());
+    }
+
+    /// One of a collector's scan notes (`"<account or file>: …"`).
+    pub fn log_note(&self, collector_id: &str, note: &str) {
+        let body = scan_report::note_body(note);
+        let line = scan_report::scrub_paths(body);
+        self.mirror(Some(collector_id), &line);
+        self.keep_log(Some(collector_id.to_owned()), note.to_owned());
+    }
+
+    fn push_log(&self, collector_id: Option<String>, subject: Option<&str>, body: String) {
+        self.mirror(collector_id.as_deref(), &scan_report::scrub_paths(&body));
+        let text = match subject {
+            Some(s) => format!("{s}: {body}"),
+            None => body,
+        };
+        self.keep_log(collector_id, text);
+    }
+
+    /// Into the LAN dev-bridge log ring (already subject-free and scrubbed).
+    fn mirror(&self, collector_id: Option<&str>, line: &str) {
+        let target = scan_report::bridge_target(collector_id);
+        crate::dev_bridge::logbuf::log("info", &target, line);
+    }
+
+    /// Into the window's Activity log.
+    fn keep_log(&self, collector_id: Option<String>, text: String) {
         let mut inner = self.lock();
         inner.log.push_front(LogLine {
             at: now(),
@@ -680,7 +709,7 @@ async fn gate_and_upload(
 ) -> (String, bool) {
     scan.notes
         .iter()
-        .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
+        .for_each(|n| rt.log_note(entry.manifest.id, n));
     // A held screenshot batch's preview image is downscaled off the runtime.
     crate::screenshot_preview::attach(scan).await;
     let waiting = scan.pending.len();
@@ -756,7 +785,7 @@ async fn upload_all(
                     &ready
                 }
                 Err(line) => {
-                    rt.log_for(p.contract, format!("{}: {line}", p.label));
+                    rt.log_about(p.contract, &p.label, line);
                     continue;
                 }
             }
@@ -769,7 +798,7 @@ async fn upload_all(
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         let fx = effect(&outcome);
-        rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));
+        rt.log_about(p.contract, &p.label, fx.text.as_str());
         if is_unknown_contract(&outcome) {
             rt.deferred_unknown_contract();
         }
