@@ -227,3 +227,28 @@ fn the_updater_installs_passively_and_ordinary_builds_need_no_signing_key() {
     // release.yml turns updater artifacts on.
     assert_ne!(c["bundle"]["createUpdaterArtifacts"], json!(true));
 }
+
+#[test]
+fn the_updater_trusts_a_real_minisign_public_key() {
+    // tauri's pubkey is base64 of a minisign public-key file: an
+    // "untrusted comment" line, then the key ("RW" + base64 of Ed + key id + 32 bytes).
+    use base64::Engine;
+    let c = conf();
+    let pubkey = c["plugins"]["updater"]["pubkey"]
+        .as_str()
+        .expect("pubkey string");
+    assert!(!pubkey.is_empty(), "plugins.updater.pubkey must be set");
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(pubkey)
+        .expect("pubkey is base64");
+    let text = String::from_utf8(raw).expect("utf-8");
+    let mut lines = text.lines();
+    assert!(lines
+        .next()
+        .is_some_and(|l| l.starts_with("untrusted comment:")));
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(lines.next().expect("key line").trim())
+        .expect("key is base64");
+    assert_eq!(key.len(), 42, "Ed25519 minisign public key");
+    assert_eq!(&key[..2], b"Ed");
+}
