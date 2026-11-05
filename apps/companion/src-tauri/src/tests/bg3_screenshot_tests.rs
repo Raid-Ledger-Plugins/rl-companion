@@ -170,6 +170,7 @@ fn no_hub_picked_holds_screenshots_back() {
     let scan = c.scan(ORIGIN, &SentState::default());
     assert!(scan.pending.is_empty(), "nothing uploads without a hub");
     assert_eq!(c.waiting(), 1);
+    assert_eq!(scan.waiting, 1, "the scan carries the hub-waiting count");
     assert!(scan.pending.iter().all(needs_encode), "nothing is encoded");
     assert!(
         scan.notes.iter().any(|n| n.contains("pick a hub")),

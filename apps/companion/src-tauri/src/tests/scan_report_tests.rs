@@ -58,7 +58,7 @@ fn a_scan_stamps_last_scan_at_and_counts_what_it_left_unsettled() {
     let rt = Runtime::new(super::temp_dir("scan-report-scan").join("sent.json"));
     let before = row(&rt, &wow_on(), WOW);
     assert_eq!(before["lastScanAt"], Value::Null, "no scan yet: {before}");
-    rt.scanned(WOW, &[item(WOW, "g1", "aa"), item(WOW, "g2", "bb")]);
+    rt.scanned(WOW, &[item(WOW, "g1", "aa"), item(WOW, "g2", "bb")], 0);
     let after = row(&rt, &wow_on(), WOW);
     assert!(after["lastScanAt"].is_string(), "scan not stamped: {after}");
     assert_eq!(after["pending"], 2, "two unsent exports: {after}");
@@ -67,7 +67,7 @@ fn a_scan_stamps_last_scan_at_and_counts_what_it_left_unsettled() {
 #[test]
 fn a_nothing_new_scan_still_stamps_with_zero_pending() {
     let rt = Runtime::new(super::temp_dir("scan-report-empty").join("sent.json"));
-    rt.scanned(WOW, &[]);
+    rt.scanned(WOW, &[], 0);
     let r = row(&rt, &wow_on(), WOW);
     assert!(
         r["lastScanAt"].is_string(),
@@ -81,7 +81,7 @@ fn pending_drops_what_the_server_settled() {
     let rt = Runtime::new(super::temp_dir("scan-report-settled").join("sent.json"));
     let (sent, left) = (item(WOW, "g1", "aa"), item(WOW, "g2", "bb"));
     rt.finish(&sent, &accepted());
-    rt.scanned(WOW, &[sent, left]);
+    rt.scanned(WOW, &[sent, left], 0);
     let r = row(&rt, &wow_on(), WOW);
     assert_eq!(r["pending"], 1, "only g2 is still queued: {r}");
     assert!(
@@ -135,7 +135,7 @@ fn an_old_sent_state_without_upload_times_still_loads() {
     let rt = Runtime::new(sent_path.clone());
     let r = row(&rt, &wow_on(), WOW);
     assert_eq!(r["lastUploadAt"], Value::Null, "{r}");
-    rt.scanned(WOW, &[item(WOW, "g1", "aa")]);
+    rt.scanned(WOW, &[item(WOW, "g1", "aa")], 0);
     assert_eq!(row(&rt, &wow_on(), WOW)["pending"], 0, "dedupe kept");
     assert_eq!(
         rt.sent(),
@@ -155,7 +155,7 @@ fn a_disabled_collector_reports_no_scan_and_nothing_pending() {
     let rt = Runtime::new(super::temp_dir("scan-report-off").join("sent.json"));
     // bg3-save is opt-in (off by default); a scan recorded before the switch
     // flipped must not show through.
-    rt.scanned(BG3_SAVE.id, &[item(BG3_SAVE.id, "save", "aa")]);
+    rt.scanned(BG3_SAVE.id, &[item(BG3_SAVE.id, "save", "aa")], 0);
     let r = row(&rt, &AppConfig::default(), BG3_SAVE.id);
     assert_eq!(r["enabled"], false, "{r}");
     assert_eq!(

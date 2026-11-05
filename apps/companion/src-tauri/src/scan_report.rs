@@ -7,7 +7,9 @@
 //! into the dev-bridge log ring: no subject (a character, account, save or
 //! campaign name) and no absolute path.
 
-use crate::collector::{PendingUpload, SentState};
+use crate::collector::{PendingUpload, Scan, SentState};
+use crate::registry::Entry;
+use crate::runtime::Runtime;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -103,6 +105,37 @@ impl ScanBook {
             (id.clone(), report)
         })
         .collect()
+    }
+}
+
+/// One enabled collector's pass over a fresh scan. Dropping it stamps the
+/// scan ([`Runtime::scanned`]) with what the pass left unsettled, so no return
+/// path of the upload can skip the stamp.
+pub struct ScanPass<'a> {
+    rt: &'a Runtime,
+    id: &'static str,
+    pub scan: Scan,
+}
+
+impl<'a> ScanPass<'a> {
+    /// Read `entry`; `None` (and its last scan forgotten) when it is off.
+    pub fn begin(rt: &'a Runtime, entry: &Entry, origin: &str) -> Option<Self> {
+        let Some(scan) = entry.scan(origin, &rt.sent()) else {
+            rt.forget_scan(entry.manifest.id);
+            return None;
+        };
+        Some(Self {
+            rt,
+            id: entry.manifest.id,
+            scan,
+        })
+    }
+}
+
+impl Drop for ScanPass<'_> {
+    fn drop(&mut self) {
+        self.rt
+            .scanned(self.id, &self.scan.pending, self.scan.waiting);
     }
 }
 

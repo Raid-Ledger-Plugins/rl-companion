@@ -10,7 +10,7 @@ use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
 use crate::preview::Held;
 use crate::registry::{CollectorRegistry, Entry};
-use crate::scan_report::{self, ScanBook, ScanReport, UploadTimes};
+use crate::scan_report::{self, ScanBook, ScanPass, ScanReport, UploadTimes};
 use crate::server_config::ServerState;
 use crate::state::Shared;
 use crate::tiles::{apply_plugin_off_copy, last_checked, tiles, TileDto, TileInputs};
@@ -314,17 +314,11 @@ impl Runtime {
                 at: at.clone(),
             },
         );
-        if fx.ok {
+        // Saved after the guard is dropped: no file IO under the lock.
+        let uploads = fx.ok.then(|| {
             inner.book.uploaded(pending.contract, at);
-            let path = scan_report::upload_times_path(&self.sent_path);
-            if let Err(e) = inner.book.uploads.save(&path) {
-                inner.log.push_front(LogLine {
-                    at: now(),
-                    text: format!("Could not save upload times ({e})"),
-                    collector_id: None,
-                });
-            }
-        }
+            inner.book.uploads.clone()
+        });
         if fx.record {
             inner
                 .sent
@@ -337,12 +331,19 @@ impl Runtime {
                 });
             }
         }
+        drop(inner);
+        let path = scan_report::upload_times_path(&self.sent_path);
+        if let Some(Err(e)) = uploads.map(|u| u.save(&path)) {
+            self.keep_log(None, format!("Could not save upload times ({e})"));
+        }
     }
 
-    /// A scan of `id` ran: stamp it, with what it left unsettled.
-    pub fn scanned(&self, id: &str, pending: &[PendingUpload]) {
+    /// A scan of `id` ran: stamp it, with what it left unsettled — its
+    /// queued items the server has not settled, plus `waiting` items it could
+    /// not queue yet (screenshots waiting for a hub).
+    pub fn scanned(&self, id: &str, pending: &[PendingUpload], waiting: usize) {
         let mut inner = self.lock();
-        let left = scan_report::unsettled(&inner.sent, pending);
+        let left = scan_report::unsettled(&inner.sent, pending) + waiting;
         inner.book.scanned(id, now(), left);
     }
 
@@ -688,15 +689,13 @@ async fn scan_and_upload_one(
     entry: &Entry,
     token: Option<&crate::token::DeviceToken>,
 ) -> (String, bool) {
-    // `Entry::scan` is `None` for a disabled collector: nothing is read.
-    let Some(mut scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
-        rt.forget_scan(entry.manifest.id);
+    // `None` for a disabled collector: nothing is read. Dropping the pass
+    // at the end stamps the scan, whichever way the upload returned.
+    let Some(mut pass) = ScanPass::begin(rt, entry, &cfg.server_url) else {
         let name = entry.manifest.display_name;
         return (format!("{name} uploads are off"), false);
     };
-    let out = gate_and_upload(app, rt, cfg, entry, token, &mut scan).await;
-    rt.scanned(entry.manifest.id, &scan.pending);
-    out
+    gate_and_upload(app, rt, cfg, entry, token, &mut pass.scan).await
 }
 
 async fn gate_and_upload(
