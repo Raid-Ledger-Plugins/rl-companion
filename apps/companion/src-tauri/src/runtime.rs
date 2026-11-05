@@ -10,6 +10,7 @@ use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
 use crate::preview::Held;
 use crate::registry::{CollectorRegistry, Entry};
+use crate::scan_report::{self, ScanBook, ScanReport, UploadTimes};
 use crate::server_config::ServerState;
 use crate::state::Shared;
 use crate::tiles::{apply_plugin_off_copy, last_checked, tiles, TileDto, TileInputs};
@@ -71,6 +72,10 @@ pub struct CollectorStatusDto {
     /// When the cached `/config` was fetched, set only while the server is
     /// unreachable and a cache is shown (D7 "Last checked").
     pub last_checked: Option<String>,
+    /// Per-collector scan/upload facts for `/dev/v1/collectors` (not sent
+    /// to the window).
+    #[serde(skip)]
+    pub scan: BTreeMap<String, ScanReport>,
 }
 
 /// What to do after one upload ended.
@@ -167,6 +172,8 @@ struct Inner {
     held: BTreeMap<String, Held>,
     /// `/config` fetch state and cached covers (ROK-2067).
     server: ServerState,
+    /// Last scan, unsettled count and last accepted upload per collector.
+    book: ScanBook,
 }
 
 pub struct Runtime {
@@ -180,6 +187,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(sent_path: PathBuf) -> Self {
         let sent = SentState::load(&sent_path);
+        let uploads = UploadTimes::load(&scan_report::upload_times_path(&sent_path));
         Self {
             sent_path,
             inner: Mutex::new(Inner {
@@ -194,6 +202,7 @@ impl Runtime {
                 relink: false,
                 held: BTreeMap::new(),
                 server: ServerState::default(),
+                book: ScanBook::new(uploads),
             }),
             kick: Notify::new(),
             config_kick: Notify::new(),
@@ -224,6 +233,9 @@ impl Runtime {
     }
 
     fn push_log(&self, collector_id: Option<String>, text: String) {
+        let id = collector_id.as_deref();
+        let line = scan_report::bridge_line(id, &text);
+        crate::dev_bridge::logbuf::log("info", &scan_report::bridge_target(id), &line);
         let mut inner = self.lock();
         inner.log.push_front(LogLine {
             at: now(),
@@ -270,9 +282,20 @@ impl Runtime {
                 label: pending.label.clone(),
                 result: shown_text(fx).to_owned(),
                 ok: fx.ok,
-                at,
+                at: at.clone(),
             },
         );
+        if fx.ok {
+            inner.book.uploaded(pending.contract, at);
+            let path = scan_report::upload_times_path(&self.sent_path);
+            if let Err(e) = inner.book.uploads.save(&path) {
+                inner.log.push_front(LogLine {
+                    at: now(),
+                    text: format!("Could not save upload times ({e})"),
+                    collector_id: None,
+                });
+            }
+        }
         if fx.record {
             inner
                 .sent
@@ -285,6 +308,18 @@ impl Runtime {
                 });
             }
         }
+    }
+
+    /// A scan of `id` ran: stamp it, with what it left unsettled.
+    pub fn scanned(&self, id: &str, pending: &[PendingUpload]) {
+        let mut inner = self.lock();
+        let left = scan_report::unsettled(&inner.sent, pending);
+        inner.book.scanned(id, now(), left);
+    }
+
+    /// `id` is switched off, so it reports no scan.
+    pub fn forget_scan(&self, id: &str) {
+        self.lock().book.forget_scan(id);
     }
 
     /// Remember the scan's per-collector lines and the 401 flag.
@@ -426,6 +461,7 @@ impl Runtime {
             relink: inner.relink,
             tiles: tiles(&view),
             last_checked: last_checked(cfg, linked, inner.server.reachable),
+            scan: inner.book.reports(),
             collectors,
         }
     }
@@ -574,6 +610,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let mut relink = false;
     for entry in registry.entries() {
         if !entry.enabled {
+            rt.forget_scan(entry.manifest.id);
             rt.set_held(entry.manifest.id, None);
             if entry.manifest.id == crate::manifest::BG3_SCREENSHOT.id {
                 crate::bg3_screenshot::clear_waiting();
@@ -613,7 +650,8 @@ pub fn status_line(registry: &CollectorRegistry, lines: &[String]) -> String {
 }
 
 /// One collector's pass. Returns its status line, and whether the device must
-/// re-link (which stops every collector).
+/// re-link (which stops every collector). A pass that read files stamps the
+/// collector's scan time and what it left unsettled.
 async fn scan_and_upload_one(
     app: &AppHandle,
     rt: &Runtime,
@@ -623,14 +661,28 @@ async fn scan_and_upload_one(
 ) -> (String, bool) {
     // `Entry::scan` is `None` for a disabled collector: nothing is read.
     let Some(mut scan) = entry.scan(&cfg.server_url, &rt.sent()) else {
+        rt.forget_scan(entry.manifest.id);
         let name = entry.manifest.display_name;
         return (format!("{name} uploads are off"), false);
     };
+    let out = gate_and_upload(app, rt, cfg, entry, token, &mut scan).await;
+    rt.scanned(entry.manifest.id, &scan.pending);
+    out
+}
+
+async fn gate_and_upload(
+    app: &AppHandle,
+    rt: &Runtime,
+    cfg: &AppConfig,
+    entry: &Entry,
+    token: Option<&crate::token::DeviceToken>,
+    scan: &mut crate::collector::Scan,
+) -> (String, bool) {
     scan.notes
         .iter()
         .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
     // A held screenshot batch's preview image is downscaled off the runtime.
-    crate::screenshot_preview::attach(&mut scan).await;
+    crate::screenshot_preview::attach(scan).await;
     let waiting = scan.pending.len();
     let id = entry.manifest.id;
     match gate(entry.manifest, cfg.consented(id), scan.files, &scan.pending) {

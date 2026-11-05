@@ -23,6 +23,7 @@ pub mod poll;
 pub mod preview;
 pub mod registry;
 pub mod runtime;
+pub mod scan_report;
 pub mod scope;
 pub mod screenshot_commands;
 pub mod screenshot_encode;
