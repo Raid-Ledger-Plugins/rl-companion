@@ -74,6 +74,9 @@ pub fn run() {
                 app.path().app_data_dir().ok().as_deref(),
             ));
             app.manage(bridge.clone());
+            // `/dev/v1/bg3/*` (ROK-2078): the same Story roots the bg3-save collector watches.
+            // `set_collector_root` rebinds it when the folder changes.
+            bridge.set_bg3_from_config(&start_cfg, app.path().app_data_dir().ok());
             tray::build(app.handle())?;
             let (tray_app, start_bridge) = (app.handle().clone(), bridge.clone());
             tauri::async_runtime::spawn(async move {

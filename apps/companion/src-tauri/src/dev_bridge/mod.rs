@@ -6,6 +6,11 @@
 
 pub mod addons;
 pub mod auth;
+pub mod bg3_newage;
+pub mod bg3_newage_reader;
+pub mod bg3_redact;
+pub mod bg3_routes;
+pub mod bg3_saves;
 pub mod bind;
 pub mod collectors;
 pub mod commands;
@@ -235,6 +240,20 @@ impl DevBridge {
         self.ctx.set_snapshot(snap);
     }
 
+    /// Where `/dev/v1/bg3/*` reads saves from: the BG3 `Savegames/Story`
+    /// roots; the `saveRef` secret lives under `key_dir` (ROK-2078).
+    pub fn set_bg3_source(&self, roots: Vec<PathBuf>, key_dir: Option<PathBuf>) {
+        let decoder = Arc::new(bg3_newage_reader::LsmfDecoder);
+        self.ctx
+            .set_bg3(Arc::new(bg3_saves::Bg3Source::new(roots, key_dir, decoder)));
+    }
+
+    /// [`Self::set_bg3_source`] over the bg3-save collector's CURRENT Story
+    /// roots (its folder override or the detected folder).
+    pub fn set_bg3_from_config(&self, cfg: &AppConfig, key_dir: Option<PathBuf>) {
+        self.set_bg3_source(bg3_roots(cfg), key_dir);
+    }
+
     /// Where `/dev/v1/collectors` reads the runtime's state from.
     pub fn set_collectors_source(&self, f: routes::CollectorsFn) {
         self.ctx.set_collectors(f);
@@ -251,6 +270,27 @@ impl DevBridge {
 pub fn on_wow_dir_changed(bridge: Option<&DevBridge>, cfg: &AppConfig) {
     if let Some(b) = bridge {
         b.refresh(cfg);
+    }
+}
+
+/// The Story roots the bg3-save collector watches under `cfg`.
+pub fn bg3_roots(cfg: &AppConfig) -> Vec<PathBuf> {
+    crate::registry::CollectorRegistry::from_config(cfg)
+        .get(crate::manifest::BG3_SAVE.id)
+        .map(|e| e.roots.clone())
+        .unwrap_or_default()
+}
+
+/// A collector folder changed (`set_collector_root`): rebind
+/// `/dev/v1/bg3/*` to the new Story roots at once (Codex P2), instead of
+/// serving the startup folder until a restart.
+pub fn on_collector_roots_changed(
+    bridge: Option<&DevBridge>,
+    cfg: &AppConfig,
+    key_dir: Option<PathBuf>,
+) {
+    if let Some(b) = bridge {
+        b.set_bg3_from_config(cfg, key_dir);
     }
 }
 

@@ -9,6 +9,8 @@ mod collector_tests;
 mod collector_view_tests;
 mod config_tests;
 mod covers_tests;
+mod dev_bridge_bg3_newage_tests;
+mod dev_bridge_bg3_tests;
 mod dev_bridge_conn_tests;
 mod dev_bridge_guard_tests;
 mod dev_bridge_lifecycle_tests;

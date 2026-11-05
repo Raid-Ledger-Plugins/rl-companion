@@ -29,6 +29,7 @@ mod error;
 mod extract;
 mod lsf;
 mod lspk;
+mod newage;
 mod normalise;
 mod settle;
 mod time;
@@ -45,12 +46,14 @@ pub use extract::{
     extract_thumbnail_webp, game_id_from_package, sha256_hex, thumbnail_ref,
 };
 pub use lsf::{
-    LSF_MAGIC, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION, LZ4_FRAME_MAX_BLOCKS,
-    read_lsf_attribute,
+    LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION,
+    LZ4_FRAME_MAX_BLOCKS, lsf_attribute_len, lsf_parsed_version, lsf_version, read_lsf_attribute,
+    read_lsf_attribute_bytes,
 };
 pub use lspk::{
     CompressionMethod, DEFAULT_MAX_ENTRY_BYTES, Entry, LSPK_VERSION, MAX_FILES, Package, read_lspk,
 };
+pub use newage::{LSMF_MAGIC, LSMF_MAX_BYTES, Lsmf, LsmfComponent, LsmfError, count_webp_images};
 pub use normalise::{
     Bg3Class, Bg3SaveMessage, Bg3SavePayload, COLLECTOR_VERSION, CONTRACT, CONTRACT_VERSION,
     CampaignKeySource, ENVELOPE_VERSION, PartyMember, SaveMeta, ThumbnailRef, normalise_save_info,

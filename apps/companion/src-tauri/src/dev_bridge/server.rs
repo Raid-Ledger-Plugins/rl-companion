@@ -2,6 +2,8 @@
 //! routing, so an unauthenticated caller learns nothing about which paths exist.
 
 use super::auth::{admit, AuthPolicy, Lockout};
+use super::bg3_routes;
+use super::bg3_saves::Bg3Source;
 use super::bind;
 use super::conn_budget::{ConnBudget, Slot};
 use super::health::{health, HealthInput};
@@ -59,6 +61,7 @@ pub struct ServerCtx {
     lockout: Mutex<Lockout>,
     started: Instant,
     collectors: RwLock<Option<CollectorsFn>>,
+    bg3: RwLock<Option<Arc<Bg3Source>>>,
     logs: Option<&'static LogBuffer>,
     denials: Mutex<DenialLog>,
     closed: Mutex<Option<String>>,
@@ -118,6 +121,7 @@ impl Default for ServerCtx {
             lockout: Mutex::new(Lockout::default()),
             started: Instant::now(),
             collectors: RwLock::new(None),
+            bg3: RwLock::new(None),
             logs: None,
             denials: Mutex::new(DenialLog::default()),
             closed: Mutex::new(None),
@@ -130,6 +134,15 @@ impl Default for ServerCtx {
 impl ServerCtx {
     pub fn set_snapshot(&self, s: Snapshot) {
         *self.snapshot.write().unwrap_or_else(|p| p.into_inner()) = s;
+    }
+
+    pub fn set_bg3(&self, src: Arc<Bg3Source>) {
+        *self.bg3.write().unwrap_or_else(|p| p.into_inner()) = Some(src);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bg3(&self) -> Option<Arc<Bg3Source>> {
+        self.bg3.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     pub fn set_collectors(&self, f: CollectorsFn) {
@@ -229,6 +242,11 @@ impl ServerCtx {
     ) -> (u16, Value) {
         match (method, path) {
             (&Method::GET, "/dev/v1/health") => (200, self.health(snap)),
+            (&Method::GET, p) if p.starts_with("/dev/v1/bg3/") => {
+                let src = self.bg3.read().unwrap_or_else(|p| p.into_inner()).clone();
+                bg3_routes::get(src.as_deref(), p, &parse_query(query))
+                    .unwrap_or_else(|| (404, json!({ "error": "not_found" })))
+            }
             (&Method::GET, _) => {
                 let collectors = self
                     .collectors
