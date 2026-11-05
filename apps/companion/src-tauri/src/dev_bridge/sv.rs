@@ -1,7 +1,8 @@
 //! `GET /dev/v1/ledgerlink/sv` (`$defs/sv-raw`) and `/sv/parsed`
 //! (`$defs/sv-parsed`). Reads only
 //! `<flavor>/WTF/Account/*/(*/*/)SavedVariables/LedgerLink.lua` (§7); every
-//! path in a body is relative to the WoW folder.
+//! path in a body is relative to the WoW folder. The `*_named` variants serve
+//! `/dev/v1/addons/<folder>/sv` for the fixed allowlist in `addon_sv`.
 
 use super::paging::{clip, json_len, text_slice, wrap_next, PAGE_MAX_BYTES};
 use super::token::sha256_hex;
@@ -12,7 +13,8 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-const SV_FILE: &str = "LedgerLink.lua";
+/// LedgerLink's SavedVariables file (`/dev/v1/ledgerlink/sv`).
+pub const SV_FILE: &str = "LedgerLink.lua";
 /// `sv-raw.text` maxLength (chars).
 const RAW_TEXT_MAX_CHARS: usize = 12_288;
 const MAX_OUTBOX: usize = 40;
@@ -47,8 +49,59 @@ fn dirs(p: &Path) -> Vec<String> {
     out
 }
 
+/// A symlink, or on Windows any reparse point (junctions included).
+fn is_link(m: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    m.file_type().is_symlink()
+}
+
+/// `wow_dir/<rel>` is served only when it is provably inside the WoW folder
+/// (§7): no component below `wow_dir` (flavor, `WTF`, `Account`, account,
+/// realm, character, `SavedVariables`, the file) is a symlink or junction,
+/// every directory is a real directory, the file is a regular file, and its
+/// canonical path starts with the WoW folder's. Anything else reads as absent.
+fn inside_wow(wow_dir: &Path, rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    let mut p = wow_dir.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() || *part == "." || *part == ".." {
+            return false;
+        }
+        p.push(part);
+        let Ok(m) = std::fs::symlink_metadata(&p) else {
+            return false;
+        };
+        let last = i + 1 == parts.len();
+        let right_kind = if last {
+            m.file_type().is_file()
+        } else {
+            m.file_type().is_dir()
+        };
+        if is_link(&m) || !right_kind {
+            return false;
+        }
+    }
+    match (wow_dir.canonicalize(), p.canonicalize()) {
+        (Ok(root), Ok(file)) => file.starts_with(root),
+        _ => false,
+    }
+}
+
 /// Every LedgerLink SavedVariables file of `flavor`, account files first.
 pub fn sv_files(wow_dir: &Path, flavor: &str) -> Vec<SvFile> {
+    sv_files_named(wow_dir, flavor, SV_FILE)
+}
+
+/// Every `SavedVariables/<file>` of `flavor`, account files first. `file` is
+/// a constant (`LedgerLink.lua` or an allowlisted addon's), never caller input.
+pub fn sv_files_named(wow_dir: &Path, flavor: &str, file: &str) -> Vec<SvFile> {
     let accounts = wow_dir.join(flavor).join("WTF").join("Account");
     let mut out = Vec::new();
     for acct in dirs(&accounts) {
@@ -58,11 +111,9 @@ pub fn sv_files(wow_dir: &Path, flavor: &str) -> Vec<SvFile> {
                 (Some(r), Some(c)) => format!("/{r}/{c}"),
                 _ => String::new(),
             };
-            let rel = format!("{base}{mid}/SavedVariables/{SV_FILE}");
+            let rel = format!("{base}{mid}/SavedVariables/{file}");
             let abs = wow_dir.join(&rel);
-            // `symlink_metadata`: a symlinked `LedgerLink.lua` is not followed (§7).
-            let plain_file = std::fs::symlink_metadata(&abs).is_ok_and(|m| m.file_type().is_file());
-            if plain_file && rel.chars().count() <= 512 {
+            if rel.chars().count() <= 512 && inside_wow(wow_dir, &rel) {
                 out.push(SvFile {
                     scope: if ch.is_some() { "character" } else { "account" },
                     account: acct.clone(),
@@ -154,14 +205,16 @@ fn read_capped(p: &Path) -> Option<Vec<u8>> {
 /// The newest file of `scope`, one text page from the cursor's offset. A
 /// cursor carries the file's length + mtime, so a file rewritten mid-paging
 /// is refused instead of splicing two versions together.
-pub fn raw(
+/// `sv_file` is [`SV_FILE`] or an allowlisted addon's file, never caller input.
+pub fn raw_named(
     wow_dir: &Path,
     flavor: &str,
+    sv_file: &str,
     scope: &str,
     cursor: Option<&str>,
 ) -> Result<Value, RawError> {
     let parsed = parse_raw_cursor(cursor)?;
-    let file = sv_files(wow_dir, flavor)
+    let file = sv_files_named(wow_dir, flavor, sv_file)
         .into_iter()
         .filter(|f| f.scope == scope)
         .max_by_key(|f| mtime(&f.abs).1)

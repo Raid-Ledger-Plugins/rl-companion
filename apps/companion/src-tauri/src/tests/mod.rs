@@ -9,6 +9,7 @@ mod collector_tests;
 mod collector_view_tests;
 mod config_tests;
 mod covers_tests;
+mod dev_bridge_addon_sv_tests;
 mod dev_bridge_bg3_character_key_tests;
 mod dev_bridge_bg3_newage_tests;
 mod dev_bridge_bg3_tests;

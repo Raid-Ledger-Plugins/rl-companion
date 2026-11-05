@@ -1,12 +1,13 @@
 //! The read endpoints behind admission (spec §6, AC-6): addons, LedgerLink
-//! SavedVariables raw + parsed, dev snapshots (`snapshot_routes`), logs, collectors. `/health` stays in server.rs;
+//! SavedVariables raw + parsed, allowlisted addon SavedVariables raw
+//! (`addon_sv`), dev snapshots (`snapshot_routes`), logs, collectors. `/health` stays in server.rs;
 //! the probe endpoints arrive with C4.
 
 use super::health::discover_flavors;
 use super::logbuf::{is_level, parse_utc, LogBuffer};
 use super::paging::{decode_cursor, encode_cursor, invalid, page, wrap_next, Query};
 use super::server::Snapshot;
-use super::{addons, snapshot_routes, sv};
+use super::{addon_sv, addons, snapshot_routes, sv};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
@@ -34,7 +35,8 @@ pub fn get(
 ) -> Option<(u16, Value)> {
     let res = match path {
         "/dev/v1/addons" => addons_ep(snap, q),
-        "/dev/v1/ledgerlink/sv" => sv_raw_ep(snap, q),
+        p if addon_sv::segment(p).is_some() => addon_sv_ep(snap, p, q),
+        "/dev/v1/ledgerlink/sv" => sv_raw_ep(snap, q, sv::SV_FILE),
         "/dev/v1/ledgerlink/sv/parsed" => sv_parsed_ep(snap, q),
         "/dev/v1/ledgerlink/snapshot" => {
             flavor(snap, q).and_then(|f| snapshot_routes::page_ep(snap, &f, q))
@@ -85,14 +87,25 @@ fn addons_ep(snap: &Snapshot, q: &Query) -> Res {
     ))
 }
 
-fn sv_raw_ep(snap: &Snapshot, q: &Query) -> Res {
+/// `/dev/v1/addons/<folder>/sv`: an unlisted folder is 404 before any query
+/// check, so the route reveals nothing about folders outside the allowlist.
+fn addon_sv_ep(snap: &Snapshot, path: &str, q: &Query) -> Res {
+    let file = addon_sv::segment(path)
+        .and_then(addon_sv::sv_file)
+        .ok_or_else(not_found)?;
+    sv_raw_ep(snap, q, file)
+}
+
+/// `sv-raw` for `SavedVariables/<sv_file>` (a constant, never caller input).
+fn sv_raw_ep(snap: &Snapshot, q: &Query, sv_file: &str) -> Res {
     let flavor = flavor(snap, q)?;
     let scope = q.get("scope").map_or("account", String::as_str);
     if scope != "account" && scope != "character" {
         return Err(bad("scope", "scope is account or character"));
     }
     let cursor = q.get("cursor").map(String::as_str);
-    sv::raw(Path::new(snap.wow_dir.trim()), &flavor, scope, cursor).map_err(|e| match e {
+    let wow = Path::new(snap.wow_dir.trim());
+    sv::raw_named(wow, &flavor, sv_file, scope, cursor).map_err(|e| match e {
         sv::RawError::Missing => not_found(),
         sv::RawError::BadCursor => bad("cursor", "Unknown cursor"),
         sv::RawError::Changed => bad(
