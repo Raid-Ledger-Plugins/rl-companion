@@ -18,21 +18,33 @@ pub fn collectors_body(dto: &CollectorStatusDto, paused: bool) -> Value {
         .iter()
         .take(MAX_COLLECTORS)
         .map(|c| {
-            let last_upload = dto
+            let report = dto.scan.get(&c.id).cloned().unwrap_or_default();
+            let this_run = dto
                 .results
                 .iter()
-                .filter(|r| r.ok && r.collector_id == c.id && is_utc_stamp(&r.at))
-                .map(|r| r.at.as_str())
+                .filter(|r| r.ok && r.collector_id == c.id)
+                .map(|r| r.at.as_str());
+            // The persisted time survives restarts; this run's results cover
+            // an upload whose time could not be saved.
+            let last_upload = this_run
+                .chain(report.last_upload_at.as_deref())
+                .filter(|at| is_utc_stamp(at))
                 .max();
+            // A switched-off collector never scanned (whatever an earlier
+            // scan, before the switch flipped, left behind).
+            let (last_scan, pending) = if c.enabled {
+                let at = report.last_scan_at.filter(|at| is_utc_stamp(at));
+                (at, report.pending)
+            } else {
+                (None, 0)
+            };
             json!({
                 "id": c.id,
                 "enabled": c.enabled,
                 "paused": paused,
-                // The runtime does not keep a per-collector scan time or
-                // queue depth yet; report "unknown" honestly.
-                "lastScanAt": null,
+                "lastScanAt": last_scan,
                 "lastUploadAt": last_upload,
-                "pending": 0,
+                "pending": pending,
             })
         })
         .collect();

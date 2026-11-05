@@ -7,6 +7,7 @@
 pub mod addon_sv;
 pub mod addons;
 pub mod auth;
+pub mod bg3_character_key;
 pub mod bg3_newage;
 pub mod bg3_newage_reader;
 pub mod bg3_redact;

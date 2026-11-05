@@ -52,6 +52,62 @@ pub enum LspkError {
     /// No entry with that name.
     #[error("no entry named {0:?} in the package")]
     NotFound(String),
+    /// A multi-part set was given, or declares, a part count outside
+    /// `1..=PAK_MAX_PARTS`.
+    #[error("{count} archive parts given or declared; 1 to {limit} are supported")]
+    PartCount { count: usize, limit: usize },
+    /// The entry lives in an archive part the caller did not open.
+    #[error("entry {name:?} lives in archive part {part}, but only {opened} parts are open")]
+    MissingArchivePart {
+        name: String,
+        part: u8,
+        opened: usize,
+    },
+    /// The entry's on-disk bytes are more than its decompressed size can need.
+    #[error("entry {name:?} stores {size_on_disk} bytes for {size} decompressed bytes")]
+    RawTooLarge {
+        name: String,
+        size_on_disk: u64,
+        size: u64,
+    },
+    /// Reading the entry would take the set past its total byte budget.
+    #[error(
+        "entry {name:?} ({size} bytes) would take the set past its {limit}-byte budget ({used} used)"
+    )]
+    SetBudgetExceeded {
+        name: String,
+        size: u64,
+        used: u64,
+        limit: u64,
+    },
+    /// The underlying reader failed (seek or read).
+    #[error("could not read {what}: {reason}")]
+    Io { what: &'static str, reason: String },
+}
+
+/// Failure parsing Valve KeyValues text (`libraryfolders.vdf`,
+/// `appmanifest_*.acf`). Callers skip that candidate and try the next.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum VdfError {
+    /// The text is larger than [`crate::VDF_MAX_BYTES`].
+    #[error("VDF text is {size} bytes, over the {limit}-byte limit")]
+    TooLarge { size: usize, limit: usize },
+    /// Objects nest deeper than [`crate::VDF_MAX_DEPTH`].
+    #[error("VDF objects nest deeper than {limit} levels (line {line})")]
+    TooDeep { line: usize, limit: usize },
+    /// The text is not well-formed KeyValues.
+    #[error("malformed VDF at line {line}: {reason}")]
+    Syntax { line: usize, reason: &'static str },
+    /// A key the helper needs is missing or has the wrong shape.
+    #[error("VDF has no usable {0:?} key")]
+    MissingKey(&'static str),
+    /// A value is present but unsafe or unusable.
+    #[error("VDF key {key:?} has an unusable value: {reason}")]
+    BadValue {
+        key: &'static str,
+        reason: &'static str,
+    },
 }
 
 /// Failure reading an LSF v7 resource (`meta.lsf`). Callers that only want
@@ -195,5 +251,39 @@ pub enum WowSvError {
     NotATable {
         what: &'static str,
         found: &'static str,
+    },
+}
+
+/// Failure building or reading the BG3 name catalogue (ROK-2081). Every
+/// variant degrades the catalogue to `source: 'none'` (spec D8); none of
+/// them may drop a message.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CatalogueError {
+    /// No usable BG3 install was found.
+    #[error("no BG3 install: {0}")]
+    Absent(&'static str),
+    /// A game pak or one of its entries could not be read.
+    #[error(transparent)]
+    Pak(#[from] LspkError),
+    /// An input or a count is over its cap.
+    #[error("{what} is {size}, over the {limit} limit")]
+    TooLarge {
+        what: &'static str,
+        size: u64,
+        limit: u64,
+    },
+    /// The build ran past its deadline (the caller's stop check fired).
+    #[error("catalogue build ran past its deadline")]
+    Timeout,
+    /// The install changed while the build was reading it.
+    #[error("the install changed during the build")]
+    Changed,
+    /// A file is malformed or truncated.
+    #[error("{file} is malformed at {at}: {reason}")]
+    Parse {
+        file: &'static str,
+        at: usize,
+        reason: &'static str,
     },
 }

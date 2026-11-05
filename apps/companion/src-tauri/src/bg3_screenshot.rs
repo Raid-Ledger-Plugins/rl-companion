@@ -342,6 +342,7 @@ impl Collector for Bg3ScreenshotCollector {
                 "BG3 screenshots: {waiting} waiting; pick a hub to send them"
             ));
         }
+        scan.waiting = waiting;
         self.waiting.store(waiting, Ordering::Relaxed);
         if let Some(slot) = self.report {
             slot.store(waiting, Ordering::Relaxed);

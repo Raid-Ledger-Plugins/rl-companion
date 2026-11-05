@@ -215,6 +215,7 @@ impl NewAgeDecoder for Leaky {
                 ("Helmet".into(), "ARM_Dup".into()),
                 ("Pocket".into(), "ARM_X".into()),
             ]),
+            entity_guid: None,
         };
         NewAgeOutcome::Read(NewAgeRead {
             types,

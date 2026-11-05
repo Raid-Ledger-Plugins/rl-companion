@@ -437,7 +437,7 @@ fn decode_value(type_id: u32, value: &[u8], wanted: &str) -> Result<String, LsfE
 
 /// LSLib's UUID text: .NET `Guid` order (first three groups little-endian)
 /// after `ByteSwapGuid` swaps each byte pair of the last eight bytes.
-fn uuid_display(b: &[u8; 16]) -> String {
+pub fn uuid_display(b: &[u8; 16]) -> String {
     let order = [3, 2, 1, 0, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14];
     let mut out = String::with_capacity(36);
     for (i, &at) in order.iter().enumerate() {
