@@ -351,3 +351,14 @@ fn an_owner_map_end_that_disagrees_with_its_count_is_refused() {
     let err = Lsmf::parse(&blob).err().expect("refused");
     assert_eq!(err.0, "owner map end does not match its count");
 }
+
+/// ROK-2079 OQ-4: one entity's raw 16 GUID bytes, read on demand by index.
+#[test]
+fn entity_guid_reads_one_entity_and_refuses_an_index_past_the_table() {
+    let blob = sample();
+    let l = Lsmf::parse(&blob).expect("parse");
+    assert_eq!(l.entity_guid(0), Some([0xA0; 16]));
+    assert_eq!(l.entity_guid(2), Some([0xA2; 16]));
+    assert_eq!(l.entity_guid(3), None);
+    assert_eq!(l.entity_guid(u32::MAX), None);
+}
