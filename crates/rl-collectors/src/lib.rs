@@ -54,9 +54,10 @@ mod tests;
 pub use bg3_cat::{
     CatalogueTables, ENTRY_GLOBS, EntryKind, ItemName, LOCA_ENTRY_BYTES, LOCA_HEADER_BYTES,
     LOCA_KEY_BYTES, LOCA_MAGIC, LOCA_MAX_ENTRIES, LSX_MAX_ATTRS, LSX_MAX_DEPTH, LSX_MAX_NODES,
-    LSX_ORIGINS, LSX_QUESTS, LsxAttr, LsxNode, LsxSource, ResolvedItem, STATS_CHECK_EVERY_LINES,
-    STATS_ITEM_TYPES, STATS_KEY_RARITY, STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES,
-    STATS_MAX_ID_BYTES, StatsEntry, USING_MAX_DEPTH, classify_entry, is_loca_handle,
+    LSX_MAX_RETAINED_BYTES, LSX_MAX_TAG_ATTRS, LSX_MAX_TOTAL_ATTRS, LSX_ORIGINS, LSX_QUESTS,
+    LsxAttr, LsxNode, LsxSource, ResolvedItem, STATS_CHECK_EVERY_LINES, STATS_ITEM_TYPES,
+    STATS_KEY_RARITY, STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES,
+    STATS_RARITIES, StatsEntry, USING_MAX_DEPTH, classify_entry, is_bg3_id, is_loca_handle,
     lsx_id_handles, parse_loca_wanted, parse_stats, parse_stats_with, read_lsx_nodes,
     resolve_using,
 };

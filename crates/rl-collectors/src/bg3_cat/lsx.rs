@@ -12,15 +12,24 @@
 //! </node>
 //! ```
 //!
-//! Comments, `<?…?>` and `<!…>` are skipped; other elements (`save`,
-//! `region`, `children`, …) only nest. Quoted attribute values may contain
-//! `>`; the five XML entities and `&#…;` / `&#x…;` are decoded, any other
-//! `&` sequence is an error. Only a matching node's direct attributes are
-//! kept, never a nested node's.
+//! Comments, `<![CDATA[…]]>`, `<?…?>` and `<!…>` are skipped; other
+//! elements (`save`, `region`, `children`, …) only nest. Quoted attribute
+//! values may contain `>`; the five XML entities and `&#…;` / `&#x…;` are
+//! decoded in the values the scanner keeps, any other `&` sequence there is
+//! an error. Only a matching node's direct attributes are kept, never a
+//! nested node's, and of those only `id` / `type` / `value` / `handle`.
+//!
+//! **Memory (spec §4, ≤ 512 MiB peak).** Per tag nothing is copied until a
+//! value is kept ([`LSX_MAX_TAG_ATTRS`] bounds the scan of one tag). What a
+//! file retains is bounded by [`LSX_MAX_TOTAL_ATTRS`] attributes and
+//! [`LSX_MAX_RETAINED_BYTES`] of value text, charged *before* decoding:
+//! ≈ 262k × ~200 B of `LsxAttr` + `Vec` slack ≈ 50 MiB, plus 32 MiB of
+//! text — under 100 MiB beside the (≤ 256 MiB) entry buffer.
 
 use crate::error::CatalogueError;
 
 use super::loca::is_loca_handle;
+use super::lsx_tag::{Raw, RawAttrs, Tag, parse_tag};
 
 /// Deepest `<node>` nesting accepted.
 pub const LSX_MAX_DEPTH: usize = 64;
@@ -28,6 +37,15 @@ pub const LSX_MAX_DEPTH: usize = 64;
 pub const LSX_MAX_NODES: usize = 65_536;
 /// Most attributes kept on one matching node.
 pub const LSX_MAX_ATTRS: usize = 256;
+/// Most attributes on any one tag, matching or not. A real LSX
+/// `<attribute>` carries `id`, `type`, `value`/`handle` and `version`; a
+/// `<node>` carries `id` (and sometimes `key`).
+pub const LSX_MAX_TAG_ATTRS: usize = 16;
+/// Most attributes one file may retain across all matching nodes.
+pub const LSX_MAX_TOTAL_ATTRS: usize = 262_144;
+/// Most value bytes (`id` + `type` + `value` + `handle`, as written) one
+/// file may retain across all matching nodes.
+pub const LSX_MAX_RETAINED_BYTES: usize = 32 * 1024 * 1024;
 
 const FILE: &str = "lsx";
 
@@ -80,6 +98,7 @@ pub fn lsx_id_handles(nodes: &[LsxNode], src: &LsxSource) -> Vec<(String, String
 pub fn read_lsx_nodes(text: &str, node_id: &str) -> Result<Vec<LsxNode>, CatalogueError> {
     let mut out: Vec<LsxNode> = Vec::new();
     let mut stack: Vec<Option<usize>> = Vec::new();
+    let mut retained = Retained::default();
     let mut pos = 0;
     while let Some(off) = text[pos..].find('<') {
         let start = pos + off;
@@ -104,7 +123,7 @@ pub fn read_lsx_nodes(text: &str, node_id: &str) -> Result<Vec<LsxNode>, Catalog
             "node" => open_node(&mut out, &mut stack, &tag, node_id, start)?,
             "attribute" => {
                 if let Some(&Some(idx)) = stack.last() {
-                    push_attr(&mut out[idx], tag.attrs, start)?;
+                    push_attr(&mut out[idx], &tag.attrs, &mut retained, start)?;
                 }
             }
             _ => {}
@@ -116,11 +135,13 @@ pub fn read_lsx_nodes(text: &str, node_id: &str) -> Result<Vec<LsxNode>, Catalog
     Ok(out)
 }
 
-/// `Some(Some(len))` for a comment / `<?…?>` / `<!…>` of `len` bytes,
-/// `Some(None)` if it never ends, `None` for an ordinary tag.
+/// `Some(Some(len))` for a comment / CDATA / `<?…?>` / `<!…>` of `len`
+/// bytes, `Some(None)` if it never ends, `None` for an ordinary tag.
 fn skip_special(rest: &str) -> Option<Option<usize>> {
     let (open, close) = if rest.starts_with("<!--") {
         ("<!--", "-->")
+    } else if rest.starts_with("<![CDATA[") {
+        ("<![CDATA[", "]]>")
     } else if rest.starts_with("<?") {
         ("<?", "?>")
     } else if rest.starts_with("<!") {
@@ -142,7 +163,10 @@ fn open_node(
     node_id: &str,
     at: usize,
 ) -> Result<(), CatalogueError> {
-    let matched = tag.attrs.iter().any(|(k, v)| *k == "id" && v == node_id);
+    let matched = match tag.attrs.id {
+        Some(id) => id.eq_decoded(node_id)?,
+        None => false,
+    };
     let idx = if matched {
         if out.len() >= LSX_MAX_NODES {
             return Err(too_large(
@@ -165,9 +189,43 @@ fn open_node(
     Ok(())
 }
 
+/// What one file has retained so far, against the file-wide caps.
+#[derive(Default)]
+struct Retained {
+    attrs: usize,
+    bytes: usize,
+}
+
+impl Retained {
+    /// Charge one attribute of `raw_len` bytes as written (an upper bound
+    /// of its decoded size), before anything is decoded or copied.
+    fn charge(&mut self, raw_len: usize) -> Result<(), CatalogueError> {
+        let attrs = self.attrs + 1;
+        if attrs > LSX_MAX_TOTAL_ATTRS {
+            return Err(too_large(
+                "lsx retained attributes",
+                attrs,
+                LSX_MAX_TOTAL_ATTRS,
+            ));
+        }
+        let bytes = self.bytes.saturating_add(raw_len);
+        if bytes > LSX_MAX_RETAINED_BYTES {
+            return Err(too_large(
+                "lsx retained attribute bytes",
+                bytes,
+                LSX_MAX_RETAINED_BYTES,
+            ));
+        }
+        self.attrs = attrs;
+        self.bytes = bytes;
+        Ok(())
+    }
+}
+
 fn push_attr(
     node: &mut LsxNode,
-    attrs: Vec<(&str, String)>,
+    raw: &RawAttrs<'_>,
+    retained: &mut Retained,
     at: usize,
 ) -> Result<(), CatalogueError> {
     if node.attrs.len() >= LSX_MAX_ATTRS {
@@ -177,123 +235,22 @@ fn push_attr(
             LSX_MAX_ATTRS,
         ));
     }
-    let mut attr = LsxAttr::default();
-    for (k, v) in attrs {
-        match k {
-            "id" => attr.id = v,
-            "type" => attr.kind = Some(v),
-            "value" => attr.value = Some(v),
-            "handle" => attr.handle = Some(v),
-            _ => {}
-        }
-    }
-    if attr.id.is_empty() {
+    if raw.id.is_none_or(|r| r.text.is_empty()) {
         return Err(parse_err(at, "attribute without an id"));
     }
+    retained.charge(raw.raw_len())?;
+    let decode = |r: Option<Raw<'_>>| r.map(Raw::decode).transpose();
+    let attr = LsxAttr {
+        id: decode(raw.id)?.unwrap_or_default(),
+        kind: decode(raw.kind)?,
+        value: decode(raw.value)?,
+        handle: decode(raw.handle)?,
+    };
     node.attrs.push(attr);
     Ok(())
 }
 
-struct Tag<'a> {
-    name: &'a str,
-    attrs: Vec<(&'a str, String)>,
-    self_closing: bool,
-    end: usize,
-}
-
-/// An opening or self-closing tag starting at `text[start] == '<'`.
-fn parse_tag(text: &str, start: usize) -> Result<Tag<'_>, CatalogueError> {
-    let b = text.as_bytes();
-    let name_end = scan_name(b, start + 1);
-    let name = &text[start + 1..name_end];
-    if name.is_empty() {
-        return Err(parse_err(start, "tag without a name"));
-    }
-    let mut attrs = Vec::new();
-    let mut i = name_end;
-    loop {
-        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-            i += 1;
-        }
-        match b.get(i) {
-            None => return Err(parse_err(start, "tag runs past the end")),
-            Some(b'>') => {
-                return Ok(Tag {
-                    name,
-                    attrs,
-                    self_closing: false,
-                    end: i + 1,
-                });
-            }
-            Some(b'/') if b.get(i + 1) == Some(&b'>') => {
-                return Ok(Tag {
-                    name,
-                    attrs,
-                    self_closing: true,
-                    end: i + 2,
-                });
-            }
-            Some(_) => {}
-        }
-        let key_end = scan_name(b, i);
-        let key = &text[i..key_end];
-        let quote = match (key.is_empty(), b.get(key_end), b.get(key_end + 1)) {
-            (false, Some(b'='), Some(&q)) if q == b'"' || q == b'\'' => q,
-            _ => return Err(parse_err(i, "malformed tag attribute")),
-        };
-        let v_start = key_end + 2;
-        let v_len = text[v_start..]
-            .find(char::from(quote))
-            .ok_or_else(|| parse_err(i, "unterminated attribute value"))?;
-        attrs.push((key, unescape(&text[v_start..v_start + v_len], v_start)?));
-        i = v_start + v_len + 1;
-    }
-}
-
-fn scan_name(b: &[u8], mut i: usize) -> usize {
-    while b
-        .get(i)
-        .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b':' | b'.'))
-    {
-        i += 1;
-    }
-    i
-}
-
-/// Decode the five XML entities and numeric character references.
-fn unescape(raw: &str, at: usize) -> Result<String, CatalogueError> {
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(&rest[..amp]);
-        let semi = rest[amp..]
-            .find(';')
-            .ok_or_else(|| parse_err(at, "unterminated entity"))?;
-        let ch = match &rest[amp + 1..amp + semi] {
-            "quot" => Some('"'),
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "apos" => Some('\''),
-            e => numeric_ref(e),
-        };
-        out.push(ch.ok_or_else(|| parse_err(at, "unknown or invalid entity"))?);
-        rest = &rest[amp + semi + 1..];
-    }
-    out.push_str(rest);
-    Ok(out)
-}
-
-fn numeric_ref(e: &str) -> Option<char> {
-    let n = e.strip_prefix('#')?;
-    let code = match n.strip_prefix(['x', 'X']) {
-        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
-        None => n.parse::<u32>().ok()?,
-    };
-    char::from_u32(code).filter(|&c| c != '\0')
-}
-
-fn too_large(what: &'static str, size: usize, limit: usize) -> CatalogueError {
+pub(super) fn too_large(what: &'static str, size: usize, limit: usize) -> CatalogueError {
     CatalogueError::TooLarge {
         what,
         size: size as u64,
@@ -301,7 +258,7 @@ fn too_large(what: &'static str, size: usize, limit: usize) -> CatalogueError {
     }
 }
 
-fn parse_err(at: usize, reason: &'static str) -> CatalogueError {
+pub(super) fn parse_err(at: usize, reason: &'static str) -> CatalogueError {
     CatalogueError::Parse {
         file: FILE,
         at,

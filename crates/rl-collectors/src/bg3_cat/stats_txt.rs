@@ -32,7 +32,14 @@ pub const STATS_MAX_ID_BYTES: usize = 64;
 /// Rarities the catalogue reports, in canonical spelling (matched ignoring
 /// ASCII case). UNVERIFIED beyond `Common…Legendary` (spec U5); `Story` is
 /// LSLib's quest-item rarity.
-pub const STATS_RARITIES: &[&str] = &["Common", "Uncommon", "Rare", "VeryRare", "Legendary", "Story"];
+pub const STATS_RARITIES: &[&str] = &[
+    "Common",
+    "Uncommon",
+    "Rare",
+    "VeryRare",
+    "Legendary",
+    "Story",
+];
 /// Most `using` hops followed from an entry to its ancestors.
 pub const USING_MAX_DEPTH: usize = 16;
 /// The stop check runs once per this many lines (spec §4 deadline).

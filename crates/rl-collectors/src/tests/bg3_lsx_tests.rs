@@ -5,8 +5,9 @@ use std::fmt::Write as _;
 
 use super::bg3_loca_tests::h;
 use crate::{
-    CatalogueError, LSX_MAX_ATTRS, LSX_MAX_DEPTH, LSX_MAX_NODES, LSX_ORIGINS, LSX_QUESTS, LsxAttr,
-    lsx_id_handles, read_lsx_nodes,
+    CatalogueError, LSX_MAX_ATTRS, LSX_MAX_DEPTH, LSX_MAX_NODES, LSX_MAX_RETAINED_BYTES,
+    LSX_MAX_TAG_ATTRS, LSX_MAX_TOTAL_ATTRS, LSX_ORIGINS, LSX_QUESTS, LsxAttr, lsx_id_handles,
+    read_lsx_nodes,
 };
 
 fn origins_doc() -> String {
@@ -99,6 +100,13 @@ rl_test! {
         assert_eq!(parse_reason(bad("&#xD800;")), "unknown or invalid entity");
         assert_eq!(parse_reason(bad("a & b")), "unterminated entity");
         assert_eq!(parse_reason(bad("&amp")), "unterminated entity");
+        assert_eq!(parse_reason(bad("&#+65;")), "unknown or invalid entity");
+        assert_eq!(parse_reason(bad("&#x+41;")), "unknown or invalid entity");
+        assert_eq!(parse_reason(bad("&#-65;")), "unknown or invalid entity");
+        assert_eq!(parse_reason(bad("&#;")), "unknown or invalid entity");
+        // Attributes the scanner never reads are not decoded, so not checked.
+        let ignored = r#"<node id="N" key="&nbsp;"><attribute id="A" version="&#+1;" value="ok"/></node>"#;
+        assert_eq!(read_lsx_nodes(ignored, "N").unwrap()[0].attrs.len(), 1);
     }
 }
 
@@ -175,5 +183,106 @@ rl_test! {
                 limit: LSX_MAX_ATTRS as u64,
             })
         );
+    }
+}
+
+rl_test! {
+    fn lsx_cdata_and_bom_are_skipped() {
+        let doc = "\u{feff}<?xml version=\"1.0\"?><!DOCTYPE save>\
+                   <node id=\"N\"><![CDATA[ a > b <node id=\"N\"> ]]>\
+                   <attribute id=\"A\" value=\"v\"/></node>";
+        let nodes = read_lsx_nodes(doc, "N").unwrap();
+        assert_eq!(nodes.len(), 1, "a <node> inside CDATA is not a node: {nodes:?}");
+        assert_eq!(nodes[0].attr("A").and_then(|a| a.value.as_deref()), Some("v"));
+        assert_eq!(parse_reason(read_lsx_nodes("<![CDATA[ a > b ]>", "N")), "unterminated markup");
+    }
+}
+
+/// A tag named `name` with `n` attributes: `id="T"` then `a1=""` … .
+fn tag_with(name: &str, n: usize) -> String {
+    let mut t = format!("<{name} id=\"T\"");
+    for i in 1..n {
+        write!(t, " a{i}=\"\"").unwrap();
+    }
+    t.push_str("/>");
+    t
+}
+
+fn tag_cap_err() -> Result<Vec<crate::LsxNode>, CatalogueError> {
+    Err(CatalogueError::TooLarge {
+        what: "lsx attributes on one tag",
+        size: LSX_MAX_TAG_ATTRS as u64 + 1,
+        limit: LSX_MAX_TAG_ATTRS as u64,
+    })
+}
+
+rl_test! {
+    fn lsx_tag_attribute_cap_at_edge_and_edge_plus_one_on_any_tag() {
+        // Matching node, an attribute of a matching node, and a non-matching node.
+        for (doc, want_nodes) in [
+            (tag_with("node", LSX_MAX_TAG_ATTRS), 1),
+            (format!("<node id=\"T\">{}</node>", tag_with("attribute", LSX_MAX_TAG_ATTRS)), 1),
+            (format!("<node id=\"X\">{}</node>", tag_with("region", LSX_MAX_TAG_ATTRS)), 0),
+        ] {
+            assert_eq!(read_lsx_nodes(&doc, "T").unwrap().len(), want_nodes, "doc {doc:?}");
+        }
+        for doc in [
+            tag_with("node", LSX_MAX_TAG_ATTRS + 1),
+            format!("<node id=\"T\">{}</node>", tag_with("attribute", LSX_MAX_TAG_ATTRS + 1)),
+            format!("<node id=\"X\">{}</node>", tag_with("region", LSX_MAX_TAG_ATTRS + 1)),
+        ] {
+            assert_eq!(read_lsx_nodes(&doc, "T"), tag_cap_err(), "doc {doc:?}");
+        }
+    }
+}
+
+/// `nodes` matching nodes of `per` one-byte-id attributes each.
+fn many_attrs(nodes: usize, per: usize) -> String {
+    let node = format!(
+        "<node id=\"M\">{}</node>",
+        "<attribute id=\"k\"/>".repeat(per)
+    );
+    node.repeat(nodes)
+}
+
+rl_test! {
+    fn lsx_total_retained_attribute_cap_at_edge_and_edge_plus_one() {
+        let per = LSX_MAX_ATTRS;
+        assert_eq!(LSX_MAX_TOTAL_ATTRS % per, 0, "the fixture fills whole nodes");
+        let mut doc = many_attrs(LSX_MAX_TOTAL_ATTRS / per, per);
+        let total: usize = read_lsx_nodes(&doc, "M").unwrap().iter().map(|n| n.attrs.len()).sum();
+        assert_eq!(total, LSX_MAX_TOTAL_ATTRS);
+        doc.push_str(&many_attrs(1, 1));
+        assert_eq!(
+            read_lsx_nodes(&doc, "M"),
+            Err(CatalogueError::TooLarge {
+                what: "lsx retained attributes",
+                size: LSX_MAX_TOTAL_ATTRS as u64 + 1,
+                limit: LSX_MAX_TOTAL_ATTRS as u64,
+            })
+        );
+        // Attributes of non-matching nodes are never retained.
+        assert!(read_lsx_nodes(&doc, "Other").unwrap().is_empty());
+    }
+}
+
+rl_test! {
+    fn lsx_retained_byte_cap_at_edge_and_edge_plus_one() {
+        // id "k" (1 byte) + value; charged as written, before decoding.
+        let doc = |value_len: usize| {
+            format!("<node id=\"B\"><attribute id=\"k\" value=\"{}\"/></node>", "v".repeat(value_len))
+        };
+        let at = read_lsx_nodes(&doc(LSX_MAX_RETAINED_BYTES - 1), "B").unwrap();
+        assert_eq!(at[0].attrs[0].value.as_ref().map(String::len), Some(LSX_MAX_RETAINED_BYTES - 1));
+        assert_eq!(
+            read_lsx_nodes(&doc(LSX_MAX_RETAINED_BYTES), "B"),
+            Err(CatalogueError::TooLarge {
+                what: "lsx retained attribute bytes",
+                size: LSX_MAX_RETAINED_BYTES as u64 + 1,
+                limit: LSX_MAX_RETAINED_BYTES as u64,
+            })
+        );
+        // A huge value on a non-matching node costs nothing.
+        assert!(read_lsx_nodes(&doc(LSX_MAX_RETAINED_BYTES), "Other").unwrap().is_empty());
     }
 }

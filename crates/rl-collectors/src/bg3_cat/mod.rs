@@ -17,6 +17,7 @@
 
 mod loca;
 mod lsx;
+mod lsx_tag;
 mod stats_txt;
 
 use std::collections::BTreeMap;
@@ -28,13 +29,13 @@ pub use loca::{
     is_loca_handle, parse_loca_wanted,
 };
 pub use lsx::{
-    LSX_MAX_ATTRS, LSX_MAX_DEPTH, LSX_MAX_NODES, LsxAttr, LsxNode, LsxSource, lsx_id_handles,
-    read_lsx_nodes,
+    LSX_MAX_ATTRS, LSX_MAX_DEPTH, LSX_MAX_NODES, LSX_MAX_RETAINED_BYTES, LSX_MAX_TAG_ATTRS,
+    LSX_MAX_TOTAL_ATTRS, LsxAttr, LsxNode, LsxSource, lsx_id_handles, read_lsx_nodes,
 };
 pub use stats_txt::{
     ResolvedItem, STATS_CHECK_EVERY_LINES, STATS_ITEM_TYPES, STATS_KEY_RARITY,
-    STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES, StatsEntry, USING_MAX_DEPTH,
-    parse_stats, parse_stats_with, resolve_using,
+    STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES, STATS_RARITIES, StatsEntry,
+    USING_MAX_DEPTH, is_bg3_id, parse_stats, parse_stats_with, resolve_using,
 };
 
 /// Which parser a matched pak entry feeds.
