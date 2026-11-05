@@ -19,6 +19,7 @@ mod lsf_fixture_tests;
 mod lsf_frame_tests;
 mod lsf_tests;
 mod lsf_writer;
+mod lspk_parts_tests;
 mod lspk_tests;
 mod newage_tests;
 mod normalise_tests;
@@ -27,6 +28,7 @@ mod robustness_tests;
 #[cfg(not(target_arch = "wasm32"))]
 mod schema_tests;
 mod settle_tests;
+mod vdf_tests;
 mod wow_sv_dev_tests;
 mod wow_sv_paths_tests;
 mod wow_sv_robustness_tests;
