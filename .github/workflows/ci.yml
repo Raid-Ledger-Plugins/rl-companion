@@ -54,6 +54,8 @@ jobs:
       - name: Build companion front-end
         working-directory: apps/companion
         run: npm ci && npm run build && npm test
+      - name: Release scripts (latest.json, version plan)
+        run: node --test scripts/release/release.test.mjs
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test
         if: ${{ !cancelled() }}
