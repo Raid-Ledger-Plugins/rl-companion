@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use crate::{
     CatalogueError, ResolvedItem, STATS_CHECK_EVERY_LINES, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES,
-    STATS_RARITIES, StatsEntry, USING_MAX_DEPTH, is_bg3_id, parse_stats, parse_stats_with,
-    resolve_using,
+    STATS_MAX_VALUE_BYTES, STATS_RARITIES, StatsEntry, USING_MAX_DEPTH, is_bg3_id, parse_stats,
+    parse_stats_with, resolve_using,
 };
 
 const CHAIN: &str = "// header comment\r\n\
@@ -232,5 +232,71 @@ rl_test! {
         assert_eq!(find(&items, "Lower").rarity.as_deref(), Some("VeryRare"));
         // An unknown own value is not an error and does not borrow the parent's.
         assert_eq!(find(&items, "Modded").rarity, None);
+    }
+}
+
+rl_test! {
+    fn stats_value_length_cap_at_edge_and_edge_plus_one() {
+        let at = "a".repeat(STATS_MAX_VALUE_BYTES);
+        let over = "b".repeat(STATS_MAX_VALUE_BYTES + 1);
+        let text = format!(
+            "new entry \"P\"\ntype \"Armor\"\ndata \"RootTemplate\" \"parent-rt\"\ndata \"Rarity\" \"Rare\"\n\
+             new entry \"Edge\"\nusing \"P\"\ndata \"RootTemplate\" \"{at}\"\n\
+             new entry \"Over\"\nusing \"P\"\ndata \"RootTemplate\" \"{over}\"\ndata \"Rarity\" \"{over}\"\n\
+             new entry \"OverKind\"\ntype \"{over}\"\nusing \"P\"\n\
+             new entry \"OverUsing\"\ntype \"Armor\"\nusing \"{over}\"\n"
+        );
+        let entries = parse_stats(&text).unwrap();
+        let e = |id: &str| entries.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(e("Edge").root_template.as_deref(), Some(at.as_str()), "{STATS_MAX_VALUE_BYTES} bytes are kept");
+        assert_eq!(e("Over").root_template, None, "{} bytes count as unset", STATS_MAX_VALUE_BYTES + 1);
+        assert_eq!(e("Over").rarity, None);
+        assert_eq!(e("OverKind").kind, None);
+        assert_eq!(e("OverUsing").using, None);
+        let items = resolve_using(&entries);
+        assert_eq!(find(&items, "Edge"), &item("Edge", "Armor", Some(&at), Some("Rare")));
+        // Over-cap values are unset, so the parent's fill in.
+        assert_eq!(find(&items, "Over"), &item("Over", "Armor", Some("parent-rt"), Some("Rare")));
+        assert_eq!(find(&items, "OverKind"), &item("OverKind", "Armor", Some("parent-rt"), Some("Rare")));
+        assert_eq!(find(&items, "OverUsing"), &item("OverUsing", "Armor", None, None));
+    }
+}
+
+/// One parent with a `value`-sized RootTemplate and Rarity, plus `children`
+/// Armor entries that inherit both through `using`.
+fn fan_out(value: &str, children: usize) -> String {
+    let mut text = format!(
+        "new entry \"P\"\ntype \"Armor\"\ndata \"RootTemplate\" \"{value}\"\ndata \"Rarity\" \"{value}\"\n"
+    );
+    for i in 0..children {
+        writeln!(text, "new entry \"C{i}\"\nusing \"P\"").unwrap();
+    }
+    text
+}
+
+fn retained_value_bytes(items: &[ResolvedItem]) -> usize {
+    items
+        .iter()
+        .map(|i| i.kind.len() + i.root_template.as_ref().map_or(0, String::len))
+        .sum()
+}
+
+rl_test! {
+    fn stats_inheritance_from_one_huge_parent_retains_bounded_bytes() {
+        const CHILDREN: usize = 1_024;
+        // 1 MiB on one parent: unbounded cloning would retain > 1 GiB.
+        let huge = "g".repeat(1024 * 1024);
+        let items = resolve_using(&parse_stats(&fan_out(&huge, CHILDREN)).unwrap());
+        assert_eq!(items.len(), CHILDREN + 1);
+        assert!(items.iter().all(|i| i.root_template.is_none() && i.rarity.is_none()));
+        let bound = items.len() * 2 * STATS_MAX_VALUE_BYTES;
+        let retained = retained_value_bytes(&items);
+        assert!(retained <= bound, "retained {retained} bytes, bound {bound}");
+        // At the cap every child does inherit, still within the bound.
+        let at = "g".repeat(STATS_MAX_VALUE_BYTES);
+        let items = resolve_using(&parse_stats(&fan_out(&at, CHILDREN)).unwrap());
+        assert!(items.iter().all(|i| i.root_template.as_deref() == Some(at.as_str())));
+        let retained = retained_value_bytes(&items);
+        assert!(retained <= items.len() * 2 * STATS_MAX_VALUE_BYTES, "retained {retained} bytes");
     }
 }

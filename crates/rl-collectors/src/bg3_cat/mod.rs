@@ -34,8 +34,9 @@ pub use lsx::{
 };
 pub use stats_txt::{
     ResolvedItem, STATS_CHECK_EVERY_LINES, STATS_ITEM_TYPES, STATS_KEY_RARITY,
-    STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES, STATS_RARITIES, StatsEntry,
-    USING_MAX_DEPTH, is_bg3_id, parse_stats, parse_stats_with, resolve_using,
+    STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES, STATS_MAX_VALUE_BYTES,
+    STATS_RARITIES, StatsEntry, USING_MAX_DEPTH, is_bg3_id, parse_stats, parse_stats_with,
+    resolve_using,
 };
 
 /// Which parser a matched pak entry feeds.

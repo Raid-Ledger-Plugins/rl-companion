@@ -17,8 +17,10 @@
 //! `new entry` / `type` / `using` line is an error; a `data` line is read
 //! key first and is strict only for the two keys the join needs (spec D4),
 //! any other key's value is never parsed. A trailing `// comment` is
-//! allowed after the quoted strings. An empty value counts as unset, so the
-//! parent's value is inherited. Ids outside [`is_bg3_id`] skip their block;
+//! allowed after the quoted strings. An empty value, or one longer than
+//! [`STATS_MAX_VALUE_BYTES`], counts as unset, so the parent's value is
+//! inherited; that cap bounds what `using` inheritance can copy into every
+//! child. Ids outside [`is_bg3_id`] skip their block;
 //! a resolved rarity outside [`STATS_RARITIES`] becomes `None`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -29,6 +31,11 @@ use crate::error::CatalogueError;
 pub const STATS_MAX_ENTRIES: usize = 100_000;
 /// Longest stats id kept (spec §4, `BG3_ID_RE`); a longer entry is skipped.
 pub const STATS_MAX_ID_BYTES: usize = 64;
+/// Longest `type` / `using` / `RootTemplate` / `Rarity` value kept (a GUID
+/// is 36 bytes, a known rarity at most 9); a longer one counts as unset.
+/// Inheritance copies these into each child, so retention is bounded by
+/// entries × 4 × this.
+pub const STATS_MAX_VALUE_BYTES: usize = 64;
 /// Rarities the catalogue reports, in canonical spelling (matched ignoring
 /// ASCII case). UNVERIFIED beyond `Common…Legendary` (spec U5); `Story` is
 /// LSLib's quest-item rarity.
@@ -243,8 +250,9 @@ fn fill(slot: &mut Option<String>, from: &Option<String>) {
     }
 }
 
+/// A kept value: non-empty and within [`STATS_MAX_VALUE_BYTES`].
 fn non_empty(s: &str) -> Option<String> {
-    (!s.is_empty()).then(|| s.to_owned())
+    (!s.is_empty() && s.len() <= STATS_MAX_VALUE_BYTES).then(|| s.to_owned())
 }
 
 fn too_many(size: usize) -> CatalogueError {
