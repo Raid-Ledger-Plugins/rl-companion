@@ -113,10 +113,13 @@ pub fn unsettled(sent: &SentState, pending: &[PendingUpload]) -> usize {
 
 fn abs_path() -> &'static Regex {
     static P: OnceLock<Regex> = OnceLock::new();
-    // A drive-letter or UNC path, or a rooted Unix path of 2+ segments.
+    // A drive-letter or UNC path, or a rooted Unix path of 2+ segments, that
+    // starts a word. It runs to the last non-space before `(`, a quote or the
+    // line end, so a folder with spaces (`World of Warcraft`) goes too.
     P.get_or_init(|| {
-        Regex::new(r#"(?:[A-Za-z]:[\\/]|\\\\)[^\s()"']*|/[^\s()"'/]+/[^\s()"']*"#)
-            .unwrap_or_else(|_| unreachable!("static pattern"))
+        let tail = r#"(?:[^()"'\r\n]*[^\s()"'])?"#;
+        let head = r#"(^|[\s(])((?:[A-Za-z]:[\\/]|\\\\|/[^\s()"'/]+/)"#;
+        Regex::new(&format!("{head}{tail})")).unwrap_or_else(|_| unreachable!("static pattern"))
     })
 }
 
@@ -129,7 +132,7 @@ pub fn bridge_line(collector_id: Option<&str>, text: &str) -> String {
         (Some(_), Some((_, rest))) => rest,
         _ => text,
     };
-    abs_path().replace_all(body, "<path>").into_owned()
+    abs_path().replace_all(body, "$1<path>").into_owned()
 }
 
 /// The ring's `target` for an Activity line.
