@@ -174,7 +174,7 @@ fn member(stats: Option<&[u8]>, health: Option<&[u8]>, guid: Option<[u8; 16]>) -
         max_hp: health.and_then(|h| u32_at(h, 4)),
         class_levels: None,
         equipment: None,
-        entity_guid: guid.map(EntityGuid),
+        entity_guid: guid.map(EntityGuid::new),
     }
 }
 

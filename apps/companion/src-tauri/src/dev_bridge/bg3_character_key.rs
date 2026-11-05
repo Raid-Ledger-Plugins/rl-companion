@@ -17,7 +17,7 @@ use std::fmt;
 
 /// One NewAge entity's GUID bytes as stored. `Debug` never prints them.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct EntityGuid(pub [u8; 16]);
+pub struct EntityGuid([u8; 16]);
 
 impl fmt::Debug for EntityGuid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -26,6 +26,11 @@ impl fmt::Debug for EntityGuid {
 }
 
 impl EntityGuid {
+    /// Wrap the 16 bytes as stored in the entity table.
+    pub fn new(raw: [u8; 16]) -> Self {
+        Self(raw)
+    }
+
     /// Lowercase hyphenated text in LSLib order (see the module doc).
     pub fn text(&self) -> String {
         uuid_display(&self.0)
