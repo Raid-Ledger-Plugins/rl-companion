@@ -223,9 +223,14 @@ fn a_synthetic_save_fills_types_checks_and_party_stats() {
     assert_eq!(body["checks"]["portraitsFound"], json!(1));
     for k in 0..5 {
         assert_eq!(
-            body["party"][k],
-            json!({ "slot": k, "decoded": {} }),
-            "slot {k} unproven"
+            body["party"][k]["decoded"],
+            json!({}),
+            "slot {k} unproven: nothing decoded"
+        );
+        assert_eq!(
+            body["party"][k]["slot"],
+            json!(k),
+            "slot {k} is in slot order"
         );
     }
     let saves = get(&src, "/dev/v1/bg3/saves");
@@ -435,14 +440,37 @@ fn a_solo_party_slot_carries_a_character_key_prefix_but_never_the_guid() {
     assert!(!text.contains(&"1".repeat(32)), "{text}");
 }
 
-/// An unproven multi-member party names no slot, so no slot gets a prefix.
+/// Operator ruling 2026-11-05 (ROK-2079): an unproven multi-member party
+/// still carries `characterKeyPrefix` on every row, flagged unverified by
+/// `partyMatchesSaveInfo: false`; `decoded` stays `{}` and no GUID leaks.
 #[test]
-fn an_unproven_party_has_no_character_key_prefix() {
+fn an_unproven_party_carries_an_unverified_prefix_on_every_row() {
     let (src, r) = source("bg3-newage-charkey-5", &party_blob(36));
     let body = structure(&src, &r);
-    let rows = body["party"].as_array().expect("party");
-    assert!(
-        rows.iter().all(|p| p.get("characterKeyPrefix").is_none()),
-        "{rows:?}"
+    assert_eq!(
+        body["checks"]["partyMatchesSaveInfo"],
+        json!(false),
+        "the prefixes are flagged unverified"
     );
+    let rows = body["party"].as_array().expect("party");
+    assert_eq!(rows.len(), 5, "{rows:?}");
+    for (k, row) in rows.iter().enumerate() {
+        let prefix = row["characterKeyPrefix"]
+            .as_str()
+            .unwrap_or_else(|| panic!("slot {k} has no characterKeyPrefix: {row}"));
+        assert!(
+            prefix.len() == 8
+                && prefix
+                    .bytes()
+                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+            "slot {k}: {prefix}"
+        );
+        assert_eq!(row["decoded"], json!({}), "slot {k} decodes nothing");
+    }
+    let text = body.to_string();
+    assert!(
+        !text.contains("11111111-1111-1111-1111-111111111111"),
+        "{text}"
+    );
+    assert!(!text.contains(&"1".repeat(32)), "{text}");
 }

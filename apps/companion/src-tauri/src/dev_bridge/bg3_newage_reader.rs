@@ -23,8 +23,10 @@
 //! through an experience component whose layout is not ported, and XP totals
 //! can tie), so `partyMatchesSaveInfo` is `true` only for a one-member party,
 //! where the slot correspondence is trivial, and only then is `party[0]`
-//! filled. A 2+ member party reports `decoded: {}` for every slot until the
-//! order is proven (or the contract says `decoded` is in entity order). Class levels and equipment need game
+//! decoded. A 2+ member party reports `decoded: {}` for every slot until the
+//! order is proven (or the contract says `decoded` is in entity order); its
+//! rows still carry `characterKeyPrefix` in entity order, unverified against
+//! the slots (`partyMatchesSaveInfo: false`; operator ruling 2026-11-05). Class levels and equipment need game
 //! data / the LSF `Items` tree and stay undecoded (`decoder: none`).
 
 use super::bg3_character_key::EntityGuid;
@@ -196,9 +198,11 @@ fn types(l: &Lsmf) -> Vec<TypeRow> {
 fn decode(l: &Lsmf, bytes: &[u8], party_size: usize) -> NewAgeRead {
     let party: Vec<u32> = decodable(l, PLAYER).into_iter().map(|r| r.0).collect();
     // The correspondence is proven only for one member (see the module doc).
-    // `party[k]` means SaveInfo slot k, so rows are filled only when it is
-    // proven; otherwise `decoded` stays `{}` rather than risk naming the
-    // wrong character (review MINOR).
+    // `party[k]` means SaveInfo slot k, so `decoded` is filled only when it
+    // is proven; otherwise it stays `{}` rather than risk naming the wrong
+    // character (review MINOR). The entity GUID (→ `characterKeyPrefix`) is
+    // carried for every member either way (operator ruling 2026-11-05,
+    // ROK-2079): `partyMatchesSaveInfo: false` flags its slot as unverified.
     let proven = party_size == 1 && party.len() == 1;
     let checks = Checks {
         party_entities_found: party.len() as u64,
@@ -207,14 +211,17 @@ fn decode(l: &Lsmf, bytes: &[u8], party_size: usize) -> NewAgeRead {
         ..Checks::default()
     };
     let (stats, health) = (decodable(l, STATS), decodable(l, HEALTH));
-    let members = if proven {
-        party
-            .iter()
-            .map(|&e| member(find(&stats, e), find(&health, e), l.entity_guid(e)))
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let members = party
+        .iter()
+        .map(|&e| {
+            let guid = l.entity_guid(e);
+            if proven {
+                member(find(&stats, e), find(&health, e), guid)
+            } else {
+                member(None, None, guid)
+            }
+        })
+        .collect();
     NewAgeRead {
         types: types(l),
         checks,
