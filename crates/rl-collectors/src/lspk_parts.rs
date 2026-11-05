@@ -121,10 +121,16 @@ impl<R: Read + Seek> PakSet<R> {
         })
     }
 
-    /// Replace the set's total byte budget (tighten only in production).
+    /// Tighten the set's total byte budget. A `limit` above
+    /// [`PAK_MAX_SET_BYTES`] is clamped to it: the budget can only shrink.
     pub fn with_set_limit(mut self, limit: u64) -> Self {
-        self.set_limit = limit;
+        self.set_limit = limit.min(PAK_MAX_SET_BYTES);
         self
+    }
+
+    /// The set's total byte budget.
+    pub fn set_limit(&self) -> u64 {
+        self.set_limit
     }
 
     pub fn header(&self) -> PakHeader {
@@ -141,15 +147,23 @@ impl<R: Read + Seek> PakSet<R> {
         self.parts.len()
     }
 
-    /// Decompressed bytes read through this set so far.
+    /// Bytes charged against the set budget so far: each attempted entry's
+    /// larger of decompressed and on-disk size, charged before its data is
+    /// read, so entries that then fail to decode still count.
     pub fn bytes_read(&self) -> u64 {
         self.used
     }
 
     /// Read and decompress one entry, refusing anything over `limit`, over
     /// the set budget, or in a part that was not opened — before allocating.
+    /// A `limit` above [`PAK_MAX_ENTRY_BYTES`] is clamped to it (tighten
+    /// only). The entry is charged against the set budget before its data is
+    /// read, so a pak of undecodable entries cannot cost unbounded I/O.
     pub fn read_entry_limited(&mut self, entry: &Entry, limit: u64) -> Result<Vec<u8>, LspkError> {
+        let limit = limit.min(PAK_MAX_ENTRY_BYTES);
         let size = entry.size();
+        let on_disk = u64::from(entry.size_on_disk);
+        let cost = size.max(on_disk);
         let name = || entry.name.clone();
         if size > limit {
             return Err(LspkError::EntryTooLarge {
@@ -158,15 +172,14 @@ impl<R: Read + Seek> PakSet<R> {
                 limit,
             });
         }
-        if !within_budget(self.used, size, self.set_limit) {
+        if !within_budget(self.used, cost, self.set_limit) {
             return Err(LspkError::SetBudgetExceeded {
                 name: name(),
-                size,
+                size: cost,
                 used: self.used,
                 limit: self.set_limit,
             });
         }
-        let on_disk = u64::from(entry.size_on_disk);
         if on_disk > raw_cap(size) {
             return Err(LspkError::RawTooLarge {
                 name: name(),
@@ -183,6 +196,8 @@ impl<R: Read + Seek> PakSet<R> {
                 part: entry.archive_part,
                 opened,
             })?;
+        // `within_budget` above proved this cannot overflow.
+        self.used += cost;
         let raw = read_range(
             &mut part.reader,
             part.len,
@@ -203,7 +218,6 @@ impl<R: Read + Seek> PakSet<R> {
                 actual: out.len() as u64,
             });
         }
-        self.used += size;
         Ok(out)
     }
 }

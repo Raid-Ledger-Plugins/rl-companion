@@ -218,10 +218,47 @@ rl_test! {
             let mut set = open(vec![bytes]).expect("set");
             let entry = set.entries()[0].clone();
             let got = set.read_entry_limited(&entry, PAK_MAX_ENTRY_BYTES);
-            let too_large = matches!(got, Err(LspkError::EntryTooLarge { .. }));
-            assert_eq!(too_large, over, "claimed {claimed}: {got:?}");
-            assert!(got.is_err(), "a 300-byte LZ4 block cannot hold {claimed} bytes");
+            if over {
+                assert_eq!(got, Err(LspkError::EntryTooLarge { name: "big.bin".into(), size: claimed, limit: cap }));
+            } else {
+                // At the cap the LZ4 ratio check refuses it before the decoder allocates.
+                assert!(matches!(
+                    &got,
+                    Err(LspkError::Decompress { name, reason }) if name == "big.bin" && reason.ends_with(&format!("cannot hold {cap} bytes"))
+                ), "claimed {claimed}: {got:?}");
+            }
         }
+    }
+}
+
+rl_test! {
+    fn a_limit_above_the_caps_is_clamped_to_them() {
+        let claimed = PAK_MAX_ENTRY_BYTES + 1;
+        let bytes = with_first_record("big.bin", &[0u8; 300], Method::Lz4, |t| set_u32(t, ENTRY_UNCOMPRESSED, claimed as u32));
+        let mut set = open(vec![bytes]).expect("set").with_set_limit(u64::MAX);
+        assert_eq!(set.set_limit(), PAK_MAX_SET_BYTES, "a set limit above the default is clamped");
+        let entry = set.entries()[0].clone();
+        assert_eq!(
+            set.read_entry_limited(&entry, u64::MAX),
+            Err(LspkError::EntryTooLarge { name: "big.bin".into(), size: claimed, limit: PAK_MAX_ENTRY_BYTES }),
+            "an entry limit above the default is clamped"
+        );
+        assert_eq!(open(vec![single("a", b"a", Method::Stored)]).expect("set").with_set_limit(10).set_limit(), 10, "tightening still works");
+    }
+}
+
+rl_test! {
+    fn an_entry_that_fails_to_decode_is_still_charged_to_the_set_budget() {
+        let bytes = with_first_record("bad.bin", &[0u8; 300], Method::Lz4, |t| set_u32(t, ENTRY_UNCOMPRESSED, 5000));
+        let mut set = open(vec![bytes]).expect("set").with_set_limit(5000);
+        let entry = set.entries()[0].clone();
+        assert!(matches!(set.read_entry_limited(&entry, 8192), Err(LspkError::Decompress { .. })), "5000 bytes from a tiny LZ4 block cannot decode");
+        assert_eq!(set.bytes_read(), 5000, "the failed read was charged before its data was read");
+        assert_eq!(
+            set.read_entry_limited(&entry, 8192),
+            Err(LspkError::SetBudgetExceeded { name: "bad.bin".into(), size: 5000, used: 5000, limit: 5000 }),
+            "a retry is refused by the budget, before any I/O"
+        );
     }
 }
 
