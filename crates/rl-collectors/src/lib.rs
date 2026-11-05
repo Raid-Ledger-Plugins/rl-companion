@@ -18,7 +18,13 @@
 //! - [`parse_ledgerlink_outbox`] reads the LedgerLink addon's
 //!   `LedgerLinkDB.outbox` from a WoW SavedVariables file;
 //!   [`changed_entries`] and [`ledgerlink_sv_candidates`] support the
-//!   watcher. The crate never touches the filesystem.
+//!   watcher.
+//! - [`PakSet`] reads entries from a multi-part LSPK game pak over any
+//!   `Read + Seek`, one bounded entry at a time.
+//! - [`library_paths`] / [`app_manifest`] read Steam's
+//!   `libraryfolders.vdf` / `appmanifest_*.acf` ([`parse_vdf`]).
+//!
+//! The crate never touches the filesystem.
 //!
 //! Every parser returns a typed error on malformed, truncated or
 //! unsupported input; none of them panics.
@@ -29,17 +35,21 @@ mod error;
 mod extract;
 mod lsf;
 mod lspk;
+mod lspk_parts;
 mod newage;
 mod normalise;
 mod settle;
 mod time;
+mod vdf;
 mod webp;
 mod wow_sv;
 
 #[cfg(test)]
 mod tests;
 
-pub use error::{ExtractError, LsfError, LspkError, NormaliseError, WebpError, WowSvError};
+pub use error::{
+    ExtractError, LsfError, LspkError, NormaliseError, VdfError, WebpError, WowSvError,
+};
 pub use extract::{
     META_LSF_MAX_BYTES, META_LSF_NAME, SAVE_INFO_MAX_BYTES, SAVE_INFO_NAME, WEBP_MAX_BYTES,
     campaign_key_from_package, campaign_key_from_save_folder, extract_save_info,
@@ -53,6 +63,10 @@ pub use lsf::{
 pub use lspk::{
     CompressionMethod, DEFAULT_MAX_ENTRY_BYTES, Entry, LSPK_VERSION, MAX_FILES, Package, read_lspk,
 };
+pub use lspk_parts::{
+    PAK_MAX_ENTRY_BYTES, PAK_MAX_PARTS, PAK_MAX_SET_BYTES, PAK_RAW_SLACK_BYTES, PakHeader, PakSet,
+    part_file_name, read_pak_header,
+};
 pub use newage::{LSMF_MAGIC, LSMF_MAX_BYTES, Lsmf, LsmfComponent, LsmfError, count_webp_images};
 pub use normalise::{
     Bg3Class, Bg3SaveMessage, Bg3SavePayload, COLLECTOR_VERSION, CONTRACT, CONTRACT_VERSION,
@@ -60,6 +74,10 @@ pub use normalise::{
 };
 pub use settle::{DEFAULT_STABLE_SAMPLES, FileSample, SettleWatcher, is_settled};
 pub use time::rfc3339_utc_from_unix_seconds;
+pub use vdf::{
+    AppManifest, SteamLibrary, VDF_MAX_BYTES, VDF_MAX_DEPTH, VdfObject, VdfValue, app_manifest,
+    library_paths, parse_vdf,
+};
 pub use webp::webp_dimensions;
 pub use wow_sv::{
     DEV_SNAPSHOT_MAX_BYTES, DevSnapshotEntry, DevSnapshots, LEDGERLINK_DB, LEDGERLINK_SV_FILE,
