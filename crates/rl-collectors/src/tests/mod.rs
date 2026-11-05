@@ -13,6 +13,9 @@ macro_rules! rl_test {
     };
 }
 
+mod bg3_loca_tests;
+mod bg3_lsx_tests;
+mod bg3_stats_tests;
 mod extract_tests;
 mod fixtures;
 mod lsf_fixture_tests;
