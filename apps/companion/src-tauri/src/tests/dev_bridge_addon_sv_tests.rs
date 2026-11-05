@@ -205,3 +205,119 @@ fn ledgerlink_sv_still_reads_only_ledgerlink_lua() {
     assert_eq!(all[0]["path"], json!(acct_rel("LedgerLink.lua")));
     assert_eq!(joined(&all), "LedgerLinkDB = {}\n");
 }
+
+fn not_found(c: &crate::dev_bridge::server::ServerCtx, path: &str, q: &str) {
+    let (status, body) = get(c, path, Some(q));
+    assert_eq!(
+        (status, &body),
+        (404, &json!({ "error": "not_found" })),
+        "{path}?{q}"
+    );
+}
+
+#[test]
+fn unlisted_folder_with_a_bad_query_is_not_found_not_invalid() {
+    let wow = seeded("addon-sv-unlisted-bad-query");
+    let c = ctx(&wow);
+    for q in [
+        format!("flavor={FLAVOR}&scope=nope"),
+        "flavor=_nope_".to_owned(),
+        format!("flavor={FLAVOR}&cursor=!!!"),
+    ] {
+        not_found(&c, "/dev/v1/addons/Secret/sv", &q);
+    }
+}
+
+#[test]
+fn double_encoded_and_nul_suffixed_folders_are_not_found() {
+    let wow = seeded("addon-sv-encoding");
+    let c = ctx(&wow);
+    let q = format!("flavor={FLAVOR}&scope=account");
+    for path in [
+        "/dev/v1/addons/%2521BugGrabber/sv",
+        "/dev/v1/addons/Mailworthy%00/sv",
+    ] {
+        not_found(&c, path, &q);
+    }
+}
+
+#[test]
+fn a_ledgerlink_cursor_is_refused_on_an_addon_route() {
+    let wow = seeded("addon-sv-cross-cursor");
+    let big: String = (0..2500)
+        .map(|i| format!("\t[\"k{i}\"] = \"ledger value {i}\",\n"))
+        .collect();
+    write(
+        &wow.join(acct_rel("LedgerLink.lua")),
+        format!("LedgerLinkDB = {{\n{big}}}\n").as_bytes(),
+    );
+    let c = ctx(&wow);
+    let base = format!("flavor={FLAVOR}&scope=account");
+    let (status, first) = get(&c, "/dev/v1/ledgerlink/sv", Some(&base));
+    assert_eq!(status, 200, "{first}");
+    let cursor = first["next"].as_str().expect("LedgerLink.lua spans pages");
+    let q = format!("{base}&cursor={cursor}");
+    let (status, body) = get(&c, "/dev/v1/addons/Mailworthy/sv", Some(&q));
+    assert_eq!(status, 400, "a foreign file's cursor is refused: {body}");
+    assert_eq!(body["error"], json!("invalid_request"), "{body}");
+    assert_eq!(body["issues"][0]["path"], json!(["cursor"]), "{body}");
+}
+
+/// Moves `rel` out of the WoW folder and leaves a symlink to it behind.
+#[cfg(unix)]
+fn link_out(wow: &Path, rel: &str, outside: &Path) {
+    let inside = wow.join(rel);
+    std::fs::create_dir_all(outside.parent().expect("parent")).expect("mkdir");
+    std::fs::rename(&inside, outside).expect("move out");
+    std::os::unix::fs::symlink(outside, &inside).expect("symlink");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_saved_variables_dir_is_not_followed_on_either_route() {
+    let wow = seeded("addon-sv-symlink-dir");
+    let elsewhere = super::temp_dir("addon-sv-symlink-dir-out");
+    let sv_dir = format!("{FLAVOR}/WTF/Account/TESTACCOUNT/SavedVariables");
+    link_out(&wow, &sv_dir, &elsewhere.join("SavedVariables"));
+    assert!(
+        wow.join(acct_rel("Mailworthy.lua")).is_file(),
+        "reachable through the link"
+    );
+    let c = ctx(&wow);
+    let q = format!("flavor={FLAVOR}&scope=account");
+    not_found(&c, "/dev/v1/addons/Mailworthy/sv", &q);
+    not_found(&c, "/dev/v1/addons/!BugGrabber/sv", &q);
+    not_found(&c, "/dev/v1/ledgerlink/sv", &q);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_wtf_dir_is_not_followed() {
+    let wow = seeded("addon-sv-symlink-wtf");
+    let elsewhere = super::temp_dir("addon-sv-symlink-wtf-out");
+    link_out(&wow, &format!("{FLAVOR}/WTF"), &elsewhere.join("WTF"));
+    let c = ctx(&wow);
+    let q = format!("flavor={FLAVOR}&scope=account");
+    not_found(&c, "/dev/v1/addons/Mailworthy/sv", &q);
+    not_found(&c, "/dev/v1/ledgerlink/sv", &q);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_sv_file_is_not_followed_on_either_route() {
+    let wow = seeded("addon-sv-symlink-file");
+    let elsewhere = super::temp_dir("addon-sv-symlink-file-out");
+    for file in ["Mailworthy.lua", "LedgerLink.lua"] {
+        link_out(&wow, &acct_rel(file), &elsewhere.join(file));
+    }
+    let c = ctx(&wow);
+    let q = format!("flavor={FLAVOR}&scope=account");
+    not_found(&c, "/dev/v1/addons/Mailworthy/sv", &q);
+    not_found(&c, "/dev/v1/ledgerlink/sv", &q);
+    let all = pages(&c, "/dev/v1/addons/!BugGrabber/sv", "sv-raw", &q);
+    assert_eq!(
+        all[0]["path"],
+        json!(acct_rel("!BugGrabber.lua")),
+        "an unlinked sibling is still served"
+    );
+}
