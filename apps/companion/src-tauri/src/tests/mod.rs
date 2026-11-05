@@ -28,7 +28,6 @@ mod registry_gating_tests;
 mod registry_tests;
 mod scan_pass_tests;
 mod scan_report_log_tests;
-mod scan_report_scrub_tests;
 mod scan_report_tests;
 mod scope_tests;
 mod screenshot_send_tests;

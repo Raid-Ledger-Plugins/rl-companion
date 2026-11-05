@@ -3,7 +3,7 @@
 //! kick it through [`Runtime::kick`].
 
 use crate::blob_send::send_with_blobs;
-use crate::collector::{Note, PendingUpload, SentState};
+use crate::collector::{PendingUpload, SentState};
 use crate::collector_view::{device_note, device_state, rows, CollectorRowDto, RETRYING};
 use crate::config::AppConfig;
 use crate::gate::{gate, Gate};
@@ -224,45 +224,17 @@ impl Runtime {
 
     /// A device-level activity line.
     pub fn log(&self, text: impl Into<String>) {
-        self.push_log(None, None, text.into());
+        self.push_log(None, text.into());
     }
 
-    /// An activity line about one collector (D12) that names no one: the dev
-    /// bridge gets all of it (paths scrubbed).
+    /// An activity line about one collector (D12).
     pub fn log_for(&self, collector_id: &str, text: impl Into<String>) {
-        self.push_log(Some(collector_id.to_owned()), None, text.into());
+        self.push_log(Some(collector_id.to_owned()), text.into());
     }
 
-    /// `subject: text` about one collector, where `subject` is a character,
-    /// save or campaign name. The window shows both; the dev bridge only
-    /// `text`, so a name holding `": "` cannot leak its tail.
-    pub fn log_about(&self, collector_id: &str, subject: &str, text: impl Into<String>) {
-        self.push_log(Some(collector_id.to_owned()), Some(subject), text.into());
-    }
-
-    /// One of a collector's scan notes: its subject reaches the window only.
-    pub fn log_note(&self, collector_id: &str, note: &Note) {
-        let id = Some(collector_id.to_owned());
-        self.push_log(id, note.subject.as_deref(), note.text.clone());
-    }
-
-    fn push_log(&self, collector_id: Option<String>, subject: Option<&str>, body: String) {
-        self.mirror(collector_id.as_deref(), &scan_report::scrub_paths(&body));
-        let text = match subject {
-            Some(s) => format!("{s}: {body}"),
-            None => body,
-        };
-        self.keep_log(collector_id, text);
-    }
-
-    /// Into the LAN dev-bridge log ring (already subject-free and scrubbed).
-    fn mirror(&self, collector_id: Option<&str>, line: &str) {
-        let target = scan_report::bridge_target(collector_id);
-        crate::dev_bridge::logbuf::log("info", &target, line);
-    }
-
-    /// Into the window's Activity log.
-    fn keep_log(&self, collector_id: Option<String>, text: String) {
+    /// Into the window's Activity log only. Its free text (paths, character,
+    /// save and campaign names) is never mirrored into the dev-bridge ring.
+    fn push_log(&self, collector_id: Option<String>, text: String) {
         let mut inner = self.lock();
         inner.log.push_front(LogLine {
             at: now(),
@@ -332,7 +304,7 @@ impl Runtime {
         drop(inner);
         let path = scan_report::upload_times_path(&self.sent_path);
         if let Some(Err(e)) = uploads.map(|u| u.save(&path)) {
-            self.keep_log(None, format!("Could not save upload times ({e})"));
+            self.log(format!("Could not save upload times ({e})"));
         }
     }
 
@@ -706,7 +678,7 @@ async fn gate_and_upload(
 ) -> (String, bool) {
     scan.notes
         .iter()
-        .for_each(|n| rt.log_note(entry.manifest.id, n));
+        .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
     // A held screenshot batch's preview image is downscaled off the runtime.
     crate::screenshot_preview::attach(scan).await;
     let waiting = scan.pending.len();
@@ -782,7 +754,7 @@ async fn upload_all(
                     &ready
                 }
                 Err(line) => {
-                    rt.log_about(p.contract, &p.label, line);
+                    rt.log_for(p.contract, format!("{}: {line}", p.label));
                     continue;
                 }
             }
@@ -795,7 +767,7 @@ async fn upload_all(
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         let fx = effect(&outcome);
-        rt.log_about(p.contract, &p.label, fx.text.as_str());
+        rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));
         if is_unknown_contract(&outcome) {
             rt.deferred_unknown_contract();
         }

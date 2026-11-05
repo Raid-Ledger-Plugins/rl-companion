@@ -134,9 +134,7 @@ fn no_opt_in_time_sends_nothing() {
     assert!(scan.pending.is_empty());
     assert_eq!(scan.files, 0);
     assert!(
-        scan.notes
-            .iter()
-            .any(|n| n.to_string().contains("no opt-in time")),
+        scan.notes.iter().any(|n| n.contains("no opt-in time")),
         "{:?}",
         scan.notes
     );
@@ -175,9 +173,7 @@ fn no_hub_picked_holds_screenshots_back() {
     assert_eq!(scan.waiting, 1, "the scan carries the hub-waiting count");
     assert!(scan.pending.iter().all(needs_encode), "nothing is encoded");
     assert!(
-        scan.notes
-            .iter()
-            .any(|n| n.to_string().contains("pick a hub")),
+        scan.notes.iter().any(|n| n.contains("pick a hub")),
         "{:?}",
         scan.notes
     );

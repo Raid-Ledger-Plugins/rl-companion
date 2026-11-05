@@ -213,9 +213,7 @@ fn a_broken_save_is_noted_not_uploaded() {
         .expect("enabled");
     assert_eq!(scan.pending.len(), 0);
     assert!(
-        scan.notes
-            .iter()
-            .any(|n| n.to_string().contains("not readable yet")),
+        scan.notes.iter().any(|n| n.contains("not readable yet")),
         "{:?}",
         scan.notes
     );

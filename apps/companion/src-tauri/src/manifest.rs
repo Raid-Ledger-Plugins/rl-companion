@@ -195,19 +195,21 @@ pub fn resolve_override(
 ) -> Result<PathBuf, String> {
     let raw = raw.trim();
     let path = resolve_root(raw, env)
-        .ok_or_else(|| "the folder names an environment variable that is not set".to_owned())?;
+        .ok_or_else(|| format!("folder {raw:?} names an environment variable that is not set"))?;
     if !path.is_absolute() {
-        return Err("the folder must be a full path".to_owned());
+        return Err(format!("folder {raw:?} must be a full path"));
     }
     // `..` could climb to the drive root (`/tmp/..`, `~/../..`).
     if path
         .components()
         .any(|c| matches!(c, std::path::Component::ParentDir))
     {
-        return Err("the folder must not use \"..\"".to_owned());
+        return Err(format!("folder {raw:?} must not use \"..\""));
     }
     if path.parent().is_none() {
-        return Err("the folder is a whole drive; pick the game's folder".to_owned());
+        return Err(format!(
+            "folder {raw:?} is a whole drive; pick the game's folder"
+        ));
     }
     Ok(path)
 }

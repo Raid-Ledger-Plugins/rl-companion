@@ -50,54 +50,12 @@ pub struct Scan {
     /// Messages whose content differs from the last settled upload.
     pub pending: Vec<PendingUpload>,
     /// Local-only notes (skipped entries, unreadable files) for the log.
-    pub notes: Vec<Note>,
+    pub notes: Vec<String>,
     /// How many source files were read.
     pub files: usize,
     /// Items found but not queued yet (BG3 screenshots waiting for a hub
     /// pick): still unsettled, so they count in `/dev/v1/collectors` pending.
     pub waiting: usize,
-}
-
-/// One scan note. `subject` (an account folder, a save or file name, an
-/// outbox key) is shown in the window only; the dev bridge gets `text` alone,
-/// so nothing has to parse a name back out of the line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Note {
-    pub subject: Option<String>,
-    pub text: String,
-}
-
-impl std::fmt::Display for Note {
-    /// The window's Activity form: `subject: text`.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.subject {
-            Some(s) => write!(f, "{s}: {}", self.text),
-            None => f.write_str(&self.text),
-        }
-    }
-}
-
-impl Scan {
-    /// A note about `subject` (kept out of the dev bridge).
-    pub fn note(&mut self, subject: impl Into<String>, text: impl Into<String>) {
-        self.notes.push(Note {
-            subject: Some(subject.into()),
-            text: text.into(),
-        });
-    }
-
-    /// A note that names no one.
-    pub fn note_plain(&mut self, text: impl Into<String>) {
-        self.notes.push(Note {
-            subject: None,
-            text: text.into(),
-        });
-    }
-
-    /// Every note in its window form.
-    pub fn note_lines(&self) -> Vec<String> {
-        self.notes.iter().map(Note::to_string).collect()
-    }
 }
 
 /// A game collector: where to watch, which changes matter, and how to turn

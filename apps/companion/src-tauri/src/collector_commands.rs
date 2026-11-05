@@ -231,7 +231,7 @@ pub fn set_bg3_campaign(
         .find(|g| g.key == key)
         .map_or_else(|| "A campaign".to_owned(), |g| g.name);
     let verb = if ticked { "on" } else { "off" };
-    rt.log_about(BG3_SAVE.id, &name, format!("uploads turned {verb}"));
+    rt.log_for(BG3_SAVE.id, format!("{name}: uploads turned {verb}"));
     rt.kick();
     Ok(status(&app, &rt))
 }

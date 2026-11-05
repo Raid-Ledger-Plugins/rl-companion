@@ -123,7 +123,7 @@ impl Bg3SaveCollector {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         let name = name.unwrap_or_default();
         let note = |scan: &mut Scan, text: String| {
-            scan.note(name.clone(), text);
+            scan.notes.push(format!("{name}: {text}"));
             None
         };
         let meta = match self.scope.metadata(path) {
