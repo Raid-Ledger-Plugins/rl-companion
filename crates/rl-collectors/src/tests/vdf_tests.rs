@@ -101,7 +101,14 @@ rl_test! {
 
 rl_test! {
     fn refuses_an_installdir_that_is_not_one_folder_name() {
-        for dir in ["", ".", "..", "a/b", r"a\\b", "C:x", "../escape"] {
+        let bad = [
+            "", ".", "..", "a/b", r"a\\b", "C:x", "../escape",
+            // Windows strips trailing dots and spaces, so these resolve to `..` or another name.
+            ".. ", "...", "a.", "a ", " a", ".a",
+            "a<b", "a>b", "a|b", "a?b", "a*b", r#"a\"b"#,
+            "a\0b", r"a\tb", "a\nb", "a\u{1}b", "a\u{7f}b",
+        ];
+        for dir in bad {
             assert_eq!(
                 app_manifest(&manifest_with_installdir(dir)),
                 Err(VdfError::BadValue { key: "installdir", reason: "not a single folder name" }),

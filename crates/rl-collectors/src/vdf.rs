@@ -80,6 +80,12 @@ pub struct SteamLibrary {
 /// The libraries in a `libraryfolders.vdf`, current (`"0" { "path" … "apps"
 /// { … } }`) or pre-2021 (`"1" "D:\\SteamLibrary"`) format. Entries with no
 /// path are skipped.
+///
+/// The returned paths are UNVALIDATED text from a user-writable file. The
+/// app caller (`bg3_install.rs`) must accept only absolute drive-letter
+/// paths (`D:\…`) with no `..` component, and must refuse UNC
+/// (`\\host\share`) and `\\?\` paths — probing an attacker's SMB share
+/// would leak the user's NTLM hash.
 pub fn library_paths(text: &str) -> Result<Vec<SteamLibrary>, VdfError> {
     let doc = parse_vdf(text)?;
     let root = doc
@@ -120,8 +126,10 @@ pub struct AppManifest {
 }
 
 /// Read an `appmanifest_*.acf`. `installdir` is required and must be one
-/// plain path component (no separators, drive colon, `.`/`..` or NUL), so
-/// it can never steer the caller outside `steamapps/common/`.
+/// plain Windows folder name: not `.`/`..`, no leading or trailing space or
+/// dot (Windows strips trailing ones, so `".. "` would become `..`), and
+/// none of `<>:"/\|?*`, NUL or any control character — so it can never
+/// steer the caller outside `steamapps/common/`.
 pub fn app_manifest(text: &str) -> Result<AppManifest, VdfError> {
     let doc = parse_vdf(text)?;
     let state = doc
@@ -130,12 +138,7 @@ pub fn app_manifest(text: &str) -> Result<AppManifest, VdfError> {
     let installdir = state
         .str("installdir")
         .ok_or(VdfError::MissingKey("installdir"))?;
-    let unsafe_char = |c: char| matches!(c, '/' | '\\' | ':' | '\0');
-    if installdir.is_empty()
-        || installdir == "."
-        || installdir == ".."
-        || installdir.contains(unsafe_char)
-    {
+    if !is_plain_folder_name(installdir) {
         return Err(VdfError::BadValue {
             key: "installdir",
             reason: "not a single folder name",
@@ -147,6 +150,20 @@ pub fn app_manifest(text: &str) -> Result<AppManifest, VdfError> {
         installdir: installdir.to_owned(),
         buildid: owned("buildid"),
     })
+}
+
+/// One Windows folder name that resolves to itself (see [`app_manifest`]).
+fn is_plain_folder_name(name: &str) -> bool {
+    let edge = |c: char| c == ' ' || c == '.';
+    let unsafe_char = |c: char| {
+        c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+    };
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.starts_with(edge)
+        && !name.ends_with(edge)
+        && !name.contains(unsafe_char)
 }
 
 enum Token {
