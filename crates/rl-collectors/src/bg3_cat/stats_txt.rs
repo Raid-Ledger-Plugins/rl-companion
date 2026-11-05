@@ -14,9 +14,12 @@
 //! Lines are trimmed, CRLF is accepted, blank and `//` lines are skipped,
 //! and keywords the catalogue does not use are ignored. Any other `new …`
 //! line (another block kind) closes the current entry. A malformed
-//! `new entry` / `type` / `using` / `data` line is an error. Only the two
-//! `data` keys the join needs are kept (spec D4); an empty value counts as
-//! unset, so the parent's value is inherited.
+//! `new entry` / `type` / `using` line is an error; a `data` line is read
+//! key first and is strict only for the two keys the join needs (spec D4),
+//! any other key's value is never parsed. A trailing `// comment` is
+//! allowed after the quoted strings. An empty value counts as unset, so the
+//! parent's value is inherited. Ids outside [`is_bg3_id`] skip their block;
+//! a resolved rarity outside [`STATS_RARITIES`] becomes `None`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -26,6 +29,10 @@ use crate::error::CatalogueError;
 pub const STATS_MAX_ENTRIES: usize = 100_000;
 /// Longest stats id kept (spec §4, `BG3_ID_RE`); a longer entry is skipped.
 pub const STATS_MAX_ID_BYTES: usize = 64;
+/// Rarities the catalogue reports, in canonical spelling (matched ignoring
+/// ASCII case). UNVERIFIED beyond `Common…Legendary` (spec U5); `Story` is
+/// LSLib's quest-item rarity.
+pub const STATS_RARITIES: &[&str] = &["Common", "Uncommon", "Rare", "VeryRare", "Legendary", "Story"];
 /// Most `using` hops followed from an entry to its ancestors.
 pub const USING_MAX_DEPTH: usize = 16;
 /// The stop check runs once per this many lines (spec §4 deadline).
@@ -102,7 +109,7 @@ fn new_entry(rest: &str, line: usize) -> Result<Option<StatsEntry>, CatalogueErr
         return Ok(None);
     };
     let [id] = quoted::<1>(args, line)?;
-    if id.is_empty() || id.len() > STATS_MAX_ID_BYTES {
+    if !is_bg3_id(id) {
         return Ok(None);
     }
     Ok(Some(StatsEntry {
@@ -121,11 +128,11 @@ fn apply_line(
         "type" => entry.kind = non_empty(quoted::<1>(rest, line)?[0]),
         "using" => entry.using = non_empty(quoted::<1>(rest, line)?[0]),
         "data" => {
-            let [key, value] = quoted::<2>(rest, line)?;
+            let (key, after) = quoted_prefix(rest, line)?;
             if key == STATS_KEY_ROOT_TEMPLATE {
-                entry.root_template = non_empty(value);
+                entry.root_template = non_empty(quoted::<1>(after, line)?[0]);
             } else if key == STATS_KEY_RARITY {
-                entry.rarity = non_empty(value);
+                entry.rarity = non_empty(quoted::<1>(after, line)?[0]);
             }
         }
         _ => {}
@@ -133,22 +140,43 @@ fn apply_line(
     Ok(())
 }
 
-/// Exactly `N` double-quoted strings separated by whitespace.
+/// `BG3_ID_RE` (`^[A-Za-z0-9_]{1,64}$`, ROK-2079 / spec §4).
+pub fn is_bg3_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= STATS_MAX_ID_BYTES
+        && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// The canonical spelling of a known rarity.
+fn known_rarity(r: &str) -> Option<String> {
+    STATS_RARITIES
+        .iter()
+        .find(|k| k.eq_ignore_ascii_case(r))
+        .map(|k| (*k).to_owned())
+}
+
+/// One leading double-quoted string and the text after it.
+fn quoted_prefix(rest: &str, line: usize) -> Result<(&str, &str), CatalogueError> {
+    let body = rest
+        .trim_start()
+        .strip_prefix('"')
+        .ok_or_else(|| parse_err(line, "expected a quoted string"))?;
+    let end = body
+        .find('"')
+        .ok_or_else(|| parse_err(line, "unterminated quoted string"))?;
+    Ok((&body[..end], &body[end + 1..]))
+}
+
+/// Exactly `N` double-quoted strings separated by whitespace, optionally
+/// followed by a `// comment`.
 fn quoted<const N: usize>(rest: &str, line: usize) -> Result<[&str; N], CatalogueError> {
     let mut out = [""; N];
     let mut s = rest;
     for slot in &mut out {
-        let body = s
-            .trim_start()
-            .strip_prefix('"')
-            .ok_or_else(|| parse_err(line, "expected a quoted string"))?;
-        let end = body
-            .find('"')
-            .ok_or_else(|| parse_err(line, "unterminated quoted string"))?;
-        *slot = &body[..end];
-        s = &body[end + 1..];
+        (*slot, s) = quoted_prefix(s, line)?;
     }
-    if !s.trim().is_empty() {
+    let tail = s.trim();
+    if !tail.is_empty() && !tail.starts_with("//") {
         return Err(parse_err(line, "unexpected text after the quoted strings"));
     }
     Ok(out)
@@ -198,7 +226,7 @@ fn resolve_one(entry: &StatsEntry, by_id: &HashMap<&str, &StatsEntry>) -> Option
             id: merged.id,
             kind,
             root_template: merged.root_template,
-            rarity: merged.rarity,
+            rarity: merged.rarity.as_deref().and_then(known_rarity),
         })
 }
 

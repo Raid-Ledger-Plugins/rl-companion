@@ -5,7 +5,8 @@ use std::fmt::Write as _;
 
 use crate::{
     CatalogueError, ResolvedItem, STATS_CHECK_EVERY_LINES, STATS_MAX_ENTRIES, STATS_MAX_ID_BYTES,
-    StatsEntry, USING_MAX_DEPTH, parse_stats, parse_stats_with, resolve_using,
+    STATS_RARITIES, StatsEntry, USING_MAX_DEPTH, is_bg3_id, parse_stats, parse_stats_with,
+    resolve_using,
 };
 
 const CHAIN: &str = "// header comment\r\n\
@@ -69,12 +70,12 @@ rl_test! {
     fn stats_cycle_and_missing_parent_keep_own_fields() {
         let text = "new entry \"A\"\ntype \"Weapon\"\nusing \"B\"\ndata \"Rarity\" \"Rare\"\n\
                     new entry \"B\"\ntype \"Weapon\"\nusing \"A\"\n\
-                    new entry \"C\"\ntype \"Object\"\nusing \"Nowhere\"\ndata \"Rarity\" \"Epic\"\n\
+                    new entry \"C\"\ntype \"Object\"\nusing \"Nowhere\"\ndata \"Rarity\" \"VeryRare\"\n\
                     new entry \"Self\"\ntype \"Object\"\nusing \"Self\"\n";
         let items = resolve_using(&parse_stats(text).unwrap());
         assert_eq!(find(&items, "A"), &item("A", "Weapon", None, Some("Rare")));
         assert_eq!(find(&items, "B"), &item("B", "Weapon", None, Some("Rare")), "B inherits A, then stops");
-        assert_eq!(find(&items, "C"), &item("C", "Object", None, Some("Epic")));
+        assert_eq!(find(&items, "C"), &item("C", "Object", None, Some("VeryRare")));
         assert_eq!(find(&items, "Self"), &item("Self", "Object", None, None));
     }
 }
@@ -154,14 +155,14 @@ fn chain(hops: usize) -> String {
     for i in 1..hops {
         writeln!(text, "new entry \"E{i}\"\nusing \"E{}\"", i + 1).unwrap();
     }
-    writeln!(text, "new entry \"E{hops}\"\ndata \"Rarity\" \"Epic\"").unwrap();
+    writeln!(text, "new entry \"E{hops}\"\ndata \"Rarity\" \"Legendary\"").unwrap();
     text
 }
 
 rl_test! {
     fn stats_using_depth_cap_at_edge_and_edge_plus_one() {
         let at = resolve_using(&parse_stats(&chain(USING_MAX_DEPTH)).unwrap());
-        assert_eq!(find(&at, "E0").rarity.as_deref(), Some("Epic"), "{USING_MAX_DEPTH} hops must resolve");
+        assert_eq!(find(&at, "E0").rarity.as_deref(), Some("Legendary"), "{USING_MAX_DEPTH} hops must resolve");
         let over = resolve_using(&parse_stats(&chain(USING_MAX_DEPTH + 1)).unwrap());
         assert_eq!(find(&over, "E0").rarity, None, "{} hops must stop short", USING_MAX_DEPTH + 1);
     }
@@ -178,5 +179,58 @@ rl_test! {
         assert_eq!(calls, 1, "one check once line {} is reached", STATS_CHECK_EVERY_LINES + 1);
         let r = parse_stats_with(&lines(STATS_CHECK_EVERY_LINES + 1), &mut || true);
         assert_eq!(r, Err(CatalogueError::Timeout));
+    }
+}
+
+rl_test! {
+    fn stats_data_line_reads_the_key_first_and_allows_trailing_comments() {
+        let text = "new entry \"ARM_C\"\ntype \"Armor\" // the kind\n\
+                    data \"Weight\" 1.5 unquoted junk\n\
+                    data \"ValueOverride\"\n\
+                    data \"RootTemplate\" \"rt-guid\" // template\n\
+                    data \"Rarity\" \"Rare\"//tight\n";
+        let items = resolve_using(&parse_stats(text).unwrap());
+        assert_eq!(items, [item("ARM_C", "Armor", Some("rt-guid"), Some("Rare"))]);
+        // The two keys the join needs stay strict.
+        assert_eq!(parse_reason("new entry \"A\"\ndata \"Rarity\" Rare"), (2, "expected a quoted string"));
+        assert_eq!(
+            parse_reason("new entry \"A\"\ndata \"RootTemplate\" \"g\" junk"),
+            (2, "unexpected text after the quoted strings")
+        );
+        assert_eq!(parse_reason("new entry \"A\"\ndata Weight \"1\""), (2, "expected a quoted string"));
+    }
+}
+
+rl_test! {
+    fn stats_ids_must_match_bg3_id_re() {
+        for ok in ["ARM_Hat", "WPN_Longsword_1", "MyMod_sword", "a", "_"] {
+            assert!(is_bg3_id(ok), "{ok:?} must be accepted");
+        }
+        for bad in ["", "ARM-Hat", "ARM Hat", "ARM.Hat", "Ärm", "ARM_Hat\u{0}"] {
+            assert!(!is_bg3_id(bad), "{bad:?} must be rejected");
+        }
+        let text = "new entry \"ARM-Bad\"\ntype \"Armor\"\nnew entry \"ARM_Good\"\ntype \"Armor\"\n\
+                    new entry \"ARM Space\"\ntype \"Armor\"\n";
+        let ids: Vec<String> = parse_stats(text).unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(ids, ["ARM_Good"], "ids outside BG3_ID_RE skip their block");
+    }
+}
+
+rl_test! {
+    fn stats_rarity_outside_the_known_set_is_none_and_case_is_canonical() {
+        let mut text = String::new();
+        for (i, r) in STATS_RARITIES.iter().enumerate() {
+            writeln!(text, "new entry \"K{i}\"\ntype \"Armor\"\ndata \"Rarity\" \"{r}\"").unwrap();
+        }
+        text.push_str("new entry \"Lower\"\ntype \"Armor\"\ndata \"Rarity\" \"veryrare\"\n\
+                       new entry \"Base\"\ntype \"Armor\"\ndata \"Rarity\" \"Rare\"\n\
+                       new entry \"Modded\"\ntype \"Armor\"\nusing \"Base\"\ndata \"Rarity\" \"Mythic\"\n");
+        let items = resolve_using(&parse_stats(&text).unwrap());
+        for (i, r) in STATS_RARITIES.iter().enumerate() {
+            assert_eq!(find(&items, &format!("K{i}")).rarity.as_deref(), Some(*r));
+        }
+        assert_eq!(find(&items, "Lower").rarity.as_deref(), Some("VeryRare"));
+        // An unknown own value is not an error and does not borrow the parent's.
+        assert_eq!(find(&items, "Modded").rarity, None);
     }
 }
