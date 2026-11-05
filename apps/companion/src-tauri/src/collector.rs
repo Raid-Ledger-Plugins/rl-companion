@@ -53,6 +53,9 @@ pub struct Scan {
     pub notes: Vec<String>,
     /// How many source files were read.
     pub files: usize,
+    /// Items found but not queued yet (BG3 screenshots waiting for a hub
+    /// pick): still unsettled, so they count in `/dev/v1/collectors` pending.
+    pub waiting: usize,
 }
 
 /// A game collector: where to watch, which changes matter, and how to turn
