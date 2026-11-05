@@ -3,18 +3,16 @@
 //! the server last accepted an upload from it. The accepted-upload time is
 //! persisted next to `sent-state.json`, so a restart does not blank it.
 //!
-//! Also the bridge-safe form of an Activity line ([`scrub_paths`], [`note_body`]), mirrored
+//! Also the bridge-safe form of an Activity line ([`scrub_paths`]), mirrored
 //! into the dev-bridge log ring: no subject (a character, account, save or
-//! campaign name) and no absolute path.
+//! campaign name — callers pass it apart) and no absolute path.
 
 use crate::collector::{PendingUpload, Scan, SentState};
 use crate::registry::Entry;
 use crate::runtime::Runtime;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 /// File next to `sent-state.json`: `collector id → last accepted upload`.
 pub const UPLOAD_TIMES_FILE: &str = "upload-times.json";
@@ -148,48 +146,98 @@ pub fn unsettled(sent: &SentState, pending: &[PendingUpload]) -> usize {
         .count()
 }
 
-fn abs_path() -> &'static Regex {
-    static P: OnceLock<Regex> = OnceLock::new();
-    // Where an absolute path starts: a drive (`C:\`, `C:/`), UNC or verbatim
-    // (`\\host\share`, `\\?\C:\`), home (`~/`), or a rooted Unix path.
-    const HEAD: &str = r#"(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|/[^\s\\/"'()\[\]{},;])"#;
-    // Quoted (`"D:\Program Files (x86)\x"`, notify's `about ["…"]`, Rust's
-    // `{:?}`): everything up to the closing quote is the path.
-    const QUOTED: &str = r#"(?P<dq>")HEAD[^"\r\n]*|(?P<sq>')HEAD[^'\r\n]*"#;
-    // Bare: after a word break, every segment that a separator follows may
-    // hold spaces and parentheses (`World of Warcraft\`, `Program Files
-    // (x86)\`); the last one runs to the next space, so ` (denied)` stays.
-    const BARE: &str = r#"(?P<b>^|[\s(\[{=,;])HEAD(?:[^\\/"'\r\n]*[\\/])*[^\s\\/"'()\[\]{},;]*"#;
-    P.get_or_init(|| {
-        let pattern = format!("{QUOTED}|{BARE}").replace("HEAD", HEAD);
-        Regex::new(&pattern).unwrap_or_else(|_| unreachable!("static pattern"))
+/// Characters after which a path may start (a token boundary).
+const BOUNDARY: &str = "\"'[(<{|:=,;";
+
+/// The closing partner of an opening quote or bracket.
+fn closer_of(open: char) -> Option<char> {
+    Some(match open {
+        '"' => '"',
+        '\'' => '\'',
+        '[' => ']',
+        '(' => ')',
+        '<' => '>',
+        '{' => '}',
+        _ => return None,
     })
 }
 
-/// `text` with every absolute path replaced by `<path>`, to the end of the
-/// path (a quoted path to its closing quote): an Activity line as the dev
-/// bridge may store it, once the caller has left its subject out. The ring
-/// then applies its own redaction (tokens, GUIDs, homes).
-pub fn scrub_paths(text: &str) -> String {
-    abs_path()
-        .replace_all(text, |c: &regex::Captures<'_>| {
-            let lead = ["dq", "sq", "b"]
-                .iter()
-                .find_map(|g| c.name(g))
-                .map_or("", |m| m.as_str());
-            format!("{lead}<path>")
-        })
-        .into_owned()
+fn at_token_start(prev: Option<char>) -> bool {
+    match prev {
+        None => true,
+        Some(p) => p.is_whitespace() || BOUNDARY.contains(p),
+    }
 }
 
-/// A collector scan note's text without its `<account or file>: ` prefix.
-/// Notes are built as `"{subject}: {text}"` from a WoW account folder or a
-/// save file's name; neither can hold `": "` on Windows, so the first one ends
-/// the subject. (Names typed by the player — save or campaign names — never
-/// go through here: their callers pass the subject apart, see
-/// `Runtime::log_about`.)
-pub fn note_body(note: &str) -> &str {
-    note.split_once(": ").map_or(note, |(_, rest)| rest)
+/// Does an absolute path start here? A drive (`C:\`, `C:/`), UNC, verbatim
+/// or rooted (`\\host`, `\\?\`, `\Users`), home (`~/`), `file:/`, or a
+/// rooted Unix path (`/x`, but not `/ ` as in `5 / 10`, nor `//` in a URL).
+fn path_starts(rest: &str) -> bool {
+    let b = rest.as_bytes();
+    let sep = |i: usize| matches!(b.get(i), Some(b'\\' | b'/'));
+    match b.first() {
+        Some(c) if c.is_ascii_alphabetic() && b.get(1) == Some(&b':') && sep(2) => true,
+        Some(b'\\') => b.get(1).is_some_and(|c| !c.is_ascii_whitespace()),
+        Some(b'~') => sep(1),
+        Some(b'/') => b
+            .get(1)
+            .is_some_and(|c| !c.is_ascii_whitespace() && !b"\\/\"'()[]{},;<>|".contains(c)),
+        _ => rest
+            .get(..6)
+            .is_some_and(|s| s.eq_ignore_ascii_case("file:/")),
+    }
+}
+
+/// Where a path opened by a quote or bracket ends: the LAST `close` on the
+/// line that a token break follows. A path may hold the closer itself
+/// (`O'Brien`, `(x86)`), so the last one is the only safe end.
+fn closing(line: &str, from: usize, close: char) -> Option<usize> {
+    let ends = |j: usize| match line[j..].chars().nth(1) {
+        None => true,
+        Some(c) => c.is_whitespace() || ")]}>,;:\"'|!?".contains(c),
+    };
+    line[from..]
+        .char_indices()
+        .map(|(j, c)| (from + j, c))
+        .filter(|&(j, c)| c == close && ends(j))
+        .next_back()
+        .map(|(j, _)| j)
+}
+
+fn scrub_line(line: &str, out: &mut String) {
+    let mut prev = None;
+    let mut i = 0;
+    while let Some(c) = line[i..].chars().next() {
+        if at_token_start(prev) && path_starts(&line[i..]) {
+            out.push_str("<path>");
+            match prev.and_then(closer_of).and_then(|cl| closing(line, i, cl)) {
+                // Resume at the closer; `>` stands for the `<path>` just written.
+                Some(j) => (i, prev) = (j, Some('>')),
+                // Bare, or never closed: the rest of the line goes.
+                None => return,
+            }
+            continue;
+        }
+        out.push(c);
+        prev = Some(c);
+        i += c.len_utf8();
+    }
+}
+
+/// `text` as the dev bridge may store it, once the caller has left the
+/// subject out. Fail-closed: from where an absolute path starts, the rest of
+/// the line is `<path>`, unless the path opened right after a quote or
+/// bracket, which then ends it (see [`closing`]) and scrubbing goes on after.
+/// Over-redaction is the accepted cost. The ring then applies its own
+/// redaction (tokens, GUIDs, homes).
+pub fn scrub_paths(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for piece in text.split_inclusive('\n') {
+        let line = piece.trim_end_matches(['\r', '\n']);
+        scrub_line(line, &mut out);
+        out.push_str(&piece[line.len()..]);
+    }
+    out
 }
 
 /// The ring's `target` for an Activity line.

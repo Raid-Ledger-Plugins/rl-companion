@@ -189,8 +189,7 @@ impl Bg3ScreenshotCollector {
             return None;
         }
         if meta.len() > MAX_SOURCE_BYTES {
-            scan.notes
-                .push(format!("{name}: screenshot is over 64 MiB; skipped"));
+            scan.note(name, "screenshot is over 64 MiB; skipped");
             return None;
         }
         scan.files += 1;
@@ -206,8 +205,7 @@ impl Bg3ScreenshotCollector {
                     sha
                 }
                 Err(e) => {
-                    scan.notes
-                        .push(format!("{name}: cannot read screenshot ({e})"));
+                    scan.note(name, format!("cannot read screenshot ({e})"));
                     return None;
                 }
             },
@@ -307,8 +305,7 @@ impl Collector for Bg3ScreenshotCollector {
     fn scan(&self, origin: &str, sent: &SentState) -> Scan {
         let mut scan = Scan::default();
         let Some(cutoff) = self.opted_in_at else {
-            scan.notes
-                .push("BG3 screenshots: no opt-in time; turn uploads off and on".into());
+            scan.note_plain("BG3 screenshots: no opt-in time; turn uploads off and on");
             return scan;
         };
         let done = sent.scope(&scope_key(origin, BG3_SCREENSHOT.id));
@@ -338,7 +335,7 @@ impl Collector for Bg3ScreenshotCollector {
             scan.pending.push(p);
         }
         if waiting > 0 {
-            scan.notes.push(format!(
+            scan.note_plain(format!(
                 "BG3 screenshots: {waiting} waiting; pick a hub to send them"
             ));
         }

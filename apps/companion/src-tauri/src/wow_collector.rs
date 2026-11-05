@@ -85,49 +85,51 @@ impl LedgerLinkCollector {
         let meta = match self.scope.metadata(path) {
             Ok(m) => m,
             Err(e) => {
-                return scan.notes.push(format!(
-                    "{}: cannot read LedgerLink.lua ({e})",
-                    cand.account
-                ))
+                return scan.note(
+                    cand.account.clone(),
+                    format!("cannot read LedgerLink.lua ({e})"),
+                )
             }
         };
         if meta.len() > MAX_SV_BYTES as u64 {
-            return scan.notes.push(format!(
-                "{}: LedgerLink.lua is over 16 MiB; skipped",
-                cand.account
-            ));
+            return scan.note(
+                cand.account.clone(),
+                "LedgerLink.lua is over 16 MiB; skipped",
+            );
         }
         let outbox = match self.scope.read(path).map(|b| parse_ledgerlink_outbox(&b)) {
             Ok(Ok(o)) => o,
             Ok(Err(e)) => {
-                return scan.notes.push(format!(
-                    "{}: LedgerLink.lua not readable yet ({e})",
-                    cand.account
-                ))
+                return scan.note(
+                    cand.account.clone(),
+                    format!("LedgerLink.lua not readable yet ({e})"),
+                )
             }
             Err(e) => {
-                return scan.notes.push(format!(
-                    "{}: cannot read LedgerLink.lua ({e})",
-                    cand.account
-                ))
+                return scan.note(
+                    cand.account.clone(),
+                    format!("cannot read LedgerLink.lua ({e})"),
+                )
             }
         };
         scan.files += 1;
+        // The key is free-form Lua: it rides in the subject (window only).
         for s in &outbox.skipped {
-            scan.notes.push(format!(
-                "{}: skipped outbox entry {} ({:?})",
-                cand.account, s.key, s.reason
-            ));
+            let subject = format!("{}, outbox entry {}", cand.account, s.key);
+            scan.note(subject, format!("skipped ({:?})", s.reason));
         }
         let captured_at = captured_at(meta.modified().ok());
         let scope = scope_key(origin, &cand.path);
         let previous = sent.scope(&scope);
         for entry in changed_entries(&outbox.entries, &previous) {
             if entry.text.len() > EXPORT_MAX {
-                scan.notes.push(format!(
-                    "{}: export for {} is over the upload cap; paste it instead",
-                    cand.account, entry.guid
-                ));
+                scan.note(
+                    cand.account.clone(),
+                    format!(
+                        "export for {} is over the upload cap; paste it instead",
+                        entry.guid
+                    ),
+                );
                 continue;
             }
             scan.pending.push(PendingUpload {

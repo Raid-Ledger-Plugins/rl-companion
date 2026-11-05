@@ -3,7 +3,7 @@
 //! kick it through [`Runtime::kick`].
 
 use crate::blob_send::send_with_blobs;
-use crate::collector::{PendingUpload, SentState};
+use crate::collector::{Note, PendingUpload, SentState};
 use crate::collector_view::{device_note, device_state, rows, CollectorRowDto, RETRYING};
 use crate::config::AppConfig;
 use crate::gate::{gate, Gate};
@@ -240,12 +240,10 @@ impl Runtime {
         self.push_log(Some(collector_id.to_owned()), Some(subject), text.into());
     }
 
-    /// One of a collector's scan notes (`"<account or file>: …"`).
-    pub fn log_note(&self, collector_id: &str, note: &str) {
-        let body = scan_report::note_body(note);
-        let line = scan_report::scrub_paths(body);
-        self.mirror(Some(collector_id), &line);
-        self.keep_log(Some(collector_id.to_owned()), note.to_owned());
+    /// One of a collector's scan notes: its subject reaches the window only.
+    pub fn log_note(&self, collector_id: &str, note: &Note) {
+        let id = Some(collector_id.to_owned());
+        self.push_log(id, note.subject.as_deref(), note.text.clone());
     }
 
     fn push_log(&self, collector_id: Option<String>, subject: Option<&str>, body: String) {
