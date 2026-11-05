@@ -19,6 +19,7 @@ use crate::watch::{start_watcher, SettleSet};
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -175,6 +176,18 @@ pub struct Runtime {
     kick: Notify,
     /// Wakes the `/config` refresh task (after link, on a deferral).
     pub config_kick: Notify,
+    /// A scan (and its uploads) is running; the updater never installs
+    /// mid-upload (updater.rs).
+    scanning: AtomicBool,
+}
+
+/// Clears [`Runtime::is_scanning`] when the scan ends, however it ends.
+pub struct ScanGuard<'a>(&'a AtomicBool);
+
+impl Drop for ScanGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl Runtime {
@@ -197,11 +210,23 @@ impl Runtime {
             }),
             kick: Notify::new(),
             config_kick: Notify::new(),
+            scanning: AtomicBool::new(false),
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Mark a scan as running until the guard drops.
+    pub fn scan_guard(&self) -> ScanGuard<'_> {
+        self.scanning.store(true, Ordering::SeqCst);
+        ScanGuard(&self.scanning)
+    }
+
+    /// Whether a scan (and its uploads) is running right now.
+    pub fn is_scanning(&self) -> bool {
+        self.scanning.load(Ordering::SeqCst)
     }
 
     /// Ask the loop for a rescan now.
@@ -473,7 +498,7 @@ pub fn stopped_line(sent: usize, waiting: usize, fx: &Effect) -> String {
     format!("Uploaded {sent} of {waiting} export(s); {}", shown_text(fx))
 }
 
-fn now() -> String {
+pub fn now() -> String {
     crate::wow_collector::captured_at(None)
 }
 
@@ -557,6 +582,7 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
 
 /// Scan every registered collector; upload what the enabled ones found.
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
+    let _scanning = rt.scan_guard();
     rt.begin_scan();
     let cfg = app.state::<Shared>().config();
     let registry = CollectorRegistry::from_config(&cfg);

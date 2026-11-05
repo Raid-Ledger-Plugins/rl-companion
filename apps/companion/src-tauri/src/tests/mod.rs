@@ -32,6 +32,7 @@ mod server_config_tests;
 mod tiles_group_tests;
 mod tiles_tests;
 mod tray_promote_tests;
+mod update_policy_tests;
 mod upload_tests;
 mod watch_tests;
 

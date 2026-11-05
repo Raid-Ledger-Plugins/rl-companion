@@ -67,6 +67,9 @@ pub struct ServerCtx {
     closed: Mutex<Option<String>>,
     ip_probe: IpProbe,
     bind_check_every: Duration,
+    /// When the last admitted request was answered; the updater only
+    /// installs on its own once the bridge has been quiet a while.
+    last_admitted: Mutex<Option<Instant>>,
 }
 
 /// One routed request: what to send, and whether admission let it through.
@@ -127,6 +130,7 @@ impl Default for ServerCtx {
             closed: Mutex::new(None),
             ip_probe: Arc::new(bind::ip_is_local),
             bind_check_every: BIND_CHECK_INTERVAL,
+            last_admitted: Mutex::new(None),
         }
     }
 }
@@ -265,6 +269,9 @@ impl ServerCtx {
     /// or bodies). Refused callers are rate-limited and never logged with
     /// their path; an admitted 404 logs `<unknown>`, not the raw path.
     pub fn audit(&self, peer: IpAddr, method: &Method, path: &str, r: &Routed, bytes: usize) {
+        if r.admitted {
+            self.note_admitted(Instant::now());
+        }
         let line = if r.admitted {
             let shown = if r.status == 404 { "<unknown>" } else { path };
             Some(format!(
@@ -278,6 +285,19 @@ impl ServerCtx {
         if let Some(line) = line {
             self.log(if r.status >= 400 { "warn" } else { "info" }, &line);
         }
+    }
+
+    /// Record that an admitted request was answered at `at`.
+    pub fn note_admitted(&self, at: Instant) {
+        *self.last_admitted.lock().unwrap_or_else(|p| p.into_inner()) = Some(at);
+    }
+
+    /// How long ago the last admitted request was answered, `None` if never.
+    pub fn since_admitted(&self, now: Instant) -> Option<Duration> {
+        self.last_admitted
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .map(|t| now.saturating_duration_since(t))
     }
 
     fn log(&self, level: &'static str, msg: &str) {
