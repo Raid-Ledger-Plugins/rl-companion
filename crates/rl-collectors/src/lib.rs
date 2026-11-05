@@ -23,6 +23,9 @@
 //!   `Read + Seek`, one bounded entry at a time.
 //! - [`library_paths`] / [`app_manifest`] read Steam's
 //!   `libraryfolders.vdf` / `appmanifest_*.acf` ([`parse_vdf`]).
+//! - [`parse_loca_wanted`], [`parse_stats`] / [`resolve_using`] and
+//!   [`read_lsx_nodes`] read the BG3 game data behind the name catalogue
+//!   ([`CatalogueTables`]); [`classify_entry`] picks the pak entries.
 //!
 //! The crate never touches the filesystem.
 //!
@@ -31,6 +34,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bg3_cat;
 mod error;
 mod extract;
 mod lsf;
@@ -47,8 +51,18 @@ mod wow_sv;
 #[cfg(test)]
 mod tests;
 
+pub use bg3_cat::{
+    CatalogueTables, ENTRY_GLOBS, EntryKind, ItemName, LOCA_ENTRY_BYTES, LOCA_HEADER_BYTES,
+    LOCA_KEY_BYTES, LOCA_MAGIC, LOCA_MAX_ENTRIES, LSX_MAX_ATTRS, LSX_MAX_DEPTH, LSX_MAX_NODES,
+    LSX_ORIGINS, LSX_QUESTS, LsxAttr, LsxNode, LsxSource, ResolvedItem, STATS_CHECK_EVERY_LINES,
+    STATS_ITEM_TYPES, STATS_KEY_RARITY, STATS_KEY_ROOT_TEMPLATE, STATS_MAX_ENTRIES,
+    STATS_MAX_ID_BYTES, StatsEntry, USING_MAX_DEPTH, classify_entry, is_loca_handle,
+    lsx_id_handles, parse_loca_wanted, parse_stats, parse_stats_with, read_lsx_nodes,
+    resolve_using,
+};
 pub use error::{
-    ExtractError, LsfError, LspkError, NormaliseError, VdfError, WebpError, WowSvError,
+    CatalogueError, ExtractError, LsfError, LspkError, NormaliseError, VdfError, WebpError,
+    WowSvError,
 };
 pub use extract::{
     META_LSF_MAX_BYTES, META_LSF_NAME, SAVE_INFO_MAX_BYTES, SAVE_INFO_NAME, WEBP_MAX_BYTES,

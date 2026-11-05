@@ -253,3 +253,37 @@ pub enum WowSvError {
         found: &'static str,
     },
 }
+
+/// Failure building or reading the BG3 name catalogue (ROK-2081). Every
+/// variant degrades the catalogue to `source: 'none'` (spec D8); none of
+/// them may drop a message.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CatalogueError {
+    /// No usable BG3 install was found.
+    #[error("no BG3 install: {0}")]
+    Absent(&'static str),
+    /// A game pak or one of its entries could not be read.
+    #[error(transparent)]
+    Pak(#[from] LspkError),
+    /// An input or a count is over its cap.
+    #[error("{what} is {size}, over the {limit} limit")]
+    TooLarge {
+        what: &'static str,
+        size: u64,
+        limit: u64,
+    },
+    /// The build ran past its deadline (the caller's stop check fired).
+    #[error("catalogue build ran past its deadline")]
+    Timeout,
+    /// The install changed while the build was reading it.
+    #[error("the install changed during the build")]
+    Changed,
+    /// A file is malformed or truncated.
+    #[error("{file} is malformed at {at}: {reason}")]
+    Parse {
+        file: &'static str,
+        at: usize,
+        reason: &'static str,
+    },
+}
