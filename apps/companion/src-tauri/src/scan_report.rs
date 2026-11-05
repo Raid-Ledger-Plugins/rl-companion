@@ -135,10 +135,13 @@ impl Drop for ScanPass<'_> {
 }
 
 /// How many of a scan's items are still unsettled in `sent` (neither
-/// accepted nor rejected terminally): what is queued for a later pass.
+/// accepted nor rejected terminally): what is queued for a later pass. A
+/// screenshot the encoder refused is never retried this run, so it is not
+/// counted.
 pub fn unsettled(sent: &SentState, pending: &[PendingUpload]) -> usize {
     pending
         .iter()
         .filter(|p| sent.0.get(&p.scope).and_then(|m| m.get(&p.item)) != Some(&p.sha256))
+        .filter(|p| !crate::bg3_screenshot::refused(&p.sha256))
         .count()
 }

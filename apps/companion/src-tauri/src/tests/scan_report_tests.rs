@@ -1,12 +1,12 @@
-//! `/dev/v1/collectors` reports what the runtime actually did (lastScanAt,
-//! pending, a restart-proof lastUploadAt), and Activity lines reach the
-//! `/dev/v1/logs` ring without names or paths.
+//! `/dev/v1/collectors` reports what the runtime actually did: lastScanAt,
+//! pending (only work a later pass will really attempt) and a restart-proof
+//! lastUploadAt.
 
 use super::dev_bridge_unit_tests::schema_errors;
 use crate::collector::{PendingUpload, SentState};
 use crate::config::AppConfig;
 use crate::dev_bridge::collectors::collectors_body;
-use crate::manifest::{BG3_SAVE, WOW_LEDGERLINK};
+use crate::manifest::{BG3_SAVE, BG3_SCREENSHOT, WOW_LEDGERLINK};
 use crate::runtime::{effect, Runtime};
 use crate::scan_report::{upload_times_path, UPLOAD_TIMES_FILE};
 use crate::upload::UploadOutcome;
@@ -166,4 +166,28 @@ fn a_disabled_collector_reports_no_scan_and_nothing_pending() {
     assert_eq!(r["pending"], 0, "{r}");
     rt.forget_scan(WOW);
     assert_eq!(row(&rt, &wow_on(), WOW)["lastScanAt"], Value::Null);
+}
+
+#[test]
+fn pending_skips_a_screenshot_the_encoder_refused_this_run() {
+    // FAILED is process-global: a hash no other test uses keeps this isolated.
+    let refused_sha = "scan-report-refused-screenshot-7f3c";
+    crate::bg3_screenshot::refuse(refused_sha);
+    let rt = Runtime::new(super::temp_dir("scan-report-encoder-refused").join("sent.json"));
+    let shots = [
+        item(BG3_SCREENSHOT.id, "corrupt.png", refused_sha),
+        item(
+            BG3_SCREENSHOT.id,
+            "fine.png",
+            "scan-report-unrefused-screenshot-7f3c",
+        ),
+    ];
+    rt.scanned(BG3_SCREENSHOT.id, &shots, 0);
+    let mut cfg = AppConfig::default();
+    cfg.set_collector_enabled(BG3_SCREENSHOT.id, true);
+    let r = row(&rt, &cfg, BG3_SCREENSHOT.id);
+    assert_eq!(
+        r["pending"], 1,
+        "the refused screenshot is never retried this run; only fine.png is queued: {r}"
+    );
 }
