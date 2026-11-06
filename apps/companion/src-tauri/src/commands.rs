@@ -248,6 +248,7 @@ pub fn open_verification(
 pub fn unlink(app: AppHandle, state: State<'_, Shared>) -> Result<(), String> {
     state.set_link_task(None);
     state.clear_token().map_err(s)?;
+    app.state::<Arc<Runtime>>().unlinked();
     tray::set_status(&app, "Not linked");
     Ok(())
 }

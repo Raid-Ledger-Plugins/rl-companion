@@ -325,8 +325,13 @@ fn now_ms() -> i64 {
 
 /// Record `kind` for collector `id` now (a non-collector id records nothing).
 pub fn record(id: &str, kind: Kind, f: impl FnOnce(Event) -> Event) {
+    record_in(global(), id, kind, f);
+}
+
+/// [`record`] into `log` (the runtime's ring; tests pass their own).
+pub fn record_in(log: &EventLog, id: &str, kind: Kind, f: impl FnOnce(Event) -> Event) {
     if let Some(c) = CollectorId::known(id) {
-        global().push_now(f(Event::new(c, kind)), now_ms());
+        log.push_now(f(Event::new(c, kind)), now_ms());
     }
 }
 

@@ -7,7 +7,7 @@ use crate::collector::{PendingUpload, SentState};
 use crate::collector_status::{device_block, finished_status, Line, LineStatus};
 use crate::collector_view::{device_note, device_state, rows, CollectorRowDto, RETRYING};
 use crate::config::AppConfig;
-use crate::dev_bridge::events::{self, ErrorCode, Kind};
+use crate::dev_bridge::events::{self, ErrorCode, EventLog, Kind};
 use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
 use crate::preview::Held;
@@ -180,6 +180,24 @@ fn store_lines(inner: &mut Inner, lines: BTreeMap<String, Line>, relink: bool) {
     inner.relink = relink;
 }
 
+/// Store the device's link state; linked again ends the unlinked spell.
+fn set_link(inner: &mut Inner, linked: Result<bool, String>) {
+    if linked == Ok(true) {
+        inner.link_reported = false;
+    }
+    inner.linked = Some(linked);
+}
+
+/// The collector an absent token is reported for: the first one left with
+/// exports waiting on it, else the first one scanned.
+fn link_observer(lines: &BTreeMap<String, Line>) -> Option<String> {
+    lines
+        .iter()
+        .find(|(_, l)| l.status == LineStatus::Waiting)
+        .or_else(|| lines.iter().next())
+        .map(|(id, _)| id.clone())
+}
+
 struct Inner {
     status: String,
     /// Keyed by `(collector_id, scope, item)`: every BG3 save shares the item
@@ -201,6 +219,10 @@ struct Inner {
     linked: Option<Result<bool, String>>,
     /// The last scan hit a 401 and cleared the token.
     relink: bool,
+    /// A `link-required` event already stands for the current unlinked
+    /// spell (a 401's, or one recorded for an absent token); cleared once the
+    /// device is linked again, so each linked→unlinked transition records one.
+    link_reported: bool,
     /// Batches waiting on the user's first-upload confirmation.
     held: BTreeMap<String, Held>,
     /// `/config` fetch state and cached covers (ROK-2067).
@@ -212,6 +234,8 @@ struct Inner {
 pub struct Runtime {
     sent_path: PathBuf,
     inner: Mutex<Inner>,
+    /// The `GET /dev/v1/events` ring this runtime records into.
+    events: &'static EventLog,
     kick: Notify,
     /// Wakes the `/config` refresh task (after link, on a deferral).
     pub config_kick: Notify,
@@ -219,10 +243,16 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(sent_path: PathBuf) -> Self {
+        Self::with_events(sent_path, events::global())
+    }
+
+    /// A runtime recording its events into `log` (tests).
+    pub fn with_events(sent_path: PathBuf, log: &'static EventLog) -> Self {
         let sent = SentState::load(&sent_path);
         let uploads = UploadTimes::load(&scan_report::upload_times_path(&sent_path));
         Self {
             sent_path,
+            events: log,
             inner: Mutex::new(Inner {
                 status: "Starting…".into(),
                 results: BTreeMap::new(),
@@ -234,6 +264,7 @@ impl Runtime {
                 paused: false,
                 linked: None,
                 relink: false,
+                link_reported: false,
                 held: BTreeMap::new(),
                 server: ServerState::default(),
                 book: ScanBook::new(uploads),
@@ -369,8 +400,33 @@ impl Runtime {
     ) {
         let mut inner = self.lock();
         inner.paused = paused;
-        inner.linked = Some(if relink { Ok(false) } else { linked });
+        let linked = if relink { Ok(false) } else { linked };
+        let held = secs_left(inner.hold_until, Instant::now());
+        let unlinked = matches!(
+            device_block(paused, held, &linked),
+            Some(crate::collector_status::DeviceBlock::Unlinked)
+        );
+        let observer = unlinked.then(|| link_observer(&lines)).flatten();
+        if relink {
+            // The 401 recorded its own `link-required` (with its status).
+            inner.link_reported = true;
+        } else if let Some(id) = observer.filter(|_| !inner.link_reported) {
+            events::record_in(self.events, &id, Kind::LinkRequired, |ev| ev);
+            inner.link_reported = true;
+        }
+        set_link(&mut inner, linked);
         store_lines(&mut inner, lines, relink);
+    }
+
+    /// The user unlinked the device: the token is gone now, so the bridge
+    /// and window show `link-device` at once, and a scan runs so the
+    /// collectors' lines (and the transition's `link-required`) follow.
+    pub fn unlinked(&self) {
+        let mut inner = self.lock();
+        inner.relink = false;
+        set_link(&mut inner, Ok(false));
+        drop(inner);
+        self.kick();
     }
 
     /// Remember per-collector lines (text and status together) and the 401
@@ -389,7 +445,7 @@ impl Runtime {
     pub fn set_device(&self, paused: bool, linked: Result<bool, String>) {
         let mut inner = self.lock();
         inner.paused = paused;
-        inner.linked = Some(linked);
+        set_link(&mut inner, linked);
     }
 
     /// A scan is starting: a 401 from an earlier scan must not ride along on
@@ -403,7 +459,10 @@ impl Runtime {
     /// scan runs now so the waiting exports go up with the new token. The
     /// server's `/config` is fetched again too (ROK-2067 D5).
     pub fn linked(&self) {
-        self.lock().relink = false;
+        let mut inner = self.lock();
+        inner.relink = false;
+        inner.link_reported = false;
+        drop(inner);
         self.kick();
         self.config_kick.notify_one();
     }
@@ -414,7 +473,7 @@ impl Runtime {
     pub fn server_changed(&self, linked: bool) {
         let mut inner = self.lock();
         inner.server.reset();
-        inner.linked = Some(Ok(linked));
+        set_link(&mut inner, Ok(linked));
         inner.relink = false;
         drop(inner);
         self.config_kick.notify_one();
@@ -425,7 +484,7 @@ impl Runtime {
     pub fn config_unauthorized(&self) {
         let mut inner = self.lock();
         inner.relink = true;
-        inner.linked = Some(Ok(false));
+        set_link(&mut inner, Ok(false));
     }
 
     /// The `/config` fetch state (reachability, covers, debounce).
