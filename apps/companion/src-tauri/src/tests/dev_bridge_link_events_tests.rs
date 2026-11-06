@@ -223,3 +223,67 @@ fn a_config_401_then_tokenless_scans_record_one_link_required() {
     let one = vec![("\"link-required\"".to_owned(), format!("\"{WOW}\""))];
     assert_eq!(recorded(log), one, "a /config 401's spell");
 }
+
+/// A `Shared` on `origin` with an in-memory token store.
+fn shared_on(name: &str, origin: &str) -> crate::state::Shared {
+    let shared = crate::state::Shared::new(
+        super::temp_dir(name).join("config.json"),
+        Box::new(crate::token::MemoryStore::default()),
+    );
+    shared
+        .update_config(|c| c.server_url = origin.to_owned())
+        .expect("save config");
+    shared
+}
+
+#[test]
+fn re_link_mid_scan_then_the_old_tokens_401_leaves_the_new_token_in_place() {
+    use crate::token::DeviceToken;
+    let origin = "https://raid.example";
+    let shared = shared_on("upload-401-relink", origin);
+    let (rt, _) = runtime("upload-401-relink-rt");
+    let old = DeviceToken::parse(super::TOKEN).expect("token");
+    let new = DeviceToken::parse(&format!("rlcd_{}", "N".repeat(43))).expect("token");
+    shared.save_token(origin, &old).expect("save");
+    // The scan read `old` and sent it; the user re-linked before its 401.
+    let gen = rt.begin_scan();
+    shared.save_token(origin, &new).expect("re-link");
+    rt.linked();
+    let (line, stop) = crate::runtime::upload_refused(&shared, origin, &old);
+    rt.end_scan(
+        gen,
+        false,
+        Ok(true),
+        BTreeMap::from([(WOW.to_owned(), line)]),
+        stop,
+    );
+    assert_eq!(
+        shared.token().expect("load").map(|t| t.hint().to_owned()),
+        Some(new.hint().to_owned()),
+        "the old token's late 401 deleted the re-linked one"
+    );
+    assert!(
+        !rt.snapshot(&both_on()).relink,
+        "a stale 401 asked for a re-link after a good link"
+    );
+    // A 401 for the token still stored does forget it.
+    let _ = crate::runtime::upload_refused(&shared, origin, &new);
+    assert!(
+        shared.token().expect("load").is_none(),
+        "the refused token was kept"
+    );
+}
+
+#[test]
+fn a_config_401_during_a_scan_keeps_the_re_link_notice_at_its_end() {
+    let (rt, _) = runtime("config-401-mid-scan");
+    scan(&rt, Ok(true), uploaded_lines());
+    let gen = rt.begin_scan();
+    // `/config` answers 401 (token cleared) while the upload scan runs.
+    rt.config_unauthorized();
+    rt.end_scan(gen, false, Ok(true), uploaded_lines(), false);
+    assert!(
+        rt.snapshot(&both_on()).relink,
+        "a scan ending after a /config 401 cleared its re-link notice"
+    );
+}
