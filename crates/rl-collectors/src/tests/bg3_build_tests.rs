@@ -182,3 +182,99 @@ rl_test! {
         assert_eq!((what, size, limit), ("template handles", 200_001, 200_000));
     }
 }
+
+rl_test! {
+    fn lsx_keys_that_are_not_safe_payload_keys_are_dropped_and_counted() {
+        let bad_hex = "0a1b2c3d00004e5f8a9b0c1d2e3f4a5b";
+        let rows = [("Good_1", h(1)), ("Bad-Key", h(2)), (bad_hex, h(3)), ("P1234567890", h(4))];
+        let refs: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let mut b = CatalogueBuilder::new();
+        b.add_lsx(EntryKind::Quests, &lsx("Quest", "QuestID", "QuestTitle", &refs)).unwrap();
+        let join = b.into_join();
+        assert_eq!(join.wanted_handles(), &HashSet::from([h(1)]), "refused keys want no handle");
+        let texts: HashMap<String, String> = (1..=4).map(|i| (h(i), format!("Quest {i}"))).collect();
+        let (t, counts) = join.finish(&texts);
+        assert_eq!(t.quests.keys().collect::<Vec<_>>(), ["Good_1"]);
+        assert_eq!((counts.quests, counts.skipped), (1, 3), "each refused key is skipped");
+    }
+}
+
+rl_test! {
+    fn stats_ids_holding_an_id_leak_are_dropped_and_counted() {
+        let txt = format!(
+            "new entry \"{}\"\ntype \"Armor\"\ndata \"Rarity\" \"Rare\"\n\n\
+             new entry \"ARM_Ok\"\ntype \"Armor\"\ndata \"Rarity\" \"Rare\"\n",
+            "a".repeat(32)
+        );
+        let mut b = CatalogueBuilder::new();
+        b.add_stats(&txt, &mut never()).unwrap();
+        let (t, counts) = b.into_join().finish(&HashMap::new());
+        assert_eq!(t.items.keys().collect::<Vec<_>>(), ["ARM_Ok"]);
+        assert_eq!((counts.items, counts.skipped), (1, 1));
+    }
+}
+
+rl_test! {
+    fn later_lsx_duplicate_wins_even_when_its_text_is_missing_or_refused() {
+        let ori = |k: &str| lsx("Origin", "Name", "DisplayName", &[("O", k)]);
+        for later_text in [None, Some("Leak 0a1b2c3d-0000-4e5f-8a9b-0c1d2e3f4a5b")] {
+            let mut b = CatalogueBuilder::new();
+            b.add_lsx(EntryKind::Origins, &ori(&h(1))).unwrap();
+            b.add_lsx(EntryKind::Origins, &ori(&h(2))).unwrap();
+            let join = b.into_join();
+            assert_eq!(join.wanted_handles(), &HashSet::from([h(2)]), "the overridden handle is not wanted");
+            let mut texts = HashMap::from([(h(1), "First".to_owned())]);
+            if let Some(t) = later_text {
+                texts.insert(h(2), t.to_owned());
+            }
+            let (t, counts) = join.finish(&texts);
+            assert_eq!(t.lookup_origin("O"), None, "earlier copy must not survive ({later_text:?})");
+            assert_eq!((counts.origins, counts.skipped), (0, 1));
+        }
+    }
+}
+
+rl_test! {
+    fn later_stats_duplicate_wins_even_when_its_name_is_missing() {
+        let first = format!("new entry \"ARM_Dup\"\ntype \"Armor\"\ndata \"RootTemplate\" \"{TPL_HAT}\"\n");
+        let later = format!("new entry \"ARM_Dup\"\ntype \"Armor\"\ndata \"RootTemplate\" \"{TPL_SWORD}\"\n");
+        let mut b = CatalogueBuilder::new();
+        b.add_stats(&first, &mut never()).unwrap();
+        b.add_stats(&later, &mut never()).unwrap();
+        b.add_template_handles([(TPL_HAT.into(), h(1)), (TPL_SWORD.into(), h(2))]).unwrap();
+        let join = b.into_join();
+        assert_eq!(join.wanted_handles(), &HashSet::from([h(2)]));
+        let (t, counts) = join.finish(&HashMap::from([(h(1), "Hat".to_owned())]));
+        assert_eq!(t.lookup_item("ARM_Dup"), None, "earlier name must not survive");
+        assert_eq!((counts.items, counts.skipped), (0, 1));
+    }
+}
+
+rl_test! {
+    fn stats_row_cap_at_edge_and_edge_plus_one() {
+        let entries = |r: std::ops::Range<usize>| r.map(|i| format!("new entry \"S{i}\"\n")).collect::<String>();
+        let mut b = CatalogueBuilder::new();
+        let half = CAT_MAX_ROWS / 2; // a file holds at most STATS_MAX_ENTRIES
+        b.add_stats(&entries(0..half), &mut never()).unwrap();
+        b.add_stats(&entries(half..CAT_MAX_ROWS), &mut never()).unwrap();
+        let more = entries(CAT_MAX_ROWS..CAT_MAX_ROWS + 1);
+        let (what, size, limit) = too_large(b.add_stats(&more, &mut never()));
+        assert_eq!((what, size, limit), ("stats entries", 200_001, 200_000));
+    }
+}
+
+rl_test! {
+    fn lsx_row_cap_at_edge_and_edge_plus_one() {
+        let file = |r: std::ops::Range<usize>| {
+            let rows: Vec<(String, String)> = r.map(|i| (format!("O{i}"), h(i as u32))).collect();
+            let refs: Vec<(&str, &str)> = rows.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            lsx("Origin", "Name", "DisplayName", &refs)
+        };
+        let mut b = CatalogueBuilder::new();
+        for start in (0..CAT_MAX_ROWS).step_by(50_000) {
+            b.add_lsx(EntryKind::Origins, &file(start..start + 50_000)).unwrap();
+        }
+        let (what, size, limit) = too_large(b.add_lsx(EntryKind::Origins, &file(CAT_MAX_ROWS..CAT_MAX_ROWS + 1)));
+        assert_eq!((what, size, limit), ("LSX ids", 200_001, 200_000));
+    }
+}

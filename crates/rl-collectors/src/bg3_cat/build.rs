@@ -30,12 +30,16 @@
 //! `templates.rs` (spec §3) plugs in there and nowhere else.
 //!
 //! A later duplicate key wins: the caller feeds entries in pak priority
-//! order. Waypoints have no source entry yet (ruling 11), so that table
+//! order, and duplicates are dropped by key *before* any text is resolved,
+//! so a later copy whose text is missing or refused still hides the
+//! earlier one. A key that could not be a payload object key
+//! ([`catalogue_key_ok`]: not a `BG3_ID_RE` id, or one holding a GUID shape
+//! or a 10+ digit run) is dropped and counted in `skipped`. Waypoints have no source entry yet (ruling 11), so that table
 //! stays empty.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::display::catalogue_display_text;
+use super::display::{catalogue_display_text, catalogue_key_ok};
 use super::{
     CatalogueTables, EntryKind, ItemName, LSX_ORIGINS, LSX_QUESTS, StatsEntry, is_loca_handle,
     lsx_id_handles, parse_stats_with, read_lsx_nodes, resolve_using,
@@ -58,7 +62,8 @@ pub struct CatalogueCounts {
     pub origins: usize,
     pub quests: usize,
     pub waypoints: usize,
-    /// Wanted handles with no loca text, or a text the D9 filter refused.
+    /// Wanted handles with no loca text, a text the D9 filter refused, or
+    /// a key that is not a safe payload key.
     pub skipped: usize,
 }
 
@@ -70,6 +75,7 @@ pub struct CatalogueBuilder {
     origins: Vec<(String, String)>,
     quests: Vec<(String, String)>,
     templates: HashMap<String, String>,
+    refused_keys: usize,
 }
 
 impl CatalogueBuilder {
@@ -93,15 +99,23 @@ impl CatalogueBuilder {
     /// One `Origins.lsx` or `quest_prototypes.lsx`; any other kind is a
     /// caller bug and refused.
     pub fn add_lsx(&mut self, kind: EntryKind, text: &str) -> Result<(), CatalogueError> {
-        let (src, rows) = match kind {
-            EntryKind::Origins => (&LSX_ORIGINS, &mut self.origins),
-            EntryKind::Quests => (&LSX_QUESTS, &mut self.quests),
+        let src = match kind {
+            EntryKind::Origins => &LSX_ORIGINS,
+            EntryKind::Quests => &LSX_QUESTS,
             _ => return Err(not_lsx()),
         };
-        self.entries = counted(self.entries)?;
-        let pairs = lsx_id_handles(&read_lsx_nodes(text, src.node_id)?, src);
+        self.count_entry()?;
+        let (pairs, refused): (Vec<_>, Vec<_>) =
+            lsx_id_handles(&read_lsx_nodes(text, src.node_id)?, src)
+                .into_iter()
+                .partition(|(key, _)| catalogue_key_ok(key));
+        let rows = match kind {
+            EntryKind::Origins => &mut self.origins,
+            _ => &mut self.quests,
+        };
         check_rows("LSX ids", rows.len() + pairs.len())?;
         rows.extend(pairs);
+        self.refused_keys += refused.len();
         Ok(())
     }
 
@@ -125,28 +139,35 @@ impl CatalogueBuilder {
     }
 
     /// Resolve `using` across every stats file and list the needed handles.
+    /// Duplicates are dropped by key (last wins) here, before any text.
     pub fn into_join(self) -> CatalogueJoin {
-        let items: Vec<JoinItem> = resolve_using(&self.stats)
-            .into_iter()
-            .map(|it| JoinItem {
-                handle: it
-                    .root_template
-                    .and_then(|rt| self.templates.get(&rt.to_ascii_lowercase()).cloned()),
-                id: it.id,
-                rarity: it.rarity,
-            })
-            .collect();
+        let mut refused_keys = self.refused_keys;
+        let mut items = BTreeMap::new();
+        for it in resolve_using(&self.stats) {
+            if !catalogue_key_ok(&it.id) {
+                refused_keys += 1;
+                continue;
+            }
+            let handle = it
+                .root_template
+                .and_then(|rt| self.templates.get(&rt.to_ascii_lowercase()).cloned());
+            let rarity = it.rarity;
+            items.insert(it.id, JoinItem { handle, rarity });
+        }
+        let origins: BTreeMap<_, _> = self.origins.into_iter().collect();
+        let quests: BTreeMap<_, _> = self.quests.into_iter().collect();
         let wanted = items
-            .iter()
+            .values()
             .filter_map(|it| it.handle.clone())
-            .chain(self.origins.iter().map(|(_, h)| h.clone()))
-            .chain(self.quests.iter().map(|(_, h)| h.clone()))
+            .chain(origins.values().cloned())
+            .chain(quests.values().cloned())
             .collect();
         CatalogueJoin {
             items,
-            origins: self.origins,
-            quests: self.quests,
+            origins,
+            quests,
             wanted,
+            refused_keys,
         }
     }
 
@@ -158,7 +179,6 @@ impl CatalogueBuilder {
 
 #[derive(Debug)]
 struct JoinItem {
-    id: String,
     handle: Option<String>,
     rarity: Option<String>,
 }
@@ -166,10 +186,12 @@ struct JoinItem {
 /// Pass 2: the needed handles, then the finished tables.
 #[derive(Debug)]
 pub struct CatalogueJoin {
-    items: Vec<JoinItem>,
-    origins: Vec<(String, String)>,
-    quests: Vec<(String, String)>,
+    /// Keyed, so already deduplicated (last wins).
+    items: BTreeMap<String, JoinItem>,
+    origins: BTreeMap<String, String>,
+    quests: BTreeMap<String, String>,
     wanted: HashSet<String>,
+    refused_keys: usize,
 }
 
 impl CatalogueJoin {
@@ -182,21 +204,24 @@ impl CatalogueJoin {
     /// rarity is known; an origin / quest row only when its text survives
     /// the D9 filter.
     pub fn finish(self, texts: &HashMap<String, String>) -> (CatalogueTables, CatalogueCounts) {
-        let mut counts = CatalogueCounts::default();
+        let mut counts = CatalogueCounts {
+            skipped: self.refused_keys,
+            ..CatalogueCounts::default()
+        };
         let mut name_of = |handle: &str| {
             let name = texts.get(handle).and_then(|t| catalogue_display_text(t));
             counts.skipped += usize::from(name.is_none());
             name
         };
         let mut items = BTreeMap::new();
-        for it in self.items {
+        for (id, it) in self.items {
             let name = it.handle.as_deref().and_then(&mut name_of);
             if name.is_some() || it.rarity.is_some() {
                 let row = ItemName {
                     name,
                     rarity: it.rarity,
                 };
-                items.insert(it.id, row);
+                items.insert(id, row);
             }
         }
         let origins = named(self.origins, &mut name_of);
@@ -216,7 +241,7 @@ impl CatalogueJoin {
 }
 
 fn named(
-    rows: Vec<(String, String)>,
+    rows: BTreeMap<String, String>,
     name_of: &mut impl FnMut(&str) -> Option<String>,
 ) -> BTreeMap<String, String> {
     rows.into_iter()
