@@ -1,12 +1,31 @@
 name: Release
 
-# Tagged test releases (ROK-2057). Pushing a tag such as `v0.1.0-test.1`
-# builds the unsigned desktop installers and publishes them as a GitHub
-# pre-release for that tag. Nothing here signs or notarises anything.
+# Tagged releases with in-app updates (ROK-2057, then the updater).
+#
+# Pushing a `v*` tag (`v0.1.0-test.6`, `v0.2.0`) builds the desktop
+# installers with the tag's version stamped in, signs the updater bundles
+# with TAURI_SIGNING_PRIVATE_KEY, and publishes:
+#   - a GitHub release for the tag (a pre-release for `-test.N` tags) with the
+#     Windows setup .exe, the macOS .dmg, and the updater bundles + .sig files;
+#   - `latest.json` on the rolling release of each channel it feeds:
+#     `updates-test` for every tag, plus `updates-stable` for plain tags.
+#     Installed copies poll those (update_policy.rs, Channel::endpoint).
+# The installers themselves are still not code-signed (OS warnings remain);
+# the updater signature is a separate minisign key.
+#
+# A branch push that touches this file or scripts/release/ is a dry run: the
+# same builds at version 0.0.0-dryrun.N, signed when the key is available,
+# uploaded as run artifacts, nothing published.
 
 on:
   push:
     tags: ["v*"]
+    branches: ["**"]
+    # Not evaluated for tag pushes, so every v* tag still releases.
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release/**
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,12 +39,19 @@ env:
 
 jobs:
   # The two build jobs mirror `app-build-windows` / `app-build-macos` in
-  # ci.yml step for step. Keep them in sync when either changes. Third-party
-  # actions are pinned to the commit their ci.yml ref resolves to
-  # (dtolnay/rust-toolchain branch 1.90.0, Swatinem/rust-cache tag v2).
+  # ci.yml, plus the version stamp and the updater signing. Keep them in sync
+  # when either changes. Third-party actions are pinned to the commit their
+  # ci.yml ref resolves to (dtolnay/rust-toolchain branch 1.90.0,
+  # Swatinem/rust-cache tag v2).
   build-windows:
-    name: build (windows, unsigned NSIS)
+    name: build (windows, NSIS + updater bundle)
     runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,19 +63,41 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/companion/package-lock.json
+      - name: Plan (version, signing)
+        id: plan
+        run: |
+          node scripts/release/release-plan.mjs "$GITHUB_REF" "$GITHUB_RUN_NUMBER" \
+            "${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}" apps/companion/src-tauri/release.conf.json \
+            | tee -a "$GITHUB_OUTPUT"
       - working-directory: apps/companion
         run: npm ci
       - working-directory: apps/companion
-        run: npx tauri build --bundles nsis
+        run: npx tauri build --bundles nsis --config src-tauri/release.conf.json
+      - name: Collect (space-free names)
+        run: |
+          set -euo pipefail
+          v="${{ steps.plan.outputs.version }}"
+          mkdir -p out
+          shopt -s nullglob
+          exe=(target/release/bundle/nsis/*-setup.exe)
+          [ "${#exe[@]}" -eq 1 ] || { echo "::error::expected one setup .exe, got ${#exe[@]}"; exit 1; }
+          cp "${exe[0]}" "out/rl-companion_${v}_x64-setup.exe"
+          if [ "${{ steps.plan.outputs.sign }}" = "true" ]; then
+            cp "${exe[0]}.sig" "out/rl-companion_${v}_x64-setup.exe.sig"
+          fi
+          ls -la out
       - uses: actions/upload-artifact@v4
         with:
-          name: rl-companion-windows-nsis
-          path: target/release/bundle/nsis/*.exe
+          name: rl-companion-windows
+          path: out/*
           if-no-files-found: error
 
   build-macos:
-    name: build (macos, unsigned dmg)
+    name: build (macos, dmg + updater bundle)
     runs-on: macos-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,45 +109,94 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/companion/package-lock.json
+      - name: Plan (version, signing)
+        id: plan
+        run: |
+          node scripts/release/release-plan.mjs "$GITHUB_REF" "$GITHUB_RUN_NUMBER" \
+            "${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}" apps/companion/src-tauri/release.conf.json \
+            | tee -a "$GITHUB_OUTPUT"
       - working-directory: apps/companion
         run: npm ci
+      # `app` makes the .app.tar.gz the updater installs; `dmg` is the first install.
       - working-directory: apps/companion
-        run: npx tauri build --bundles dmg
+        run: npx tauri build --bundles app,dmg --config src-tauri/release.conf.json
+      - name: Collect (space-free names)
+        run: |
+          set -euo pipefail
+          v="${{ steps.plan.outputs.version }}"
+          mkdir -p out
+          shopt -s nullglob
+          dmg=(target/release/bundle/dmg/*.dmg)
+          [ "${#dmg[@]}" -eq 1 ] || { echo "::error::expected one .dmg, got ${#dmg[@]}"; exit 1; }
+          cp "${dmg[0]}" "out/rl-companion_${v}_aarch64.dmg"
+          if [ "${{ steps.plan.outputs.sign }}" = "true" ]; then
+            tgz=(target/release/bundle/macos/*.app.tar.gz)
+            [ "${#tgz[@]}" -eq 1 ] || { echo "::error::expected one .app.tar.gz, got ${#tgz[@]}"; exit 1; }
+            cp "${tgz[0]}" "out/rl-companion_${v}_aarch64.app.tar.gz"
+            cp "${tgz[0]}.sig" "out/rl-companion_${v}_aarch64.app.tar.gz.sig"
+          fi
+          ls -la out
       - uses: actions/upload-artifact@v4
         with:
-          name: rl-companion-macos-dmg
-          path: target/release/bundle/dmg/*.dmg
+          name: rl-companion-macos
+          path: out/*
           if-no-files-found: error
 
   publish:
-    name: publish pre-release
+    name: manifest + publish
     needs: [build-windows, build-macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Check both installers are present
+      - name: Plan
+        id: plan
         run: |
-          shopt -s nullglob
-          exe=(dist/*.exe)
-          dmg=(dist/*.dmg)
+          node scripts/release/release-plan.mjs "$GITHUB_REF" "$GITHUB_RUN_NUMBER" \
+            "${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}" /tmp/release.conf.json \
+            | tee -a "$GITHUB_OUTPUT"
+      # Refuse to publish an update the installed copies would reject.
+      - name: Verify signatures against the app's public key
+        if: steps.plan.outputs.sign == 'true'
+        run: node scripts/release/verify-sigs.mjs apps/companion/src-tauri/tauri.conf.json dist
+      - name: Write latest.json
+        if: steps.plan.outputs.sign == 'true'
+        run: |
+          set -euo pipefail
+          node scripts/release/latest-json.mjs dist "${{ steps.plan.outputs.version }}" \
+            "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > dist/latest.json
+          cat dist/latest.json
           ls -la dist
-          if [ "${#exe[@]}" -ne 1 ] || [ "${#dmg[@]}" -ne 1 ]; then
-            echo "::error::expected exactly one .exe and one .dmg, got ${#exe[@]} and ${#dmg[@]}"
-            exit 1
-          fi
+      - name: Dry run — keep the files as a run artifact
+        if: steps.plan.outputs.publish != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-companion-release-dry-run
+          path: dist/*
+          if-no-files-found: error
       - name: Write release notes
+        if: steps.plan.outputs.publish == 'true'
         run: |
           commit_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
           cat > notes.md <<EOF
-          **Unsigned test build.** These installers are not code-signed, so your
+          **Already installed (0.1.0-test.6 or later)?** The Companion updates
+          itself: it checks at startup and every 6 hours, downloads the new
+          version, and installs it once its window is closed and nothing is
+          uploading. Or click **Update now** in the window or the tray.
+
+          **First install.** These installers are not code-signed, so your
           computer will warn you before running them.
 
-          - **Windows** (\`.exe\`): when SmartScreen says "Windows protected your PC",
+          - **Windows** (\`x64-setup.exe\`): when SmartScreen says "Windows protected your PC",
             click **More info**, then **Run anyway**.
           - **macOS** (\`.dmg\`): open the disk image, drag the app to Applications,
             then **right-click** the app and choose **Open** (double-clicking the
@@ -107,20 +204,45 @@ jobs:
 
           Built from commit [\`${GITHUB_SHA:0:7}\`](${commit_url}).
           EOF
-      - name: Create the pre-release
+      - name: Publish the tag's release
+        if: steps.plan.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
+          files=(dist/*)
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             # Re-run of the same tag: replace the assets, keep the release.
-            gh release upload "$GITHUB_REF_NAME" dist/*.exe dist/*.dmg \
-              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/*.exe dist/*.dmg \
+            pre=()
+            case "$VERSION" in *-*) pre=(--prerelease) ;; esac
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
-              --prerelease \
-              --title "rl-companion $GITHUB_REF_NAME (unsigned test build)" \
+              "${pre[@]}" \
+              --title "rl-companion $GITHUB_REF_NAME" \
               --notes-file notes.md
           fi
+      # Only after the tag's release holds every file latest.json points at.
+      - name: Point the update channels at this release
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNELS: ${{ steps.plan.outputs.channels }}
+        run: |
+          set -euo pipefail
+          for ch in $CHANNELS; do
+            tag="updates-$ch"
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release create "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$GITHUB_SHA" \
+                --prerelease \
+                --title "Update channel: $ch" \
+                --notes "Holds latest.json for installed RL Companion copies on the $ch channel. Nothing to download here; install from the versioned releases."
+            fi
+            gh release upload "$tag" dist/latest.json --repo "$GITHUB_REPOSITORY" --clobber
+            echo "$tag -> $GITHUB_REF_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+          done

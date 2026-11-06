@@ -1,10 +1,13 @@
-//! System tray: icon + menu (status, Upload now, Pause/Resume, Open window, Quit).
+//! System tray: icon + menu (status, Upload now, Pause/Resume, Open window,
+//! Check for updates / Update to X, Quit).
 //! Left-clicking the icon opens the window too.
 //!
 //! C-3 hooks: listen for [`UPLOAD_NOW_EVENT`] on the app handle, check
 //! `Shared::is_paused()`, and call [`set_status`] with upload results.
 
 use crate::state::Shared;
+use crate::update_policy::{tray_label, Phase};
+use crate::updater::Updates;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -16,12 +19,14 @@ const ID_STATUS: &str = "status";
 const ID_UPLOAD: &str = "upload_now";
 const ID_PAUSE: &str = "pause";
 const ID_OPEN: &str = "open";
+const ID_UPDATE: &str = "update";
 const ID_QUIT: &str = "quit";
 
 /// Menu items whose text changes at runtime.
 pub struct TrayItems {
     status: MenuItem<Wry>,
     pause: MenuItem<Wry>,
+    update: MenuItem<Wry>,
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
@@ -29,9 +34,15 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let upload = MenuItem::with_id(app, ID_UPLOAD, "Upload now", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, ID_PAUSE, "Pause uploads", true, None::<&str>)?;
     let open = MenuItem::with_id(app, ID_OPEN, "Open window", true, None::<&str>)?;
+    let (update_text, _) = tray_label(&Phase::Idle);
+    let update = MenuItem::with_id(app, ID_UPDATE, update_text, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, ID_QUIT, "Quit RL Companion", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&status, &sep, &upload, &pause, &open, &quit])?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(
+        app,
+        &[&status, &sep, &upload, &pause, &open, &sep2, &update, &quit],
+    )?;
 
     // Never build the tray without an image: an icon-less tray item is
     // invisible on Windows, which leaves no way back after closing the window.
@@ -52,7 +63,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    app.manage(TrayItems { status, pause });
+    app.manage(TrayItems {
+        status,
+        pause,
+        update,
+    });
     Ok(())
 }
 
@@ -84,6 +99,11 @@ fn on_menu(app: &AppHandle, id: &str) {
             }
         }
         ID_OPEN => show_window(app),
+        ID_UPDATE => {
+            if let Some(u) = app.try_state::<Updates>() {
+                u.click();
+            }
+        }
         ID_QUIT => app.exit(0),
         _ => {}
     }
@@ -120,5 +140,14 @@ pub fn set_dev_bridge(app: &AppHandle, on: bool) {
 pub fn set_status(app: &AppHandle, text: &str) {
     if let Some(items) = app.try_state::<TrayItems>() {
         let _ = items.status.set_text(text);
+    }
+}
+
+/// Point the update item at the updater's phase. No-op before the tray exists.
+pub fn set_update(app: &AppHandle, phase: &Phase) {
+    if let Some(items) = app.try_state::<TrayItems>() {
+        let (text, enabled) = tray_label(phase);
+        let _ = items.update.set_text(text);
+        let _ = items.update.set_enabled(enabled);
     }
 }

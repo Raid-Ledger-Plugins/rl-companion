@@ -3,6 +3,8 @@ import * as api from "./api";
 import { Collector } from "./components/Collector";
 import { DevBridge } from "./components/DevBridge";
 import { Startup } from "./components/Startup";
+import { UpdateBanner, UpdateSection } from "./components/UpdatePanel";
+import { useUpdates } from "./components/useUpdates";
 import { escapeGoesBack, HOME, navigate, type NavAction, type View } from "./view";
 
 type Link = { phase: "idle" } | { phase: "waiting"; start: api.LinkStart };
@@ -21,6 +23,7 @@ export default function App() {
   // D8: only a tile click, the back button or Escape move the view — never a status event.
   const [view, setView] = useState<View>(HOME);
   const nav = useCallback((a: NavAction) => setView((v) => navigate(v, a)), []);
+  const { status: update, onCheck, onInstall } = useUpdates(setError);
 
   useEffect(() => {
     if (view.kind !== "game") return;
@@ -80,6 +83,7 @@ export default function App() {
   return (
     <main>
       {home && <h1>RL Companion</h1>}
+      {update && <UpdateBanner status={update} onCheck={onCheck} onInstall={onInstall} />}
       {notice && <p className="muted">{notice}</p>}
       {error && <p className="error">{error}</p>}
 
@@ -153,6 +157,8 @@ export default function App() {
       </section>}
 
       {home && <Startup onError={setError} />}
+
+      {home && update && <UpdateSection status={update} onCheck={onCheck} onInstall={onInstall} />}
 
       {home && <DevBridge onError={setError} />}
     </main>
