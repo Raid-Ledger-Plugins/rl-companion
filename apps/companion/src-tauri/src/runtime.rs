@@ -16,6 +16,7 @@ use crate::scan_report::{self, ScanBook, ScanPass, ScanReport, UploadTimes};
 use crate::server_config::ServerState;
 use crate::state::Shared;
 use crate::tiles::{apply_plugin_off_copy, last_checked, tiles, TileDto, TileInputs};
+use crate::token::DeviceToken;
 use crate::tray;
 use crate::upload::{is_unknown_contract, UploadOutcome, Uploader};
 use crate::watch::{start_watcher, SettleSet};
@@ -395,8 +396,8 @@ impl Runtime {
 
     /// A scan ended: its device inputs, per-collector lines (text and
     /// status together, under one lock) and the 401 flag. A 401 in the pass
-    /// cleared the token, so the device is unlinked whatever the scan began
-    /// with. `gen` is what `begin_scan` returned: if the link changed since
+    /// cleared the token it sent, so the device is unlinked whatever the scan
+    /// began with. `gen` is what `begin_scan` returned: if the link changed since
     /// (Unlink or Link mid-scan), the scan's link state is stale, so it
     /// writes neither `linked` nor a `link-required` event.
     pub fn end_scan(
@@ -410,10 +411,13 @@ impl Runtime {
         let mut inner = self.lock();
         inner.paused = paused;
         if gen != inner.link_gen {
-            // A 401 in the pass still recorded its own `link-required` and
-            // cleared the token, so it stands for the current unlinked spell.
+            // A 401 in the pass still recorded its own `link-required`, so it
+            // stands for the current unlinked spell. The re-link notice is
+            // the link change's to set: Unlink/Link/a server switch cleared
+            // it, a `/config` 401 mid-scan raised it — keep whichever.
             inner.link_reported |= relink;
-            store_lines(&mut inner, lines, false);
+            let keep = inner.relink;
+            store_lines(&mut inner, lines, keep);
             return;
         }
         let linked = if relink { Ok(false) } else { linked };
@@ -944,11 +948,7 @@ async fn upload_all(
             rt.hold_for(wait);
         }
         if fx.relink {
-            let _ = app.state::<Shared>().clear_token();
-            return (
-                Line::new(LineStatus::LinkDevice, "Re-link this device"),
-                true,
-            );
+            return upload_refused(&app.state::<Shared>(), &scanned.server_url, token);
         }
         if fx.stop {
             let text = stopped_line(sent, waiting, &fx);
@@ -960,6 +960,19 @@ async fn upload_all(
     // in the `pending` count — so the status agrees with that count.
     let status = finished_status(sent, rt.unsettled(pending));
     (Line::new(status, text), false)
+}
+
+/// An upload of `sent` to `origin` answered 401: forget that token (the
+/// same way `/config`'s 401 does) — unless a re-link or server switch
+/// replaced it while the request was out, in which case the new credential
+/// stays. The scan still stops and reports the 401 either way: its event is
+/// recorded, so `end_scan` must count it whatever happened to the token.
+pub fn upload_refused(shared: &Shared, origin: &str, sent: &DeviceToken) -> (Line, bool) {
+    let _ = shared.clear_token_if(origin, sent);
+    (
+        Line::new(LineStatus::LinkDevice, "Re-link this device"),
+        true,
+    )
 }
 
 /// Exports held when the upload before `rest` stopped: that one plus the

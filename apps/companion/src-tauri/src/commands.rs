@@ -71,7 +71,8 @@ pub fn get_status(state: State<'_, Shared>) -> Result<StatusDto, String> {
     })
 }
 
-/// Start-up self-check: confirms the stored token still works. A 401 clears it.
+/// Start-up self-check: confirms the stored token still works. A 401 clears
+/// that token (not one a re-link saved while the check was out).
 #[tauri::command]
 pub async fn check_link(app: AppHandle, state: State<'_, Shared>) -> Result<CheckDto, String> {
     let Some(token) = state.token().map_err(s)? else {
@@ -82,7 +83,8 @@ pub async fn check_link(app: AppHandle, state: State<'_, Shared>) -> Result<Chec
             message: None,
         });
     };
-    let client = LinkClient::new(&state.config().server_url).map_err(s)?;
+    let origin = state.config().server_url;
+    let client = LinkClient::new(&origin).map_err(s)?;
     let dto = match client.self_check(&token).await {
         Ok(SelfCheck::Valid { name, .. }) => {
             tray::set_status(&app, &format!("Linked as {name}"));
@@ -93,7 +95,8 @@ pub async fn check_link(app: AppHandle, state: State<'_, Shared>) -> Result<Chec
             }
         }
         Ok(SelfCheck::Unauthorized) => {
-            state.clear_token().map_err(s)?;
+            // Only the token the check sent: a re-link meanwhile keeps its own.
+            state.clear_token_if(&origin, &token).map_err(s)?;
             tray::set_status(&app, "Re-link this device");
             CheckDto {
                 state: "revoked",
