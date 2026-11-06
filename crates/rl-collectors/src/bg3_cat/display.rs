@@ -50,7 +50,10 @@ fn holds_id_leak(s: &str) -> bool {
 
 /// Zero-width and direction marks: U+200B–U+200F, U+061C, U+FEFF, U+2060.
 fn invisible_format(c: char) -> bool {
-    matches!(c, '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{FEFF}' | '\u{2060}')
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{FEFF}' | '\u{2060}'
+    )
 }
 
 /// Every `<…>` replaced by a space; `None` for an unclosed `<`.
@@ -82,7 +85,10 @@ fn refused_char(c: char) -> bool {
 /// case); a 32+ hex run; or 32 hex once every `-_.{}` is stripped.
 fn holds_guid(s: &str) -> bool {
     let b = s.as_bytes();
-    let stripped: String = s.chars().filter(|c| !matches!(c, '-' | '_' | '.' | '{' | '}')).collect();
+    let stripped: String = s
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_' | '.' | '{' | '}'))
+        .collect();
     (0..b.len()).any(|i| split_guid_at(&b[i..]) || larian_handle_at(&b[i..]))
         || longest_run(s, |c| c.is_ascii_hexdigit()) >= CAT_GUID_HEX_RUN
         || longest_run(&stripped, |c| c.is_ascii_hexdigit()) >= CAT_GUID_HEX_RUN
@@ -113,7 +119,8 @@ fn larian_handle_at(b: &[u8]) -> bool {
 }
 
 fn hex_at(b: &[u8], at: usize, len: usize) -> bool {
-    b.get(at..at + len).is_some_and(|p| p.iter().all(u8::is_ascii_hexdigit))
+    b.get(at..at + len)
+        .is_some_and(|p| p.iter().all(u8::is_ascii_hexdigit))
 }
 
 fn longest_run(s: &str, pred: impl Fn(char) -> bool) -> usize {

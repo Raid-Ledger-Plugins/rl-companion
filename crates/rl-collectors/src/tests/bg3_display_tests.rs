@@ -69,8 +69,16 @@ rl_test! {
 /// Every shape `bg3HoldsGuid` (contract `companion-dev-bridge-bg3-redaction.ts`)
 /// refuses, each beside a near-miss the filter must keep.
 fn refused_and_kept(refused: &str, kept: &str) {
-    assert_eq!(catalogue_display_text(refused), None, "{refused:?} holds a GUID shape");
-    assert_eq!(catalogue_display_text(kept).as_deref(), Some(kept), "{kept:?} is a near-miss");
+    assert_eq!(
+        catalogue_display_text(refused),
+        None,
+        "{refused:?} holds a GUID shape"
+    );
+    assert_eq!(
+        catalogue_display_text(kept).as_deref(),
+        Some(kept),
+        "{kept:?} is a near-miss"
+    );
 }
 
 rl_test! {
