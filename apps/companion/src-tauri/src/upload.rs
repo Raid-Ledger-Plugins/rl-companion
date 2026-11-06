@@ -55,16 +55,20 @@ pub enum UploadOutcome {
         code: Option<String>,
     },
     /// Out of attempts (5xx / 408 / network). Try again on the next scan.
-    GaveUp { reason: String },
+    /// `status` is the last attempt's HTTP status (`None` for a network
+    /// failure or an unbuildable URL).
+    GaveUp { reason: String, status: Option<u16> },
 }
 
 /// One HTTP attempt's verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attempt {
     Done(UploadOutcome),
-    /// Retryable now, after the backoff.
+    /// Retryable now, after the backoff. `status` is the server's HTTP
+    /// status (`None` when no answer came back).
     Retry {
         reason: String,
+        status: Option<u16>,
     },
 }
 
@@ -108,6 +112,7 @@ pub fn classify(status: u16, retry_after: Option<&str>, body: &[u8]) -> Attempt 
         }),
         408 | 500..=599 => Attempt::Retry {
             reason: format!("server error {status}"),
+            status: Some(status),
         },
         _ => Attempt::Done(other_status(status, body)),
     }
@@ -243,18 +248,23 @@ where
     SF: Future<Output = ()>,
 {
     let mut last = String::from("no attempt made");
+    let mut last_status = None;
     for n in 0..MAX_ATTEMPTS {
         match attempt().await {
             Attempt::Done(outcome) => return outcome,
-            Attempt::Retry { reason } => {
+            Attempt::Retry { reason, status } => {
                 last = reason;
+                last_status = status;
                 if n + 1 < MAX_ATTEMPTS {
                     sleep(backoff(n)).await;
                 }
             }
         }
     }
-    UploadOutcome::GaveUp { reason: last }
+    UploadOutcome::GaveUp {
+        reason: last,
+        status: last_status,
+    }
 }
 
 pub struct Uploader {
@@ -298,7 +308,12 @@ impl Uploader {
     ) -> Attempt {
         let url = match self.url(contract) {
             Ok(u) => u,
-            Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),
+            Err(reason) => {
+                return Attempt::Done(UploadOutcome::GaveUp {
+                    reason,
+                    status: None,
+                })
+            }
         };
         let sent = self
             .http
@@ -310,6 +325,7 @@ impl Uploader {
         match sent {
             Err(e) => Attempt::Retry {
                 reason: network_reason(&e).into(),
+                status: None,
             },
             Ok(res) => {
                 let status = res.status().as_u16();
@@ -363,7 +379,12 @@ impl Uploader {
     ) -> Attempt {
         let url = match self.blob_url(&blob.sha256) {
             Ok(u) => u,
-            Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),
+            Err(reason) => {
+                return Attempt::Done(UploadOutcome::GaveUp {
+                    reason,
+                    status: None,
+                })
+            }
         };
         let sent = self
             .http
@@ -376,6 +397,7 @@ impl Uploader {
         match sent {
             Err(e) => Attempt::Retry {
                 reason: network_reason(&e).into(),
+                status: None,
             },
             Ok(res) => {
                 let status = res.status().as_u16();

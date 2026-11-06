@@ -182,6 +182,7 @@ fn effects_record_only_settled_outcomes() {
     );
     let fx = effect(&UploadOutcome::GaveUp {
         reason: "server error 503".into(),
+        status: Some(503),
     });
     assert!(
         !fx.record && !fx.stop,
@@ -317,7 +318,8 @@ async fn persistent_failure_gives_up_after_five_attempts() {
     assert_eq!(
         outcome,
         UploadOutcome::GaveUp {
-            reason: "server error 502".into()
+            reason: "server error 502".into(),
+            status: Some(502),
         }
     );
     assert_eq!(hits(&server).await, 5);

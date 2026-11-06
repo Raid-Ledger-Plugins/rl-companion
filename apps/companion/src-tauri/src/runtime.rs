@@ -168,7 +168,7 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
         UploadOutcome::Deferred { reason, .. } => {
             settle(false, true, false, format!("Will retry: {reason}"))
         }
-        UploadOutcome::GaveUp { reason } => {
+        UploadOutcome::GaveUp { reason, .. } => {
             settle(false, false, false, format!("Will retry: {reason}"))
         }
     }
@@ -846,8 +846,9 @@ async fn upload_all(
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         // The batch's collector (not the contract name), and only what is
-        // still queued: this item plus the ticked ones after it.
-        events::record_outcome(id, &outcome, still_queued(&queue));
+        // still queued: this item plus the ticked ones after it — counted
+        // only for a 429 (the walk rechecks each BG3 item's live pick).
+        events::record_outcome(id, &outcome, || still_queued(&queue));
         let fx = effect(&outcome);
         rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));
         if is_unknown_contract(&outcome) {

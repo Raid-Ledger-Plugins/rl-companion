@@ -321,7 +321,7 @@ fn record_points_land_in_the_served_ring() {
     );
     record("bg3-save", Kind::Scan, |e| e.count(2));
     assert!(has("scan"), "record left no scan row");
-    record_outcome("bg3-save", &UploadOutcome::Unauthorized, 0);
+    record_outcome("bg3-save", &UploadOutcome::Unauthorized, || 0);
     assert!(
         has("link-required"),
         "record_outcome left no link-required row"
@@ -333,5 +333,121 @@ fn record_points_land_in_the_served_ring() {
     assert!(
         !after.contains("/Users/x"),
         "a non-collector id recorded a row"
+    );
+}
+
+fn done(status: u16, body: &str) -> UploadOutcome {
+    match classify(status, None, body.as_bytes()) {
+        Attempt::Done(o) => o,
+        other => panic!("{status} is not a final answer: {other:?}"),
+    }
+}
+
+/// Codex P2: rows stamped in whole seconds shared a `ts`, so a client
+/// polling with exclusive `since=<last ts>` lost the later one for good.
+/// Stamps are milliseconds and strictly increasing, so it never does.
+#[test]
+fn events_in_one_second_or_one_ms_stay_reachable_by_since() {
+    use crate::dev_bridge::events::stamp_ms;
+    assert_eq!(stamp_ms(0), "1970-01-01T00:00:00.000Z");
+    let log = leaked();
+    let c = id("bg3-save");
+    let t: i64 = 1_793_000_000_100;
+    for (n, at) in [(1, t), (2, t + 400), (3, t + 400)] {
+        log.push_now(Event::new(c, Kind::Scan).count(n), at);
+    }
+    let body = log.page(None, None).expect("page");
+    assert_eq!(schema_errors("events", &body), Vec::<String>::new());
+    let stamps: Vec<String> = body["events"]
+        .as_array()
+        .map(|r| {
+            r.iter()
+                .map(|e| e["ts"].as_str().unwrap_or("").to_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        stamps,
+        vec![stamp_ms(t), stamp_ms(t + 400), stamp_ms(t + 401)],
+        "same-second rows keep their ms; a same-ms row moves 1 ms later"
+    );
+    for (i, seen) in stamps.iter().enumerate() {
+        let page = log.page(Some(seen), None).expect("page");
+        let counts: Vec<u64> = page["events"]
+            .as_array()
+            .map(|r| r.iter().filter_map(|e| e["count"].as_u64()).collect())
+            .unwrap_or_default();
+        let want: Vec<u64> = (u64::try_from(i).unwrap_or(0) + 2..=3).collect();
+        assert_eq!(counts, want, "since={seen} lost a later row");
+    }
+}
+
+/// Codex P2: the held count walks the rest of the queue (rechecking live
+/// BG3 picks), so it is computed for a 429 only, never per outcome.
+#[test]
+fn the_held_count_is_computed_only_for_a_429() {
+    use crate::dev_bridge::events::{global, record_outcome};
+    use std::cell::Cell;
+    let calls = Cell::new(0);
+    let held = || {
+        || {
+            calls.set(calls.get() + 1);
+            7
+        }
+    };
+    let quiet = [
+        UploadOutcome::Accepted,
+        UploadOutcome::Unauthorized,
+        done(422, r#"{"code":"invalid_payload"}"#),
+        done(404, r#"{"code":"unknown_contract"}"#),
+        UploadOutcome::GaveUp {
+            reason: "server error 503".into(),
+            status: Some(503),
+        },
+    ];
+    for o in &quiet {
+        record_outcome("wow-ledgerlink", o, held());
+    }
+    assert_eq!(calls.get(), 0, "the queue was walked for a non-429 outcome");
+    record_outcome("wow-ledgerlink", &done(429, ""), held());
+    assert_eq!(calls.get(), 1, "a 429 counts what it held exactly once");
+    let body = global().page(None, None).expect("page");
+    let rows = body["events"].as_array().cloned().unwrap_or_default();
+    assert!(
+        rows.iter().any(|r| r["collectorId"] == "wow-ledgerlink"
+            && r["kind"] == "upload-held"
+            && r["count"] == 7),
+        "the 429 row did not carry the held count: {body}"
+    );
+}
+
+/// Codex P2: an upload that ran out of retries reported no `httpStatus`
+/// although the server had answered every attempt.
+#[tokio::test]
+async fn an_exhausted_retry_reports_the_servers_last_status() {
+    use crate::upload::send_with_retry;
+    let c = id("wow-ledgerlink");
+    let outcome = send_with_retry(|| async { classify(503, None, b"") }, |_| async {}).await;
+    assert_eq!(
+        outcome,
+        UploadOutcome::GaveUp {
+            reason: "server error 503".into(),
+            status: Some(503),
+        }
+    );
+    let ev = for_outcome(c, &outcome, 0);
+    assert_eq!(
+        (ev.kind, ev.http_status),
+        (Kind::UploadRetry, Some(503)),
+        "the given-up row lost the server's status"
+    );
+    let net = UploadOutcome::GaveUp {
+        reason: "network".into(),
+        status: None,
+    };
+    assert_eq!(
+        for_outcome(c, &net, 0).http_status,
+        None,
+        "no answer, no status"
     );
 }

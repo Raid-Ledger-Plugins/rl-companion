@@ -26,7 +26,7 @@ fn body(code: &str) -> Vec<u8> {
 fn outcome(contract: &str, status: u16, code: &str) -> UploadOutcome {
     match classify_message(contract, status, None, &body(code)) {
         Attempt::Done(o) => o,
-        Attempt::Retry { reason } => panic!("{status} {code} retried: {reason}"),
+        Attempt::Retry { reason, .. } => panic!("{status} {code} retried: {reason}"),
     }
 }
 

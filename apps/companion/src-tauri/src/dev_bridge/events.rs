@@ -201,21 +201,36 @@ pub struct EventLog {
 impl EventLog {
     /// Store `ev` stamped `ts` (RFC 3339 UTC; anything else is dropped).
     pub fn push_at(&self, ev: Event, ts: String) {
-        let at = parse_utc(&ts).filter(|_| ts.len() <= 24);
-        // A format change must not empty the route unnoticed; the message
-        // carries no payload (never the rejected text).
-        debug_assert!(at.is_some(), "events: row timestamp is not RFC 3339 UTC");
-        let Some(at) = at else {
+        let Some(at) = parse_utc(&ts).filter(|_| ts.len() <= 24) else {
+            // A format change must not empty the route unnoticed; the
+            // message is fixed and carries no payload (never the text).
             eprintln!("dev-bridge events: dropped a row (timestamp not RFC 3339 UTC)");
             return;
         };
         let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        let seq = g.0;
-        g.0 += 1;
-        if g.1.len() == CAPACITY {
-            g.1.pop_front();
-        }
-        g.1.push_back(Row { seq, ts, at, ev });
+        insert(&mut g, Row { seq: 0, ts, at, ev });
+    }
+
+    /// Store `ev` stamped `unix_ms` (milliseconds — the finest the schema's
+    /// 24-char `ts` holds), moved to 1 ms after the newest row when it is
+    /// not later than it. Every row is then strictly later than the one
+    /// before, so a client polling with exclusive `since=<last ts>` misses
+    /// nothing, even for events recorded in the same millisecond.
+    pub fn push_now(&self, ev: Event, unix_ms: i64) {
+        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let after = g.1.back().map_or(i64::MIN, |r| {
+            r.at.0
+                .saturating_mul(1000)
+                .saturating_add(i64::from(r.at.1 / 1_000_000))
+                .saturating_add(1)
+        });
+        let ms = unix_ms.max(after);
+        let ts = stamp_ms(ms);
+        let at = (
+            ms.div_euclid(1000),
+            u32::try_from(ms.rem_euclid(1000)).unwrap_or(0) * 1_000_000,
+        );
+        insert(&mut g, Row { seq: 0, ts, at, ev });
     }
 
     pub fn len(&self) -> usize {
@@ -266,6 +281,23 @@ impl EventLog {
     }
 }
 
+/// Append `row` with the next seq, evicting the oldest at capacity.
+fn insert(g: &mut (usize, VecDeque<Row>), mut row: Row) {
+    row.seq = g.0;
+    g.0 += 1;
+    if g.1.len() == CAPACITY {
+        g.1.pop_front();
+    }
+    g.1.push_back(row);
+}
+
+/// `unix_ms` as `YYYY-MM-DDTHH:MM:SS.mmmZ` (24 chars).
+pub fn stamp_ms(unix_ms: i64) -> String {
+    let secs = rl_collectors::rfc3339_utc_from_unix_seconds(unix_ms.div_euclid(1000));
+    let base = secs.strip_suffix('Z').unwrap_or(&secs);
+    format!("{base}.{:03}Z", unix_ms.rem_euclid(1000))
+}
+
 fn page_index(c: &str) -> Option<usize> {
     super::paging::decode_cursor(Some(&c.to_owned())).ok()
 }
@@ -285,17 +317,16 @@ pub fn global() -> &'static EventLog {
     B.get_or_init(EventLog::default)
 }
 
-fn now() -> String {
-    let secs = std::time::SystemTime::now()
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
-    rl_collectors::rfc3339_utc_from_unix_seconds(secs)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0))
 }
 
 /// Record `kind` for collector `id` now (a non-collector id records nothing).
 pub fn record(id: &str, kind: Kind, f: impl FnOnce(Event) -> Event) {
     if let Some(c) = CollectorId::known(id) {
-        global().push_at(f(Event::new(c, kind)), now());
+        global().push_now(f(Event::new(c, kind)), now_ms());
     }
 }
 
@@ -321,14 +352,22 @@ pub fn for_outcome(c: CollectorId, o: &crate::upload::UploadOutcome, held: usize
             let ev = Event::new(c, Kind::UploadRetry).code(code);
             status.map_or(ev, |s| ev.status(s))
         }
-        O::GaveUp { .. } => Event::new(c, Kind::UploadRetry),
+        O::GaveUp { status, .. } => {
+            let ev = Event::new(c, Kind::UploadRetry);
+            status.map_or(ev, |s| ev.status(s))
+        }
     }
 }
 
-/// Record one upload outcome for collector `id`.
-pub fn record_outcome(id: &str, o: &crate::upload::UploadOutcome, held: usize) {
+/// Record one upload outcome for collector `id`. `held` (how many exports
+/// a 429 holds) is only called for a 429 — counting it walks the queue.
+pub fn record_outcome(id: &str, o: &crate::upload::UploadOutcome, held: impl FnOnce() -> usize) {
     if let Some(c) = CollectorId::known(id) {
-        global().push_at(for_outcome(c, o, held), now());
+        let held = match o {
+            crate::upload::UploadOutcome::RateLimited { .. } => held(),
+            _ => 0,
+        };
+        global().push_now(for_outcome(c, o, held), now_ms());
     }
 }
 
