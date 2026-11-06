@@ -40,11 +40,7 @@ pub fn collectors_body(dto: &CollectorStatusDto, paused: bool) -> Value {
                 (None, 0)
             };
             let device = dto.device_status(paused);
-            let status = row_status(
-                c.enabled,
-                device,
-                dto.line_status.get(&c.id).copied(),
-            );
+            let status = row_status(c.enabled, device, dto.line_status.get(&c.id).copied());
             json!({
                 "id": c.id,
                 "enabled": c.enabled,

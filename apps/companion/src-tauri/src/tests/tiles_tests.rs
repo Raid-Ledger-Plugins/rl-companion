@@ -2,8 +2,8 @@
 //! per-collector results (spec ACs 5, 6, 8, 9, 11a, 14).
 
 use crate::collector::PendingUpload;
-use crate::collector_view::rows;
 use crate::collector_status::{Line, LineStatus};
+use crate::collector_view::rows;
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, WOW_LEDGERLINK};
 use crate::runtime::{effect, Runtime};

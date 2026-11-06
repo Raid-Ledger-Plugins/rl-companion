@@ -255,8 +255,16 @@ fn server_codes_map_through_the_enum() {
     let code = |c: &str| format!(r#"{{"code":"{c}"}}"#);
     for (status, c, want) in [
         (404, "unknown_contract", ErrorCode::UnknownContract),
-        (404, "unknown_contract_version", ErrorCode::UnknownContractVersion),
-        (409, "retired_contract_version", ErrorCode::RetiredContractVersion),
+        (
+            404,
+            "unknown_contract_version",
+            ErrorCode::UnknownContractVersion,
+        ),
+        (
+            409,
+            "retired_contract_version",
+            ErrorCode::RetiredContractVersion,
+        ),
         (418, "TEAPOT", ErrorCode::Other),
     ] {
         let ev = deferred(status, &code(c));
@@ -267,7 +275,10 @@ fn server_codes_map_through_the_enum() {
         );
     }
     let ev = deferred(413, "<html>too large</html>");
-    assert_eq!((ev.http_status, ev.error_code), (Some(413), Some(ErrorCode::Other)));
+    assert_eq!(
+        (ev.http_status, ev.error_code),
+        (Some(413), Some(ErrorCode::Other))
+    );
     // The served row never carries the issue text or any key outside the schema.
     let log = leaked();
     log.push_at(for_outcome(c, &rej("hash_mismatch"), 0), ts(1));
@@ -304,14 +315,23 @@ fn record_points_land_in_the_served_ring() {
             .any(|r| r["collectorId"] == "bg3-save" && r["kind"] == kind)
     };
     record_toggle("bg3-save", true);
-    assert!(has("collector-on"), "record_toggle left no collector-on row");
+    assert!(
+        has("collector-on"),
+        "record_toggle left no collector-on row"
+    );
     record("bg3-save", Kind::Scan, |e| e.count(2));
     assert!(has("scan"), "record left no scan row");
     record_outcome("bg3-save", &UploadOutcome::Unauthorized, 0);
-    assert!(has("link-required"), "record_outcome left no link-required row");
+    assert!(
+        has("link-required"),
+        "record_outcome left no link-required row"
+    );
     let before = global().page(None, None).expect("page").to_string();
     record("/Users/x/save.lsv", Kind::Error, |e| e);
     assert!(!before.contains("/Users/x"));
     let after = global().page(None, None).expect("page").to_string();
-    assert!(!after.contains("/Users/x"), "a non-collector id recorded a row");
+    assert!(
+        !after.contains("/Users/x"),
+        "a non-collector id recorded a row"
+    );
 }

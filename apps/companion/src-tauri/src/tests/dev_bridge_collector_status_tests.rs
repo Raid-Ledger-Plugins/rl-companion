@@ -147,8 +147,8 @@ fn a_stopped_batch_maps_by_what_stopped_it() {
         (
             UploadOutcome::Deferred {
                 reason: "not yet".into(),
-        status: None,
-        code: None,
+                status: None,
+                code: None,
             },
             LineStatus::Retrying,
         ),
@@ -257,7 +257,11 @@ fn a_401_mid_pass_unlinks_the_device_for_every_enabled_row() {
     ]);
     rt.end_scan(false, Ok(true), lines, true);
     let body = served(&rt, &cfg);
-    assert_eq!(body["linked"], Value::Bool(false), "the 401 cleared the token");
+    assert_eq!(
+        body["linked"],
+        Value::Bool(false),
+        "the 401 cleared the token"
+    );
     assert_eq!(status_of(&body, WOW), "link-device");
     assert_eq!(status_of(&body, BG3_SAVE.id), "link-device");
     assert_eq!(schema_errors("collectors", &body), Vec::<String>::new());
@@ -277,7 +281,11 @@ fn the_device_block_follows_the_live_pause_flag_not_the_scans() {
     // … and resumed after a paused scan.
     rt.end_scan(true, Ok(true), lines, false);
     let body = served_live(&rt, &cfg, false);
-    assert_eq!(status_of(&body, WOW), "uploaded", "paused stuck after resume");
+    assert_eq!(
+        status_of(&body, WOW),
+        "uploaded",
+        "paused stuck after resume"
+    );
 }
 
 fn shot(sha: &str, campaign: Option<&str>) -> PendingUpload {
@@ -296,7 +304,10 @@ fn shot(sha: &str, campaign: Option<&str>) -> PendingUpload {
 #[test]
 fn a_pass_whose_screenshots_were_all_refused_is_up_to_date_like_its_pending_count() {
     let rt = Runtime::new(super::temp_dir("bridge-refused").join("sent.json"));
-    let pending = vec![shot("refused-status-1", None), shot("refused-status-2", None)];
+    let pending = vec![
+        shot("refused-status-1", None),
+        shot("refused-status-2", None),
+    ];
     for p in &pending {
         crate::bg3_screenshot::refuse(&p.sha256);
     }

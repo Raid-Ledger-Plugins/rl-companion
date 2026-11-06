@@ -315,7 +315,9 @@ pub fn for_outcome(c: CollectorId, o: &crate::upload::UploadOutcome, held: usize
         O::Unauthorized => Event::new(c, Kind::LinkRequired).status(401),
         O::RateLimited { .. } => Event::new(c, Kind::UploadHeld).status(429).count(held),
         O::Deferred { status, code, .. } => {
-            let code = code.as_deref().map_or(ErrorCode::Other, ErrorCode::from_server);
+            let code = code
+                .as_deref()
+                .map_or(ErrorCode::Other, ErrorCode::from_server);
             let ev = Event::new(c, Kind::UploadRetry).code(code);
             status.map_or(ev, |s| ev.status(s))
         }

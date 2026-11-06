@@ -2,8 +2,8 @@
 //! first-upload preview hold.
 
 use crate::collector::{Blob, PendingUpload};
-use crate::collector_view::{apply_root, device_note, device_state, rows, RETRYING};
 use crate::collector_status::{Line, LineStatus};
+use crate::collector_view::{apply_root, device_note, device_state, rows, RETRYING};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, BG3_SCREENSHOT, WOW_LEDGERLINK};
 use crate::preview::{base64, hold};
