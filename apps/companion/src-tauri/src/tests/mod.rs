@@ -13,6 +13,7 @@ mod dev_bridge_addon_sv_tests;
 mod dev_bridge_bg3_character_key_tests;
 mod dev_bridge_bg3_newage_tests;
 mod dev_bridge_bg3_tests;
+mod dev_bridge_collector_status_tests;
 mod dev_bridge_conn_tests;
 mod dev_bridge_guard_tests;
 mod dev_bridge_lifecycle_tests;
