@@ -3,10 +3,11 @@
 //! never an error).
 //!
 //! Steps: every `<…>` markup tag (`<LSTag …>`, `<br>`, `<b>`) becomes a
-//! space, whitespace runs collapse to one space, the ends are trimmed.
+//! space, Unicode whitespace runs (tab, newline, U+2028/9 included)
+//! collapse to one space, the ends are trimmed.
 //! The result is refused when it is empty, longer than
 //! [`CAT_MAX_NAME_UTF16`] UTF-16 units, holds a character
-//! `COMPANION_DISPLAY_TEXT_RE` refuses (control, U+2028/9, bidi
+//! `COMPANION_DISPLAY_TEXT_RE` refuses (control, bidi
 //! embedding/override/isolate), a GUID (`8-4-4-4-12` hex, or a run of
 //! [`CAT_GUID_HEX_RUN`] hex digits) or a run of [`CAT_MAX_DIGIT_RUN`] + 1
 //! ASCII digits. A `<` with no closing `>` is refused rather than guessed.

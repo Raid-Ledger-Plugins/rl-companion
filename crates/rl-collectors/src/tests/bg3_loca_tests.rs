@@ -14,7 +14,7 @@ pub(super) fn h(n: u32) -> String {
 }
 
 /// A `.loca` file: each text gets its trailing NUL.
-fn loca(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
+pub(super) fn loca(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
     let texts_at = LOCA_HEADER_BYTES + entries.len() * LOCA_ENTRY_BYTES;
     let mut out = b"LOCA".to_vec();
     out.extend((entries.len() as u32).to_le_bytes());
