@@ -287,3 +287,39 @@ fn a_config_401_during_a_scan_keeps_the_re_link_notice_at_its_end() {
         "a scan ending after a /config 401 cleared its re-link notice"
     );
 }
+
+#[test]
+fn a_switch_away_and_back_mid_scan_then_a_401_still_revokes_the_current_token() {
+    use crate::token::DeviceToken;
+    let (a, b) = ("https://raid.example", "https://other.example");
+    let shared = shared_on("upload-401-switch-back", a);
+    let (rt, log) = runtime("upload-401-switch-back-rt");
+    let token = DeviceToken::parse(super::TOKEN).expect("token");
+    shared.save_token(a, &token).expect("save");
+    scan(&rt, Ok(true), uploaded_lines());
+    // The scan sent A's token; the user switches A→B→A before its 401.
+    let gen = rt.begin_scan();
+    shared
+        .update_config(|c| c.server_url = b.to_owned())
+        .expect("to B");
+    rt.server_changed(false);
+    shared
+        .update_config(|c| c.server_url = a.to_owned())
+        .expect("to A");
+    rt.server_changed(true);
+    let wow = CollectorId::known(WOW).expect("manifest id");
+    log.push_now(for_outcome(wow, &UploadOutcome::Unauthorized, 0), 1);
+    let (line, stop) = crate::runtime::upload_refused(&shared, a, &token);
+    let lines = BTreeMap::from([(WOW.to_owned(), line)]);
+    rt.end_scan(gen, false, Ok(true), lines, stop);
+    assert!(
+        shared.token().expect("load").is_none(),
+        "A's still-current token survived its 401"
+    );
+    let snap = rt.snapshot(&both_on());
+    assert!(snap.relink, "the revoking 401 raised no re-link notice");
+    let body = collectors_body(&snap, false);
+    assert_eq!(body["linked"], Value::Bool(false), "no token, still linked");
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(recorded(log).len(), 1, "the 401's event was doubled");
+}
