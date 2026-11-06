@@ -33,6 +33,8 @@ pub use build::{
 pub use display::{
     CAT_GUID_HEX_RUN, CAT_MAX_DIGIT_RUN, CAT_MAX_NAME_UTF16, catalogue_display_text,
 };
+#[cfg(test)]
+pub(crate) use display::{Refusal, normalise_display};
 pub use loca::{
     LOCA_ENTRY_BYTES, LOCA_HEADER_BYTES, LOCA_KEY_BYTES, LOCA_MAGIC, LOCA_MAX_ENTRIES,
     is_loca_handle, parse_loca_wanted,

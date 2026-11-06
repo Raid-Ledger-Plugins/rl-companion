@@ -1,5 +1,6 @@
 //! D9 display filter for catalogue strings (ROK-2081). Invented text only.
 
+use crate::bg3_cat::{Refusal, normalise_display};
 use crate::{CAT_GUID_HEX_RUN, CAT_MAX_DIGIT_RUN, CAT_MAX_NAME_UTF16, catalogue_display_text};
 
 rl_test! {
@@ -136,5 +137,45 @@ rl_test! {
             assert_eq!(catalogue_display_text(&guid), None, "U+{:04X} hides a GUID", c as u32);
         }
         assert!(catalogue_display_text("Ring 1234\u{200B}5678").is_some(), "8 digits stay under the cap");
+    }
+}
+
+/// ECMAScript `\s` (what `COMPANION_DISPLAY_TEXT_RE`'s `(?!\s*$)` reads as blank).
+const ES_WHITESPACE: [char; 25] = [
+    '\u{0009}', '\u{000A}', '\u{000B}', '\u{000C}', '\u{000D}', '\u{0020}', '\u{00A0}', '\u{1680}',
+    '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}',
+    '\u{2008}', '\u{2009}', '\u{200A}', '\u{2028}', '\u{2029}', '\u{202F}', '\u{205F}', '\u{3000}',
+    '\u{FEFF}',
+];
+
+rl_test! {
+    fn display_refuses_a_bom_only_name_the_contract_reads_as_blank() {
+        for raw in ["\u{FEFF}", " \u{FEFF} ", "<br>\u{FEFF}<b></b>", "\u{FEFF}\u{3000}\u{FEFF}"] {
+            assert_eq!(catalogue_display_text(raw), None, "{raw:?} is whitespace-only to JS \\s");
+        }
+    }
+}
+
+rl_test! {
+    fn display_collapses_every_ecmascript_whitespace_char() {
+        for c in ES_WHITESPACE {
+            let raw = format!("{c}Hat{c}{c}of {c}Tests{c}");
+            let got = catalogue_display_text(&raw);
+            assert_eq!(got.as_deref(), Some("Hat of Tests"), "U+{:04X} must collapse", c as u32);
+            assert_eq!(catalogue_display_text(&c.to_string()), None, "U+{:04X} alone is blank", c as u32);
+        }
+    }
+}
+
+rl_test! {
+    fn display_stops_at_the_length_cap_without_reading_a_huge_many_word_value() {
+        // 4 MB of words, then an unclosed `<`: only an early stop at the cap
+        // can report TooLong — a whole-input pass would hit the `<` first.
+        let raw = format!("{}<", "x ".repeat(2_000_000));
+        assert_eq!(normalise_display(&raw).err(), Some(Refusal::TooLong));
+        assert_eq!(catalogue_display_text(&raw), None);
+        // A huge run of markup alone builds no output and keeps the word after it.
+        let tags = format!("{}Hat", "<b>".repeat(1_000_000));
+        assert_eq!(catalogue_display_text(&tags).as_deref(), Some("Hat"));
     }
 }

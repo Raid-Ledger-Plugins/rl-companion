@@ -2,9 +2,11 @@
 //! it survives this filter, otherwise it becomes `None` (never truncated,
 //! never an error).
 //!
-//! Steps: every `<…>` markup tag (`<LSTag …>`, `<br>`, `<b>`) becomes a
-//! space, Unicode whitespace runs (tab, newline, U+2028/9 included)
-//! collapse to one space, the ends are trimmed.
+//! Steps, in one bounded pass: every `<…>` markup tag (`<LSTag …>`,
+//! `<br>`, `<b>`) becomes a space, ECMAScript `\s` runs (the set
+//! `COMPANION_DISPLAY_TEXT_RE` reads as blank — U+FEFF included) collapse
+//! to one space, the ends are trimmed. The pass stops as soon as the output
+//! passes the length cap, so a huge loca value never costs more than the cap.
 //! The result is refused when it is empty, longer than
 //! [`CAT_MAX_NAME_UTF16`] UTF-16 units, holds a character
 //! `COMPANION_DISPLAY_TEXT_RE` refuses (control, bidi
@@ -26,12 +28,99 @@ use super::is_bg3_id;
 
 /// The display form of a loca string, or `None` when it fails the filter.
 pub fn catalogue_display_text(raw: &str) -> Option<String> {
-    let text = collapse(&strip_markup(raw)?);
-    let ok = !text.is_empty()
-        && text.encode_utf16().count() <= CAT_MAX_NAME_UTF16
-        && !text.chars().any(refused_char)
-        && !holds_id_leak(&text);
-    ok.then_some(text)
+    let n = normalise_display(raw).ok()?;
+    let ok = !n.display.is_empty()
+        && !n.display.chars().any(refused_char)
+        && !holds_id_leak(&n.display)
+        && !holds_id_leak(&n.leak);
+    ok.then_some(n.display)
+}
+
+/// Why [`normalise_display`] gave up on a loca string.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// The normalised name passed [`CAT_MAX_NAME_UTF16`].
+    TooLong,
+    /// A `<` with no closing `>`.
+    Unclosed,
+}
+
+/// Both views [`normalise_display`] builds; neither outgrows the cap.
+#[derive(Debug, Default)]
+pub(crate) struct Normalised {
+    /// Markup gone, whitespace collapsed, ends trimmed.
+    pub(crate) display: String,
+    /// `display` with U+FEFF deleted rather than read as a space: the
+    /// id-leak view, since a BOM between digits hides the join (D8).
+    pub(crate) leak: String,
+    gap: bool,
+    leak_gap: bool,
+    units: usize,
+}
+
+impl Normalised {
+    /// Appends a visible char (and the pending space), or `TooLong`.
+    fn push(&mut self, c: char) -> Result<(), Refusal> {
+        let space = self.gap && !self.display.is_empty();
+        self.units += usize::from(space) + c.len_utf16();
+        if self.units > CAT_MAX_NAME_UTF16 {
+            return Err(Refusal::TooLong);
+        }
+        if space {
+            self.display.push(' ');
+        }
+        if self.leak_gap && !self.leak.is_empty() {
+            self.leak.push(' ');
+        }
+        self.display.push(c);
+        self.leak.push(c);
+        (self.gap, self.leak_gap) = (false, false);
+        Ok(())
+    }
+}
+
+/// One pass over `raw`: markup and whitespace become a single gap, output
+/// is capped at [`CAT_MAX_NAME_UTF16`] units and the pass stops there.
+pub(crate) fn normalise_display(raw: &str) -> Result<Normalised, Refusal> {
+    let mut out = Normalised::default();
+    let mut rest = raw;
+    while let Some(c) = rest.chars().next() {
+        if c == '<' {
+            let close = rest.find('>').ok_or(Refusal::Unclosed)?;
+            rest = &rest[close + 1..];
+            (out.gap, out.leak_gap) = (true, true);
+            continue;
+        }
+        rest = &rest[c.len_utf8()..];
+        if c == '\u{FEFF}' {
+            out.gap = true;
+        } else if es_whitespace(c) {
+            (out.gap, out.leak_gap) = (true, true);
+        } else {
+            out.push(c)?;
+        }
+    }
+    Ok(out)
+}
+
+/// ECMAScript `\s`: WhiteSpace + LineTerminator. Unlike Rust's
+/// `char::is_whitespace` it holds U+FEFF and not U+0085 (a control char,
+/// refused).
+fn es_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0009}'..='\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+            | '\u{FEFF}'
+    )
 }
 
 /// True when an LSX / stats key may become a payload object key: it is a
@@ -54,24 +143,6 @@ fn invisible_format(c: char) -> bool {
         c,
         '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{FEFF}' | '\u{2060}'
     )
-}
-
-/// Every `<…>` replaced by a space; `None` for an unclosed `<`.
-fn strip_markup(raw: &str) -> Option<String> {
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    while let Some(open) = rest.find('<') {
-        out.push_str(&rest[..open]);
-        let close = rest[open..].find('>')?;
-        out.push(' ');
-        rest = &rest[open + close + 1..];
-    }
-    out.push_str(rest);
-    Some(out)
-}
-
-fn collapse(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// What `COMPANION_DISPLAY_TEXT_RE` refuses.
