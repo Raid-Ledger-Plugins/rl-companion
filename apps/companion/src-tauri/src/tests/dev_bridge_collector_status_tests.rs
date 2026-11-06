@@ -255,7 +255,7 @@ fn a_401_mid_pass_unlinks_the_device_for_every_enabled_row() {
             Line::new(LineStatus::LinkDevice, "Re-link this device"),
         ),
     ]);
-    rt.end_scan(false, Ok(true), lines, true);
+    rt.end_scan(rt.begin_scan(), false, Ok(true), lines, true);
     let body = served(&rt, &cfg);
     assert_eq!(
         body["linked"],
@@ -274,12 +274,12 @@ fn the_device_block_follows_the_live_pause_flag_not_the_scans() {
     let up = || Line::new(LineStatus::Uploaded, "Uploaded 1 of 1 export(s)");
     let lines = BTreeMap::from([(WOW.to_owned(), up()), (BG3_SAVE.id.to_owned(), up())]);
     // Paused from the tray after an unpaused scan …
-    rt.end_scan(false, Ok(true), lines.clone(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(true), lines.clone(), false);
     let body = served_live(&rt, &cfg, true);
     assert_eq!(body["collectors"][0]["paused"], Value::Bool(true));
     assert_eq!(status_of(&body, WOW), "paused", "paused row said uploaded");
     // … and resumed after a paused scan.
-    rt.end_scan(true, Ok(true), lines, false);
+    rt.end_scan(rt.begin_scan(), true, Ok(true), lines, false);
     let body = served_live(&rt, &cfg, false);
     assert_eq!(
         status_of(&body, WOW),

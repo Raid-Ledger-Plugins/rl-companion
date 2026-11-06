@@ -16,6 +16,7 @@ use crate::scan_report::{self, ScanBook, ScanPass, ScanReport, UploadTimes};
 use crate::server_config::ServerState;
 use crate::state::Shared;
 use crate::tiles::{apply_plugin_off_copy, last_checked, tiles, TileDto, TileInputs};
+use crate::token::DeviceToken;
 use crate::tray;
 use crate::upload::{is_unknown_contract, UploadOutcome, Uploader};
 use crate::watch::{start_watcher, SettleSet};
@@ -224,6 +225,11 @@ struct Inner {
     /// spell (a 401's, or one recorded for an absent token); cleared once the
     /// device is linked again, so each linked→unlinked transition records one.
     link_reported: bool,
+    /// Bumped by every link-state change made outside a scan (Unlink, Link,
+    /// a server switch, a `/config` 401). A scan captures it in `begin_scan`;
+    /// if it moved by `end_scan`, the scan's view of the link is stale and
+    /// its link-state writes are dropped.
+    link_gen: u64,
     /// Batches waiting on the user's first-upload confirmation.
     held: BTreeMap<String, Held>,
     /// `/config` fetch state and cached covers (ROK-2067).
@@ -278,6 +284,7 @@ impl Runtime {
                 linked: None,
                 relink: false,
                 link_reported: false,
+                link_gen: 0,
                 held: BTreeMap::new(),
                 server: ServerState::default(),
                 book: ScanBook::new(uploads),
@@ -414,17 +421,41 @@ impl Runtime {
 
     /// A scan ended: its device inputs, per-collector lines (text and
     /// status together, under one lock) and the 401 flag. A 401 in the pass
-    /// cleared the token, so the device is unlinked whatever the scan began
-    /// with.
+    /// cleared the token it sent, so the device is unlinked whatever the scan
+    /// began with. `gen` is what `begin_scan` returned: if the link changed since
+    /// (Unlink or Link mid-scan), the scan's link state is stale, so it
+    /// writes neither `linked` nor a `link-required` event —
+    /// unless its 401 cleared the current server's still-stored token
+    /// (`Relink::Revoked`, e.g. after a switch away and back) and the link
+    /// has not changed since that clear: that revocation is current.
     pub fn end_scan(
         &self,
+        gen: u64,
         paused: bool,
         linked: Result<bool, String>,
         lines: BTreeMap<String, Line>,
-        relink: bool,
+        relink: impl Into<Relink>,
     ) {
+        let relink = relink.into();
         let mut inner = self.lock();
         inner.paused = paused;
+        let current = match relink {
+            Relink::Revoked(cleared_at) => cleared_at == inner.link_gen,
+            Relink::No | Relink::Refused => gen == inner.link_gen,
+        };
+        if !current {
+            // A stale 401 recorded its own `link-required`; it stands for the
+            // current spell only while the device is still unlinked (an
+            // Unlink mid-scan), never after a Link or a switch to a linked
+            // server. The re-link notice is the link change's to set:
+            // Unlink/Link/a switch cleared it, a `/config` 401 raised it.
+            let unlinked_now = inner.linked == Some(Ok(false));
+            inner.link_reported |= relink.any() && unlinked_now;
+            let keep = inner.relink;
+            store_lines(&mut inner, lines, keep);
+            return;
+        }
+        let relink = relink.any();
         let linked = if relink { Ok(false) } else { linked };
         let held = secs_left(inner.hold_until, Instant::now());
         let unlinked = matches!(
@@ -448,6 +479,7 @@ impl Runtime {
     /// collectors' lines (and the transition's `link-required`) follow.
     pub fn unlinked(&self) {
         let mut inner = self.lock();
+        inner.link_gen += 1;
         inner.relink = false;
         set_link(&mut inner, Ok(false));
         drop(inner);
@@ -475,9 +507,17 @@ impl Runtime {
 
     /// A scan is starting: a 401 from an earlier scan must not ride along on
     /// this scan's mid-scan updates ("Uploading…"). Only the scan's own 401
-    /// sets it again, through `end_scan`.
-    pub fn begin_scan(&self) {
-        self.lock().relink = false;
+    /// sets it again, through `end_scan`. Returns the link generation the
+    /// scan must hand back to `end_scan`.
+    pub fn begin_scan(&self) -> u64 {
+        let mut inner = self.lock();
+        inner.relink = false;
+        inner.link_gen
+    }
+
+    /// The current link generation (read when a 401 clears the token).
+    pub fn link_gen(&self) -> u64 {
+        self.lock().link_gen
     }
 
     /// The device linked (or re-linked): the old 401 no longer applies, and a
@@ -485,6 +525,7 @@ impl Runtime {
     /// server's `/config` is fetched again too (ROK-2067 D5).
     pub fn linked(&self) {
         let mut inner = self.lock();
+        inner.link_gen += 1;
         inner.relink = false;
         inner.link_reported = false;
         drop(inner);
@@ -498,6 +539,7 @@ impl Runtime {
     pub fn server_changed(&self, linked: bool) {
         let mut inner = self.lock();
         inner.server.reset();
+        inner.link_gen += 1;
         set_link(&mut inner, Ok(linked));
         inner.relink = false;
         drop(inner);
@@ -508,6 +550,7 @@ impl Runtime {
     /// unlinked state and the window asks for a re-link.
     pub fn config_unauthorized(&self) {
         let mut inner = self.lock();
+        inner.link_gen += 1;
         inner.relink = true;
         set_link(&mut inner, Ok(false));
     }
@@ -753,7 +796,7 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
 /// Scan every registered collector; upload what the enabled ones found.
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let _scanning = rt.scan_guard();
-    rt.begin_scan();
+    let gen = rt.begin_scan();
     let cfg = app.state::<Shared>().config();
     let registry = CollectorRegistry::from_config(&cfg);
     let shared = app.state::<Shared>();
@@ -767,7 +810,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
     let device = device_state(paused, held, linked.clone());
     let token = token.ok().flatten().filter(|_| device.is_none());
     let mut lines = BTreeMap::new();
-    let mut relink = false;
+    let mut relink = Relink::No;
     for entry in registry.entries() {
         if !entry.enabled {
             rt.forget_scan(entry.manifest.id);
@@ -779,8 +822,8 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         }
         let (line, stop_all) = scan_and_upload_one(app, rt, &cfg, entry, token.as_ref()).await;
         lines.insert(entry.manifest.id.to_owned(), line);
-        if stop_all {
-            relink = true;
+        if stop_all.any() {
+            relink = stop_all;
             break;
         }
     }
@@ -791,7 +834,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         Some(d) => format!("{d} · {line}"),
         None => line,
     };
-    rt.end_scan(paused, linked, lines, relink);
+    rt.end_scan(gen, paused, linked, lines, relink);
     publish(app, rt, &line);
 }
 
@@ -817,13 +860,13 @@ async fn scan_and_upload_one(
     cfg: &AppConfig,
     entry: &Entry,
     token: Option<&crate::token::DeviceToken>,
-) -> (Line, bool) {
+) -> (Line, Relink) {
     // `None` for a disabled collector: nothing is read. Dropping the pass
     // at the end stamps the scan, whichever way the upload returned.
     let Some(mut pass) = ScanPass::begin(rt, entry, &cfg.server_url) else {
         let name = entry.manifest.display_name;
         let text = format!("{name} uploads are off");
-        return (Line::new(LineStatus::Off, text), false);
+        return (Line::new(LineStatus::Off, text), Relink::No);
     };
     gate_and_upload(app, rt, cfg, entry, token, &mut pass.scan).await
 }
@@ -835,7 +878,7 @@ async fn gate_and_upload(
     entry: &Entry,
     token: Option<&crate::token::DeviceToken>,
     scan: &mut crate::collector::Scan,
-) -> (Line, bool) {
+) -> (Line, Relink) {
     scan.notes
         .iter()
         .for_each(|n| rt.log_for(entry.manifest.id, n.clone()));
@@ -847,16 +890,16 @@ async fn gate_and_upload(
         Gate::NoFiles => {
             rt.set_held(id, None);
             let hint = entry.manifest.no_files_hint;
-            return (Line::new(LineStatus::NoFiles, hint), false);
+            return (Line::new(LineStatus::NoFiles, hint), Relink::No);
         }
         Gate::UpToDate => {
             rt.set_held(id, None);
-            return (Line::new(LineStatus::UpToDate, "Up to date"), false);
+            return (Line::new(LineStatus::UpToDate, "Up to date"), Relink::No);
         }
         Gate::Hold(held) => {
             rt.set_held(id, held.map(|h| *h));
             let line = format!("{waiting} waiting — check the preview before the first upload");
-            return (Line::new(LineStatus::NeedsConfirm, line), false);
+            return (Line::new(LineStatus::NeedsConfirm, line), Relink::No);
         }
         Gate::Send => rt.set_held(id, None),
     }
@@ -864,13 +907,13 @@ async fn gate_and_upload(
     // by the window; here only the count.
     let Some(token) = token.filter(|_| rt.held_secs().is_none()) else {
         let text = format!("{waiting} export(s) waiting");
-        return (Line::new(LineStatus::Waiting, text), false);
+        return (Line::new(LineStatus::Waiting, text), Relink::No);
     };
     let uploader = match Uploader::new(&cfg.server_url) {
         Ok(u) => u,
         Err(e) => {
             events::record(id, Kind::Error, |ev| ev.code(ErrorCode::Other));
-            return (Line::new(LineStatus::Error, e), false);
+            return (Line::new(LineStatus::Error, e), Relink::No);
         }
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
@@ -895,18 +938,21 @@ async fn upload_all(
     token: &crate::token::DeviceToken,
     (id, scanned): (&'static str, &AppConfig),
     pending: &[PendingUpload],
-) -> (Line, bool) {
+) -> (Line, Relink) {
     let waiting = pending.len();
     let mut sent = 0usize;
     let mut queue = crate::bg3_campaigns::still_ticked(pending, app);
     while let Some(p) = queue.next() {
         if app.state::<Shared>().is_paused() {
             let text = format!("Paused — uploaded {sent} of {waiting} export(s)");
-            return (Line::new(LineStatus::Paused, text), false);
+            return (Line::new(LineStatus::Paused, text), Relink::No);
         }
         // Before the original is read …
         if switched_off(app, scanned, p) {
-            return (Line::new(LineStatus::Off, off_line(sent, waiting)), false);
+            return (
+                Line::new(LineStatus::Off, off_line(sent, waiting)),
+                Relink::No,
+            );
         }
         let ready;
         let p = if crate::bg3_screenshot::needs_encode(p) {
@@ -927,7 +973,10 @@ async fn upload_all(
         };
         // … and again before it is sent (the encode may have taken a while).
         if switched_off(app, scanned, p) {
-            return (Line::new(LineStatus::Off, off_line(sent, waiting)), false);
+            return (
+                Line::new(LineStatus::Off, off_line(sent, waiting)),
+                Relink::No,
+            );
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
         // The batch's collector (not the contract name), and only what is
@@ -947,22 +996,73 @@ async fn upload_all(
             rt.hold_for(wait);
         }
         if fx.relink {
-            let _ = app.state::<Shared>().clear_token();
-            return (
-                Line::new(LineStatus::LinkDevice, "Re-link this device"),
-                true,
-            );
+            return upload_refused(&app.state::<Shared>(), rt, &scanned.server_url, token);
         }
         if fx.stop {
             let text = stopped_line(sent, waiting, &fx);
-            return (Line::new(stop_status(&fx), text), false);
+            return (Line::new(stop_status(&fx), text), Relink::No);
         }
     }
     let text = format!("Uploaded {sent} of {waiting} export(s)");
     // Whatever is still unsettled — encoder refusals are settled too, as
     // in the `pending` count — so the status agrees with that count.
     let status = finished_status(sent, rt.unsettled(pending));
-    (Line::new(status, text), false)
+    (Line::new(status, text), Relink::No)
+}
+
+/// An upload of `sent` to `origin` answered 401: forget that token (the
+/// same way `/config`'s 401 does) — unless a re-link or server switch
+/// replaced it while the request was out, in which case the new credential
+/// stays. The scan still stops and reports the 401 either way: its event is
+/// recorded, so `end_scan` must count it whatever happened to the token.
+/// `Relink::Revoked` says the 401 cleared the token still current; it
+/// carries `rt`'s link generation read under the clear's lock, so
+/// `end_scan` honours it only if no link change came after the clear.
+pub fn upload_refused(
+    shared: &Shared,
+    rt: &Runtime,
+    origin: &str,
+    sent: &DeviceToken,
+) -> (Line, Relink) {
+    let relink = match shared.clear_token_if_with(origin, sent, || rt.link_gen()) {
+        Ok(Some(cleared_at)) => Relink::Revoked(cleared_at),
+        Ok(None) | Err(_) => Relink::Refused,
+    };
+    let line = Line::new(LineStatus::LinkDevice, "Re-link this device");
+    (line, relink)
+}
+
+/// What a scan's upload 401 did to the device's link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Relink {
+    /// No 401: the scan carries on.
+    No,
+    /// A 401 that cleared nothing (the token was replaced or already gone):
+    /// it stops the scan, but a stale scan's link state ignores it.
+    Refused,
+    /// A 401 that cleared the current server's still-stored token, with the
+    /// link generation at the clear: the device is unlinked now, however
+    /// stale the scan — unless the link changed after the clear.
+    Revoked(u64),
+}
+
+impl Relink {
+    /// Whether a 401 stopped the scan.
+    pub fn any(self) -> bool {
+        self != Relink::No
+    }
+}
+
+#[cfg(test)]
+impl From<bool> for Relink {
+    /// `true` is a 401 that cleared nothing; `false` is no 401.
+    fn from(stopped: bool) -> Self {
+        if stopped {
+            Relink::Refused
+        } else {
+            Relink::No
+        }
+    }
 }
 
 /// Exports held when the upload before `rest` stopped: that one plus the

@@ -5,6 +5,7 @@ mod bg3_campaigns_tests;
 mod bg3_collector_tests;
 mod bg3_screenshot_tests;
 mod blob_send_tests;
+mod check_link_tests;
 mod collector_tests;
 mod collector_view_tests;
 mod config_tests;
