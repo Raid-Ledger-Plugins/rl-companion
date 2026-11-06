@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 const MULTI: &[u8] =
     include_bytes!("../../../../../crates/rl-collectors/tests/fixtures/wow_sv/multi-entry.lua");
-const CALLER: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 229);
-const FLAVOR: &str = "_anniversary_";
+pub(super) const CALLER: Ipv4Addr = Ipv4Addr::new(192, 168, 0, 229);
+pub(super) const FLAVOR: &str = "_anniversary_";
 
 fn token() -> String {
     format!("rlcdev_{}", "A".repeat(43))
@@ -37,19 +37,19 @@ fn snap(wow: &Path) -> Snapshot {
     }
 }
 
-fn ctx(wow: &Path) -> ServerCtx {
+pub(super) fn ctx(wow: &Path) -> ServerCtx {
     let ctx = ServerCtx::with_logs(Box::leak(Box::new(LogBuffer::default())));
     ctx.set_snapshot(snap(wow));
     ctx
 }
 
-fn get(ctx: &ServerCtx, path: &str, query: Option<&str>) -> (u16, Value) {
+pub(super) fn get(ctx: &ServerCtx, path: &str, query: Option<&str>) -> (u16, Value) {
     let auth = format!("Bearer {}", token());
     ctx.route(IpAddr::V4(CALLER), &Method::GET, path, query, Some(&auth))
 }
 
 /// Every page: 200, valid against `def`, ≤ 16 KiB. Returns all pages.
-fn pages(ctx: &ServerCtx, path: &str, def: &str, base: &str) -> Vec<Value> {
+pub(super) fn pages(ctx: &ServerCtx, path: &str, def: &str, base: &str) -> Vec<Value> {
     let mut out = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..100 {
@@ -75,7 +75,7 @@ fn pages(ctx: &ServerCtx, path: &str, def: &str, base: &str) -> Vec<Value> {
     panic!("{path}: paging never ended");
 }
 
-fn write(p: &Path, bytes: &[u8]) {
+pub(super) fn write(p: &Path, bytes: &[u8]) {
     std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
     std::fs::write(p, bytes).expect("write");
 }

@@ -200,7 +200,7 @@ impl Package<'_> {
     }
 }
 
-fn decode(entry: &Entry, raw: &[u8], expected: usize) -> Result<Vec<u8>, LspkError> {
+pub(crate) fn decode(entry: &Entry, raw: &[u8], expected: usize) -> Result<Vec<u8>, LspkError> {
     let failed = |reason: String| LspkError::Decompress {
         name: entry.name.clone(),
         reason,
@@ -300,8 +300,20 @@ fn read_file_table(bytes: &[u8], offset: u64) -> Result<Vec<Entry>, LspkError> {
     if num_files > MAX_FILES {
         return Err(LspkError::TooManyFiles(num_files));
     }
-    let compressed_size = u64::from(le_u32(head, 4));
-    let compressed = slice(bytes, offset + 8, compressed_size, "file table")?;
+    let compressed = slice(bytes, offset + 8, u64::from(le_u32(head, 4)), "file table")?;
+    decode_file_table(num_files, compressed)
+}
+
+/// Decompress and parse a file table of `num_files` entries. Shared with the
+/// reader-based multi-part path ([`crate::lspk_parts`]).
+pub(crate) fn decode_file_table(
+    num_files: u32,
+    compressed: &[u8],
+) -> Result<Vec<Entry>, LspkError> {
+    if num_files > MAX_FILES {
+        return Err(LspkError::TooManyFiles(num_files));
+    }
+    let compressed_size = compressed.len() as u64;
     let expected = num_files as usize * ENTRY_LEN;
     if !lz4_can_hold(compressed_size, expected as u64) {
         return Err(LspkError::FileTable(format!(
@@ -354,14 +366,14 @@ fn slice<'a>(
 }
 
 // The helpers below are only called on slices whose length was checked.
-fn le_u16(b: &[u8], at: usize) -> u16 {
+pub(crate) fn le_u16(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
 }
 
-fn le_u32(b: &[u8], at: usize) -> u32 {
+pub(crate) fn le_u32(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
-fn le_u64(b: &[u8], at: usize) -> u64 {
+pub(crate) fn le_u64(b: &[u8], at: usize) -> u64 {
     u64::from(le_u32(b, at)) | (u64::from(le_u32(b, at + 4)) << 32)
 }

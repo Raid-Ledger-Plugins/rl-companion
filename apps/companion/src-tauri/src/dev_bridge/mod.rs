@@ -4,8 +4,10 @@
 //! Off by default: with the toggle off no socket is opened (AC-2).
 //! [`DevBridge::reconcile`] is the only place the listener starts or stops.
 
+pub mod addon_sv;
 pub mod addons;
 pub mod auth;
+pub mod bg3_character_key;
 pub mod bg3_newage;
 pub mod bg3_newage_reader;
 pub mod bg3_redact;
@@ -15,6 +17,7 @@ pub mod bind;
 pub mod collectors;
 pub mod commands;
 pub mod conn_budget;
+pub mod events;
 pub mod health;
 pub mod logbuf;
 pub mod paging;

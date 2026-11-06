@@ -2,6 +2,7 @@
 //! collector, plus the device-level state shown once (not per collector).
 
 use crate::bg3_campaigns::{dtos, last, now_unix, Bg3CampaignDto, CampaignGroup};
+use crate::collector_status::{device_block, fallback, DeviceBlock};
 use crate::config::AppConfig;
 use crate::manifest::{resolve_override, CollectorManifest, Platform, BG3_SAVE, WOW_LEDGERLINK};
 use crate::preview::PreviewDto;
@@ -45,22 +46,18 @@ pub fn device_note(paused: bool, held: bool, linked: Result<bool, String>) -> Op
 }
 
 /// Device-level state that blocks every collector. `None` = free to upload.
+/// The precedence is [`device_block`]'s, shared with the dev bridge.
 pub fn device_state(
     paused: bool,
     held_secs: Option<u64>,
     linked: Result<bool, String>,
 ) -> Option<String> {
-    if paused {
-        return Some("Paused — uploads resume when you unpause".to_owned());
-    }
-    if let Some(secs) = held_secs {
-        return Some(format!("Rate limited — retrying in {secs}s"));
-    }
-    match linked {
-        Ok(true) => None,
-        Ok(false) => Some("Link this device to upload".to_owned()),
-        Err(e) => Some(format!("Cannot read the device token ({e})")),
-    }
+    Some(match device_block(paused, held_secs, &linked)? {
+        DeviceBlock::Paused => "Paused — uploads resume when you unpause".to_owned(),
+        DeviceBlock::RateLimited(secs) => format!("Rate limited — retrying in {secs}s"),
+        DeviceBlock::Unlinked => "Link this device to upload".to_owned(),
+        DeviceBlock::TokenUnreadable(e) => format!("Cannot read the device token ({e})"),
+    })
 }
 
 fn override_of(m: &CollectorManifest, cfg: &AppConfig) -> String {
@@ -100,11 +97,6 @@ pub fn rows(
         .map(|b| {
             let m = b.manifest;
             let enabled = cfg.collector_enabled(m.id, m.default_enabled);
-            let fallback = if enabled {
-                "Waiting for the first scan…"
-            } else {
-                "Off"
-            };
             CollectorRowDto {
                 id: m.id.to_owned(),
                 display_name: m.display_name.to_owned(),
@@ -112,7 +104,7 @@ pub fn rows(
                 status: lines
                     .get(m.id)
                     .cloned()
-                    .unwrap_or_else(|| fallback.to_owned()),
+                    .unwrap_or_else(|| fallback(enabled).text),
                 detected_folder: m
                     .default_roots_for(platform, env)
                     .first()

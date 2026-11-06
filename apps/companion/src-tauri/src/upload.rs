@@ -47,18 +47,28 @@ pub enum UploadOutcome {
     /// A 4xx that is not about this message: the server does not serve the
     /// contract yet (404), the version is retired (409), or a proxy answered.
     /// Nothing is recorded; the batch stops and the next scan tries again.
-    Deferred { reason: String },
+    /// `status` is the HTTP status and `code` the server's raw `code` (when
+    /// its body had one), so an event can report them without reading `reason`.
+    Deferred {
+        reason: String,
+        status: Option<u16>,
+        code: Option<String>,
+    },
     /// Out of attempts (5xx / 408 / network). Try again on the next scan.
-    GaveUp { reason: String },
+    /// `status` is the last attempt's HTTP status (`None` for a network
+    /// failure or an unbuildable URL).
+    GaveUp { reason: String, status: Option<u16> },
 }
 
 /// One HTTP attempt's verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attempt {
     Done(UploadOutcome),
-    /// Retryable now, after the backoff.
+    /// Retryable now, after the backoff. `status` is the server's HTTP
+    /// status (`None` when no answer came back).
     Retry {
         reason: String,
+        status: Option<u16>,
     },
 }
 
@@ -102,6 +112,7 @@ pub fn classify(status: u16, retry_after: Option<&str>, body: &[u8]) -> Attempt 
         }),
         408 | 500..=599 => Attempt::Retry {
             reason: format!("server error {status}"),
+            status: Some(status),
         },
         _ => Attempt::Done(other_status(status, body)),
     }
@@ -183,11 +194,15 @@ fn other_status(status: u16, body: &[u8]) -> UploadOutcome {
     let Ok(parsed) = serde_json::from_slice::<ErrorBody>(body) else {
         return UploadOutcome::Deferred {
             reason: format!("unexpected answer {status} from the server"),
+            status: Some(status),
+            code: None,
         };
     };
     if !TERMINAL_CODES.contains(&parsed.code.as_str()) {
         return UploadOutcome::Deferred {
             reason: deferred_reason(status, &parsed.code),
+            status: Some(status),
+            code: (!parsed.code.is_empty()).then(|| parsed.code.clone()),
         };
     }
     let issue = parsed
@@ -205,16 +220,19 @@ fn other_status(status: u16, body: &[u8]) -> UploadOutcome {
 /// The deferral text for `unknown_contract`/`unknown_contract_version`.
 pub const NOT_TAKEN_YET: &str = "the server does not take this upload yet";
 
+/// The deferral text for `retired_contract_version`.
+pub const RETIRED_REASON: &str = "this app is out of date; update the Companion";
+
 /// The server does not serve this contract (yet): its `/config` may have
 /// changed, so the app refetches it (ROK-2067 D5).
 pub fn is_unknown_contract(outcome: &UploadOutcome) -> bool {
-    matches!(outcome, UploadOutcome::Deferred { reason } if reason == NOT_TAKEN_YET)
+    matches!(outcome, UploadOutcome::Deferred { reason, .. } if reason == NOT_TAKEN_YET)
 }
 
 fn deferred_reason(status: u16, code: &str) -> String {
     match code {
         "unknown_contract" | "unknown_contract_version" => NOT_TAKEN_YET.to_owned(),
-        "retired_contract_version" => "this app is out of date; update the Companion".to_owned(),
+        "retired_contract_version" => RETIRED_REASON.to_owned(),
         "" => format!("unexpected answer {status} from the server"),
         other => format!("server answered {status} ({other})"),
     }
@@ -230,18 +248,23 @@ where
     SF: Future<Output = ()>,
 {
     let mut last = String::from("no attempt made");
+    let mut last_status = None;
     for n in 0..MAX_ATTEMPTS {
         match attempt().await {
             Attempt::Done(outcome) => return outcome,
-            Attempt::Retry { reason } => {
+            Attempt::Retry { reason, status } => {
                 last = reason;
+                last_status = status;
                 if n + 1 < MAX_ATTEMPTS {
                     sleep(backoff(n)).await;
                 }
             }
         }
     }
-    UploadOutcome::GaveUp { reason: last }
+    UploadOutcome::GaveUp {
+        reason: last,
+        status: last_status,
+    }
 }
 
 pub struct Uploader {
@@ -285,7 +308,12 @@ impl Uploader {
     ) -> Attempt {
         let url = match self.url(contract) {
             Ok(u) => u,
-            Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),
+            Err(reason) => {
+                return Attempt::Done(UploadOutcome::GaveUp {
+                    reason,
+                    status: None,
+                })
+            }
         };
         let sent = self
             .http
@@ -297,6 +325,7 @@ impl Uploader {
         match sent {
             Err(e) => Attempt::Retry {
                 reason: network_reason(&e).into(),
+                status: None,
             },
             Ok(res) => {
                 let status = res.status().as_u16();
@@ -350,7 +379,12 @@ impl Uploader {
     ) -> Attempt {
         let url = match self.blob_url(&blob.sha256) {
             Ok(u) => u,
-            Err(reason) => return Attempt::Done(UploadOutcome::GaveUp { reason }),
+            Err(reason) => {
+                return Attempt::Done(UploadOutcome::GaveUp {
+                    reason,
+                    status: None,
+                })
+            }
         };
         let sent = self
             .http
@@ -363,6 +397,7 @@ impl Uploader {
         match sent {
             Err(e) => Attempt::Retry {
                 reason: network_reason(&e).into(),
+                status: None,
             },
             Ok(res) => {
                 let status = res.status().as_u16();
