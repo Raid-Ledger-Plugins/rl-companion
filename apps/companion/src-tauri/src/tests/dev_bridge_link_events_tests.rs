@@ -66,7 +66,7 @@ fn recorded(log: &EventLog) -> Vec<(String, String)> {
 fn unlink_shows_link_device_at_once_not_on_the_next_scan() {
     let (rt, _) = runtime("bridge-unlink");
     let cfg = both_on();
-    rt.end_scan(false, Ok(true), uploaded_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(true), uploaded_lines(), false);
     rt.unlinked();
     let body = collectors_body(&rt.snapshot(&cfg), false);
     assert_eq!(schema_errors("collectors", &body), Vec::<String>::new());
@@ -83,15 +83,15 @@ fn unlink_shows_link_device_at_once_not_on_the_next_scan() {
 fn an_absent_token_records_one_link_required_per_transition() {
     let (rt, log) = runtime("bridge-absent-token");
     let one = vec![("\"link-required\"".to_owned(), format!("\"{WOW}\""))];
-    rt.end_scan(false, Ok(true), uploaded_lines(), false);
-    rt.end_scan(false, Ok(false), tokenless_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(true), uploaded_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(false), tokenless_lines(), false);
     assert_eq!(recorded(log), one, "first scan without a token");
-    rt.end_scan(false, Ok(false), tokenless_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(false), tokenless_lines(), false);
     assert_eq!(recorded(log), one, "a second tokenless scan recorded again");
     // Linked again, then unlinked again: a new transition, a new event.
-    rt.end_scan(false, Ok(true), uploaded_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(true), uploaded_lines(), false);
     rt.unlinked();
-    rt.end_scan(false, Ok(false), tokenless_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(false), tokenless_lines(), false);
     assert_eq!(recorded(log).len(), 2, "the next transition recorded none");
 }
 
@@ -105,8 +105,121 @@ fn a_401_then_a_tokenless_scan_is_still_one_link_required() {
         WOW.to_owned(),
         Line::new(LineStatus::LinkDevice, "Re-link this device"),
     )]);
-    rt.end_scan(false, Ok(true), relink, true);
+    rt.end_scan(rt.begin_scan(), false, Ok(true), relink, true);
     // … so the next scan, which finds the token gone, adds none.
-    rt.end_scan(false, Ok(false), tokenless_lines(), false);
+    rt.end_scan(rt.begin_scan(), false, Ok(false), tokenless_lines(), false);
     assert_eq!(recorded(log).len(), 1, "the 401's event was doubled");
+}
+
+/// One full scan, begun and ended back to back.
+fn scan(rt: &Runtime, linked: Result<bool, String>, lines: BTreeMap<String, Line>) {
+    rt.end_scan(rt.begin_scan(), false, linked, lines, false);
+}
+
+fn relink_lines() -> BTreeMap<String, Line> {
+    BTreeMap::from([(
+        WOW.to_owned(),
+        Line::new(LineStatus::LinkDevice, "Re-link this device"),
+    )])
+}
+
+#[test]
+fn a_scan_running_across_unlink_does_not_write_linked_back() {
+    let (rt, log) = runtime("bridge-unlink-mid-scan");
+    let cfg = both_on();
+    scan(&rt, Ok(true), uploaded_lines());
+    // The scan read the token, then the user clicked Unlink before it ended.
+    let gen = rt.begin_scan();
+    rt.unlinked();
+    rt.end_scan(gen, false, Ok(true), uploaded_lines(), false);
+    let body = collectors_body(&rt.snapshot(&cfg), false);
+    assert_eq!(
+        body["linked"],
+        Value::Bool(false),
+        "a scan running across Unlink wrote linked:true back"
+    );
+    assert_eq!(status_of(&body, WOW), "link-device", "WoW row after Unlink");
+    // The scan Unlink kicked records the transition's one event.
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(recorded(log).len(), 1, "the Unlink transition's events");
+}
+
+#[test]
+fn a_re_link_during_a_tokenless_scan_records_no_second_link_required() {
+    let (rt, log) = runtime("bridge-relink-mid-scan");
+    scan(&rt, Ok(true), uploaded_lines());
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(recorded(log).len(), 1, "the unlinked spell's event");
+    // A tokenless scan is running when the user links the device again.
+    let gen = rt.begin_scan();
+    rt.linked();
+    rt.end_scan(gen, false, Ok(false), tokenless_lines(), false);
+    assert_eq!(
+        recorded(log).len(),
+        1,
+        "a re-link during a tokenless scan recorded a second link-required"
+    );
+    // The scan the link kicked sees the token: linked, and re-armed.
+    scan(&rt, Ok(true), uploaded_lines());
+    let body = collectors_body(&rt.snapshot(&both_on()), false);
+    assert_eq!(body["linked"], Value::Bool(true), "after the re-link scan");
+}
+
+#[test]
+fn a_401_in_a_scan_running_across_unlink_is_still_one_link_required() {
+    let (rt, log) = runtime("bridge-401-across-unlink");
+    let wow = CollectorId::known(WOW).expect("manifest id");
+    scan(&rt, Ok(true), uploaded_lines());
+    let gen = rt.begin_scan();
+    // The pass's upload 401s (recording its own event), and the user unlinks.
+    log.push_now(for_outcome(wow, &UploadOutcome::Unauthorized, 0), 1);
+    rt.unlinked();
+    rt.end_scan(gen, false, Ok(true), relink_lines(), true);
+    assert!(
+        !rt.snapshot(&both_on()).relink,
+        "a stale 401 raised the re-link notice after the user unlinked"
+    );
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(recorded(log).len(), 1, "the 401's event was doubled");
+}
+
+#[test]
+fn a_link_re_arms_link_required() {
+    let (rt, log) = runtime("bridge-rearm-link");
+    scan(&rt, Ok(true), uploaded_lines());
+    scan(&rt, Ok(false), tokenless_lines());
+    rt.linked();
+    // The link's token is refused or lost before any scan saw it linked.
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(recorded(log).len(), 2, "linked() did not re-arm the event");
+}
+
+#[test]
+fn a_server_switch_to_a_linked_server_re_arms_link_required() {
+    let (rt, log) = runtime("bridge-rearm-server");
+    scan(&rt, Ok(true), uploaded_lines());
+    scan(&rt, Ok(false), tokenless_lines());
+    rt.server_changed(true);
+    let body = collectors_body(&rt.snapshot(&both_on()), false);
+    assert_eq!(body["linked"], Value::Bool(true), "after the switch");
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(
+        recorded(log).len(),
+        2,
+        "server_changed(true) did not re-arm the event"
+    );
+}
+
+#[test]
+fn a_config_401_then_tokenless_scans_record_one_link_required() {
+    let (rt, log) = runtime("bridge-config-401");
+    scan(&rt, Ok(true), uploaded_lines());
+    rt.config_unauthorized();
+    let body = collectors_body(&rt.snapshot(&both_on()), false);
+    assert_eq!(body["linked"], Value::Bool(false), "after the /config 401");
+    assert_eq!(recorded(log), vec![], "the /config 401 records no event");
+    scan(&rt, Ok(false), tokenless_lines());
+    scan(&rt, Ok(false), tokenless_lines());
+    let one = vec![("\"link-required\"".to_owned(), format!("\"{WOW}\""))];
+    assert_eq!(recorded(log), one, "a /config 401's spell");
 }

@@ -223,6 +223,11 @@ struct Inner {
     /// spell (a 401's, or one recorded for an absent token); cleared once the
     /// device is linked again, so each linked→unlinked transition records one.
     link_reported: bool,
+    /// Bumped by every link-state change made outside a scan (Unlink, Link,
+    /// a server switch, a `/config` 401). A scan captures it in `begin_scan`;
+    /// if it moved by `end_scan`, the scan's view of the link is stale and
+    /// its link-state writes are dropped.
+    link_gen: u64,
     /// Batches waiting on the user's first-upload confirmation.
     held: BTreeMap<String, Held>,
     /// `/config` fetch state and cached covers (ROK-2067).
@@ -265,6 +270,7 @@ impl Runtime {
                 linked: None,
                 relink: false,
                 link_reported: false,
+                link_gen: 0,
                 held: BTreeMap::new(),
                 server: ServerState::default(),
                 book: ScanBook::new(uploads),
@@ -390,9 +396,12 @@ impl Runtime {
     /// A scan ended: its device inputs, per-collector lines (text and
     /// status together, under one lock) and the 401 flag. A 401 in the pass
     /// cleared the token, so the device is unlinked whatever the scan began
-    /// with.
+    /// with. `gen` is what `begin_scan` returned: if the link changed since
+    /// (Unlink or Link mid-scan), the scan's link state is stale, so it
+    /// writes neither `linked` nor a `link-required` event.
     pub fn end_scan(
         &self,
+        gen: u64,
         paused: bool,
         linked: Result<bool, String>,
         lines: BTreeMap<String, Line>,
@@ -400,6 +409,13 @@ impl Runtime {
     ) {
         let mut inner = self.lock();
         inner.paused = paused;
+        if gen != inner.link_gen {
+            // A 401 in the pass still recorded its own `link-required` and
+            // cleared the token, so it stands for the current unlinked spell.
+            inner.link_reported |= relink;
+            store_lines(&mut inner, lines, false);
+            return;
+        }
         let linked = if relink { Ok(false) } else { linked };
         let held = secs_left(inner.hold_until, Instant::now());
         let unlinked = matches!(
@@ -423,6 +439,7 @@ impl Runtime {
     /// collectors' lines (and the transition's `link-required`) follow.
     pub fn unlinked(&self) {
         let mut inner = self.lock();
+        inner.link_gen += 1;
         inner.relink = false;
         set_link(&mut inner, Ok(false));
         drop(inner);
@@ -450,9 +467,12 @@ impl Runtime {
 
     /// A scan is starting: a 401 from an earlier scan must not ride along on
     /// this scan's mid-scan updates ("Uploading…"). Only the scan's own 401
-    /// sets it again, through `end_scan`.
-    pub fn begin_scan(&self) {
-        self.lock().relink = false;
+    /// sets it again, through `end_scan`. Returns the link generation the
+    /// scan must hand back to `end_scan`.
+    pub fn begin_scan(&self) -> u64 {
+        let mut inner = self.lock();
+        inner.relink = false;
+        inner.link_gen
     }
 
     /// The device linked (or re-linked): the old 401 no longer applies, and a
@@ -460,6 +480,7 @@ impl Runtime {
     /// server's `/config` is fetched again too (ROK-2067 D5).
     pub fn linked(&self) {
         let mut inner = self.lock();
+        inner.link_gen += 1;
         inner.relink = false;
         inner.link_reported = false;
         drop(inner);
@@ -473,6 +494,7 @@ impl Runtime {
     pub fn server_changed(&self, linked: bool) {
         let mut inner = self.lock();
         inner.server.reset();
+        inner.link_gen += 1;
         set_link(&mut inner, Ok(linked));
         inner.relink = false;
         drop(inner);
@@ -483,6 +505,7 @@ impl Runtime {
     /// unlinked state and the window asks for a re-link.
     pub fn config_unauthorized(&self) {
         let mut inner = self.lock();
+        inner.link_gen += 1;
         inner.relink = true;
         set_link(&mut inner, Ok(false));
     }
@@ -727,7 +750,7 @@ async fn run_loop(app: AppHandle, rt: Arc<Runtime>) {
 
 /// Scan every registered collector; upload what the enabled ones found.
 async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
-    rt.begin_scan();
+    let gen = rt.begin_scan();
     let cfg = app.state::<Shared>().config();
     let registry = CollectorRegistry::from_config(&cfg);
     let shared = app.state::<Shared>();
@@ -765,7 +788,7 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         Some(d) => format!("{d} · {line}"),
         None => line,
     };
-    rt.end_scan(paused, linked, lines, relink);
+    rt.end_scan(gen, paused, linked, lines, relink);
     publish(app, rt, &line);
 }
 
