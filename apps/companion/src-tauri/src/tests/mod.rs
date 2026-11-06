@@ -15,6 +15,7 @@ mod dev_bridge_bg3_newage_tests;
 mod dev_bridge_bg3_tests;
 mod dev_bridge_collector_status_tests;
 mod dev_bridge_conn_tests;
+mod dev_bridge_events_tests;
 mod dev_bridge_guard_tests;
 mod dev_bridge_lifecycle_tests;
 mod dev_bridge_routes_tests;
