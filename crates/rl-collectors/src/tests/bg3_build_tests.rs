@@ -235,6 +235,25 @@ rl_test! {
 }
 
 rl_test! {
+    fn later_lsx_duplicate_without_a_usable_handle_still_hides_the_earlier_name() {
+        let no_attr = "<save><region id=\"x\"><node id=\"root\"><children>\n\
+            <node id=\"Origin\"><attribute id=\"Name\" type=\"FixedString\" value=\"O\" /></node>\n\
+            </children></node></region></save>\n";
+        let empty = lsx("Origin", "Name", "DisplayName", &[("O", "")]);
+        for later in [no_attr.to_owned(), empty] {
+            let mut b = CatalogueBuilder::new();
+            b.add_lsx(EntryKind::Origins, &lsx("Origin", "Name", "DisplayName", &[("O", &h(1))])).unwrap();
+            b.add_lsx(EntryKind::Origins, &later).unwrap();
+            let join = b.into_join();
+            assert!(join.wanted_handles().is_empty(), "the overridden handle is not wanted");
+            let (t, counts) = join.finish(&HashMap::from([(h(1), "First".to_owned())]));
+            assert_eq!(t.lookup_origin("O"), None, "earlier copy must not survive: {later}");
+            assert_eq!((counts.origins, counts.skipped), (0, 1));
+        }
+    }
+}
+
+rl_test! {
     fn later_stats_duplicate_wins_even_when_its_name_is_missing() {
         let first = format!("new entry \"ARM_Dup\"\ntype \"Armor\"\ndata \"RootTemplate\" \"{TPL_HAT}\"\n");
         let later = format!("new entry \"ARM_Dup\"\ntype \"Armor\"\ndata \"RootTemplate\" \"{TPL_SWORD}\"\n");
