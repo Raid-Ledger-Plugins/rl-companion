@@ -65,3 +65,68 @@ rl_test! {
         assert_eq!(sep.as_deref(), Some("Hat of Tests"));
     }
 }
+
+/// Every shape `bg3HoldsGuid` (contract `companion-dev-bridge-bg3-redaction.ts`)
+/// refuses, each beside a near-miss the filter must keep.
+fn refused_and_kept(refused: &str, kept: &str) {
+    assert_eq!(catalogue_display_text(refused), None, "{refused:?} holds a GUID shape");
+    assert_eq!(catalogue_display_text(kept).as_deref(), Some(kept), "{kept:?} is a near-miss");
+}
+
+rl_test! {
+    fn display_refuses_a_guid_split_by_underscores() {
+        refused_and_kept(
+            "Hat 0a1b2c3d_0000_4e5f_8a9b_0c1d2e3f4a5b",
+            "Hat 0a1b2c3d_0000_4e5f_8a9b_0c1d2e3f4a5",
+        );
+    }
+}
+
+rl_test! {
+    fn display_refuses_a_guid_split_by_dots() {
+        refused_and_kept(
+            "Hat 0a1b2c3d.0000.4e5f.8a9b.0c1d2e3f4a5b",
+            "Hat 0a1b2c3d.0000.4e5f.8a9b.0c1d2e3f4a5",
+        );
+    }
+}
+
+rl_test! {
+    fn display_refuses_a_guid_with_no_separator_and_mixed_separators() {
+        refused_and_kept("Hat 0a1b2c3d00004e5f8a9b0c1d2e3f4a5b", "Hat 0a1b2c3d00004e5f8a9b0c1d2e3f4a5");
+        refused_and_kept(
+            "Hat 0a1b2c3d-0000_4e5f.8a9b0c1d2e3f4a5b",
+            "Hat 0a1b2c3d-0000_4e5f.8a9b0c1d2e3f4a5",
+        );
+    }
+}
+
+rl_test! {
+    fn display_refuses_a_larian_handle_in_any_case() {
+        refused_and_kept("Hat h6f2b8c1eg4d3a", "Hat h6f2b8c1eg4d3");
+        refused_and_kept("Hat H6F2B8C1EG4D3A", "Hat h6f2b8c1xg4d3a");
+    }
+}
+
+rl_test! {
+    fn display_refuses_32_hex_once_separators_and_braces_are_stripped() {
+        refused_and_kept(
+            "Hat {0a1b2c3d__0000--4e5f..8a9b}0c1d2e3f4a5b",
+            "Hat {0a1b2c3d__0000--4e5f..8a9b}0c1d2e3f4a5",
+        );
+        let spaced = "Hat 0a1b2c3d 0000 4e5f 8a9b 0c1d2e3f4a5b";
+        assert_eq!(catalogue_display_text(spaced).as_deref(), Some(spaced), "a space is not a GUID separator");
+    }
+}
+
+rl_test! {
+    fn display_strips_invisible_format_chars_before_the_guid_and_digit_checks() {
+        for c in ['\u{200B}', '\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{061C}', '\u{FEFF}', '\u{2060}'] {
+            let digits = format!("Ring 12345{c}67890");
+            assert_eq!(catalogue_display_text(&digits), None, "U+{:04X} hides a 10-digit run", c as u32);
+            let guid = format!("Hat 0a1b2c3d{c}-0000-4e5f-8a9b-0c1d2e3f4a5b");
+            assert_eq!(catalogue_display_text(&guid), None, "U+{:04X} hides a GUID", c as u32);
+        }
+        assert!(catalogue_display_text("Ring 1234\u{200B}5678").is_some(), "8 digits stay under the cap");
+    }
+}
