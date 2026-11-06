@@ -5,8 +5,9 @@
 //! install, opens the paks with [`crate::PakSet`], keeps only the entries
 //! [`classify_entry`] accepts (spec D3), and hands their bytes to
 //! [`parse_loca_wanted`], [`parse_stats`] / [`resolve_using`] and
-//! [`read_lsx_nodes`]. The join (stats → template → handle → text) is
-//! `build.rs` (L3).
+//! [`read_lsx_nodes`]. The join (stats → template → handle → text) and
+//! stats-only rarity are [`CatalogueBuilder`] / [`CatalogueJoin`] (L3);
+//! item names wait on ROK-2080's LSF tree walker (see `build.rs`).
 //!
 //! **UNVERIFIED layouts.** Every entry path below and the node / attribute
 //! names in [`LSX_ORIGINS`] / [`LSX_QUESTS`] come from the spec's U5–U8 and
@@ -15,6 +16,8 @@
 //! them, only these tables change. Matching ignores ASCII case and accepts
 //! `\` separators, so a casing or separator difference cannot hide an entry.
 
+mod build;
+mod display;
 mod loca;
 mod lsx;
 mod lsx_tag;
@@ -24,6 +27,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+pub use build::{
+    CAT_MAX_MATCHED_ENTRIES, CAT_MAX_ROWS, CatalogueBuilder, CatalogueCounts, CatalogueJoin,
+};
+pub use display::{
+    CAT_GUID_HEX_RUN, CAT_MAX_DIGIT_RUN, CAT_MAX_NAME_UTF16, catalogue_display_text,
+};
 pub use loca::{
     LOCA_ENTRY_BYTES, LOCA_HEADER_BYTES, LOCA_KEY_BYTES, LOCA_MAGIC, LOCA_MAX_ENTRIES,
     is_loca_handle, parse_loca_wanted,
