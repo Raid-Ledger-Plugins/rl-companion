@@ -211,7 +211,14 @@ async fn nothing_is_ingested_or_served_while_the_bridge_is_off() {
     );
     let logs = LogBuffer::default();
     let q = parse_query(Some(&format!("flavor={FLAVOR}")));
-    let res = routes::get(&served, "/dev/v1/ledgerlink/snapshot", &q, None, &logs);
+    let res = routes::get(
+        &served,
+        "/dev/v1/ledgerlink/snapshot",
+        &q,
+        None,
+        &logs,
+        &crate::dev_bridge::events::EventLog::default(),
+    );
     assert_eq!(res.map(|r| r.0), Some(404), "no read-through while off");
     assert_eq!(
         on_disk.characters(FLAVOR),

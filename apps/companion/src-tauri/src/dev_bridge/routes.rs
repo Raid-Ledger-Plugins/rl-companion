@@ -1,8 +1,9 @@
 //! The read endpoints behind admission (spec §6, AC-6): addons, LedgerLink
 //! SavedVariables raw + parsed, allowlisted addon SavedVariables raw
-//! (`addon_sv`), dev snapshots (`snapshot_routes`), logs, collectors. `/health` stays in server.rs;
+//! (`addon_sv`), dev snapshots (`snapshot_routes`), logs, events, collectors. `/health` stays in server.rs;
 //! the probe endpoints arrive with C4.
 
+use super::events::EventLog;
 use super::health::discover_flavors;
 use super::logbuf::{is_level, parse_utc, LogBuffer};
 use super::paging::{decode_cursor, encode_cursor, invalid, page, wrap_next, Query};
@@ -32,6 +33,7 @@ pub fn get(
     q: &Query,
     collectors: Option<&CollectorsFn>,
     logs: &LogBuffer,
+    events: &EventLog,
 ) -> Option<(u16, Value)> {
     let res = match path {
         "/dev/v1/addons" => addons_ep(snap, q),
@@ -45,6 +47,9 @@ pub fn get(
             flavor(snap, q).and_then(|f| snapshot_routes::history_ep(snap, &f, q))
         }
         "/dev/v1/logs" => logs_ep(logs, q),
+        "/dev/v1/events" => events
+            .page(q.get("since"), q.get("cursor"))
+            .map_err(|b| (400, b)),
         "/dev/v1/collectors" => Ok(collectors.map_or_else(|| json!({ "collectors": [] }), |f| f())),
         _ => return None,
     };

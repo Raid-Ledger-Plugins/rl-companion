@@ -7,6 +7,7 @@ use crate::collector::{PendingUpload, SentState};
 use crate::collector_status::{device_block, finished_status, Line, LineStatus};
 use crate::collector_view::{device_note, device_state, rows, CollectorRowDto, RETRYING};
 use crate::config::AppConfig;
+use crate::dev_bridge::events::{self, ErrorCode, Kind};
 use crate::gate::{gate, Gate};
 use crate::manifest::{Platform, WOW_LEDGERLINK};
 use crate::preview::Held;
@@ -746,7 +747,10 @@ async fn gate_and_upload(
     };
     let uploader = match Uploader::new(&cfg.server_url) {
         Ok(u) => u,
-        Err(e) => return (Line::new(LineStatus::Error, e), false),
+        Err(e) => {
+            events::record(id, Kind::Error, |ev| ev.code(ErrorCode::Other));
+            return (Line::new(LineStatus::Error, e), false);
+        }
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
     upload_all(app, rt, &uploader, token, cfg, &scan.pending).await
@@ -774,7 +778,7 @@ async fn upload_all(
     let waiting = pending.len();
     let mut sent = 0usize;
     let mut settled = 0usize;
-    for p in crate::bg3_campaigns::still_ticked(pending, app) {
+    for (i, p) in crate::bg3_campaigns::still_ticked(pending, app).enumerate() {
         if app.state::<Shared>().is_paused() {
             let text = format!("Paused — uploaded {sent} of {waiting} export(s)");
             return (Line::new(LineStatus::Paused, text), false);
@@ -805,6 +809,7 @@ async fn upload_all(
             return (Line::new(LineStatus::Off, off_line(sent, waiting)), false);
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
+        events::record_outcome(p.contract, &outcome, waiting.saturating_sub(i));
         let fx = effect(&outcome);
         rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));
         if is_unknown_contract(&outcome) {
