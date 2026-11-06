@@ -13,6 +13,8 @@ macro_rules! rl_test {
     };
 }
 
+mod bg3_build_tests;
+mod bg3_display_tests;
 mod bg3_loca_tests;
 mod bg3_lsx_tests;
 mod bg3_stats_tests;
