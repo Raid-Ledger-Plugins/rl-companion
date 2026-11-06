@@ -42,6 +42,9 @@ webp = { version = "0.3", default-features = false }
 # Desktop-only plugins (the app ships for Windows/macOS/Linux only).
 tauri-plugin-autostart = "2.7"
 tauri-plugin-single-instance = "2.5"
+# In-app updates: signed bundles + latest.json from GitHub Releases (updater.rs).
+tauri-plugin-updater = "2.14"
+semver = "1"
 # Dev bridge (ROK-2055 C2): HTTPS listener + dev-token hashing. All but rcgen
 # were already in the lock via reqwest/rustls/rl-collectors.
 hyper = { version = "1", features = ["server", "http1"] }

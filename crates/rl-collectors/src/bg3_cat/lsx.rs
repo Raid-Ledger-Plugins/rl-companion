@@ -83,13 +83,25 @@ pub struct LsxSource {
 /// attribute's `value`; the handle is the handle attribute's `handle` (or
 /// its `value` when that is a handle). Nodes missing either are skipped.
 pub fn lsx_id_handles(nodes: &[LsxNode], src: &LsxSource) -> Vec<(String, String)> {
+    lsx_id_entries(nodes, src)
+        .into_iter()
+        .filter_map(|(key, handle)| Some((key, handle?)))
+        .collect()
+}
+
+/// `(key, Some(loca handle))` per keyed node, or `(key, None)` when its
+/// handle attribute is absent, empty or not a loca handle — kept so a
+/// later unnamed copy of a key still overrides an earlier named one.
+pub(super) fn lsx_id_entries(nodes: &[LsxNode], src: &LsxSource) -> Vec<(String, Option<String>)> {
     nodes
         .iter()
         .filter_map(|n| {
             let key = n.attr(src.key_attr)?.value.clone()?;
-            let h = n.attr(src.handle_attr)?;
-            let handle = h.handle.clone().or_else(|| h.value.clone())?;
-            (!key.is_empty() && is_loca_handle(&handle)).then_some((key, handle))
+            let handle = n
+                .attr(src.handle_attr)
+                .and_then(|h| h.handle.clone().or_else(|| h.value.clone()))
+                .filter(|h| is_loca_handle(h));
+            (!key.is_empty()).then_some((key, handle))
         })
         .collect()
 }

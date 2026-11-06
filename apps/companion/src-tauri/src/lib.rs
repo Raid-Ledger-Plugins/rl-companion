@@ -35,6 +35,8 @@ pub mod tiles;
 pub mod token;
 pub mod tray;
 pub mod tray_promote;
+pub mod update_policy;
+pub mod updater;
 pub mod upload;
 pub mod watch;
 pub mod wow_collector;
@@ -62,6 +64,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let shared = state::Shared::new(
@@ -80,6 +83,7 @@ pub fn run() {
             // `set_collector_root` rebinds it when the folder changes.
             bridge.set_bg3_from_config(&start_cfg, app.path().app_data_dir().ok());
             tray::build(app.handle())?;
+            updater::start(app.handle());
             let (tray_app, start_bridge) = (app.handle().clone(), bridge.clone());
             tauri::async_runtime::spawn(async move {
                 let s = start_bridge.reconcile(&start_cfg).await;
@@ -101,8 +105,10 @@ pub fn run() {
             server_config::start(app.handle().clone(), rt);
             autostart::init_default(app.handle());
             // The window starts hidden (tauri.conf.json); a login-item launch
-            // leaves it in the tray, any other launch shows it.
-            if autostart::should_show_window(autostart::process_args()) {
+            // leaves it in the tray, any other launch shows it. So does the
+            // relaunch after an update that installed on its own while idle.
+            let silent_update = updater::take_silent_restart(app.path().app_data_dir().ok());
+            if !silent_update && autostart::should_show_window(autostart::process_args()) {
                 tray::show_window(app.handle());
             }
             Ok(())
@@ -142,6 +148,9 @@ pub fn run() {
             dev_bridge::commands::set_dev_bridge_bind,
             dev_bridge::commands::set_dev_bridge_allowlist,
             dev_bridge::commands::rotate_dev_bridge_token,
+            updater::get_update_status,
+            updater::check_for_updates,
+            updater::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building RL Companion")

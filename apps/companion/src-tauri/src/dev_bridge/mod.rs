@@ -262,6 +262,12 @@ impl DevBridge {
         self.ctx.set_collectors(f);
     }
 
+    /// How long since the bridge last answered an admitted request (`None`
+    /// if it never has). The updater waits for a quiet bridge (updater.rs).
+    pub fn since_last_request(&self) -> Option<std::time::Duration> {
+        self.ctx.since_admitted(std::time::Instant::now())
+    }
+
     #[cfg(test)]
     pub(crate) fn ctx(&self) -> &ServerCtx {
         &self.ctx
