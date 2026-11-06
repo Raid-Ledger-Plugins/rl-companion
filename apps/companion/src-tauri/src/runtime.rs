@@ -82,12 +82,24 @@ pub struct CollectorStatusDto {
     /// `collectors[].status`; not sent to the window).
     #[serde(skip)]
     pub line_status: BTreeMap<String, LineStatus>,
-    /// The status of [`Self::device`]'s state (same inputs, same precedence).
+    /// The live hold behind [`Self::device`] (seconds left on a 429).
     #[serde(skip)]
-    pub device_status: Option<LineStatus>,
+    pub held_secs: Option<u64>,
+    /// The token state behind [`Self::device`] (`Ok(true)` until known).
+    #[serde(skip)]
+    pub link: Result<bool, String>,
     /// Whether the device holds a token; `None` when it cannot be read.
     #[serde(skip)]
     pub linked: Option<bool>,
+}
+
+impl CollectorStatusDto {
+    /// The device block at read time: `paused` is the live flag, combined
+    /// with this snapshot's live hold and token state through the shared
+    /// precedence, so a row never pairs one source's pause with another's.
+    pub fn device_status(&self, paused: bool) -> Option<LineStatus> {
+        device_block(paused, self.held_secs, &self.link).map(|b| b.status())
+    }
 }
 
 /// What to do after one upload ended.
@@ -153,13 +165,19 @@ pub fn effect(outcome: &UploadOutcome) -> Effect {
                 ..settle(false, true, false, text)
             }
         }
-        UploadOutcome::Deferred { reason } => {
+        UploadOutcome::Deferred { reason, .. } => {
             settle(false, true, false, format!("Will retry: {reason}"))
         }
         UploadOutcome::GaveUp { reason } => {
             settle(false, false, false, format!("Will retry: {reason}"))
         }
     }
+}
+
+fn store_lines(inner: &mut Inner, lines: BTreeMap<String, Line>, relink: bool) {
+    inner.statuses = lines.iter().map(|(k, l)| (k.clone(), l.status)).collect();
+    inner.lines = lines.into_iter().map(|(k, l)| (k, l.text)).collect();
+    inner.relink = relink;
 }
 
 struct Inner {
@@ -179,7 +197,8 @@ struct Inner {
     /// The last scan's device inputs; the window's device line is derived
     /// from them and the live hold at render time (ROK-2068).
     paused: bool,
-    linked: Result<bool, String>,
+    /// `None` until the first scan (or link event) says.
+    linked: Option<Result<bool, String>>,
     /// The last scan hit a 401 and cleared the token.
     relink: bool,
     /// Batches waiting on the user's first-upload confirmation.
@@ -213,7 +232,7 @@ impl Runtime {
                 lines: BTreeMap::new(),
                 statuses: BTreeMap::new(),
                 paused: false,
-                linked: Ok(true),
+                linked: None,
                 relink: false,
                 held: BTreeMap::new(),
                 server: ServerState::default(),
@@ -337,28 +356,45 @@ impl Runtime {
         self.lock().book.forget_scan(id);
     }
 
-    /// Remember the scan's per-collector lines and the 401 flag.
-    pub fn set_lines(&self, lines: BTreeMap<String, String>, relink: bool) {
+    /// A scan ended: its device inputs, per-collector lines (text and
+    /// status together, under one lock) and the 401 flag. A 401 in the pass
+    /// cleared the token, so the device is unlinked whatever the scan began
+    /// with.
+    pub fn end_scan(
+        &self,
+        paused: bool,
+        linked: Result<bool, String>,
+        lines: BTreeMap<String, Line>,
+        relink: bool,
+    ) {
         let mut inner = self.lock();
-        inner.lines = lines;
-        inner.relink = relink;
+        inner.paused = paused;
+        inner.linked = Some(if relink { Ok(false) } else { linked });
+        store_lines(&mut inner, lines, relink);
     }
 
-    /// Remember the statuses of the scan's per-collector lines.
-    pub fn set_statuses(&self, statuses: BTreeMap<String, LineStatus>) {
-        self.lock().statuses = statuses;
+    /// Remember per-collector lines (text and status together) and the 401
+    /// flag, under one lock.
+    pub fn set_lines(&self, lines: BTreeMap<String, Line>, relink: bool) {
+        store_lines(&mut self.lock(), lines, relink);
+    }
+
+    /// How many of `pending` are still unsettled: neither recorded as sent
+    /// nor refused (the count `/collectors` reports as `pending`).
+    pub fn unsettled(&self, pending: &[PendingUpload]) -> usize {
+        scan_report::unsettled(&self.lock().sent, pending)
     }
 
     /// Remember the scan's device inputs (paused, linked).
     pub fn set_device(&self, paused: bool, linked: Result<bool, String>) {
         let mut inner = self.lock();
         inner.paused = paused;
-        inner.linked = linked;
+        inner.linked = Some(linked);
     }
 
     /// A scan is starting: a 401 from an earlier scan must not ride along on
     /// this scan's mid-scan updates ("Uploading…"). Only the scan's own 401
-    /// sets it again, through `set_lines`.
+    /// sets it again, through `end_scan`.
     pub fn begin_scan(&self) {
         self.lock().relink = false;
     }
@@ -378,7 +414,7 @@ impl Runtime {
     pub fn server_changed(&self, linked: bool) {
         let mut inner = self.lock();
         inner.server.reset();
-        inner.linked = Ok(linked);
+        inner.linked = Some(Ok(linked));
         inner.relink = false;
         drop(inner);
         self.config_kick.notify_one();
@@ -389,7 +425,7 @@ impl Runtime {
     pub fn config_unauthorized(&self) {
         let mut inner = self.lock();
         inner.relink = true;
-        inner.linked = Ok(false);
+        inner.linked = Some(Ok(false));
     }
 
     /// The `/config` fetch state (reachability, covers, debounce).
@@ -459,7 +495,10 @@ impl Runtime {
         let env = |k: &str| std::env::var(k).ok();
         let mut collectors = rows(cfg, Platform::current(), &env, &inner.lines, &previews);
         let mut results: Vec<CharResult> = inner.results.values().cloned().collect();
-        let linked = matches!(inner.linked, Ok(true));
+        // Before the first scan the device is taken as linked (no block),
+        // but the bridge omits `linked` until it is known.
+        let link = inner.linked.clone().unwrap_or(Ok(true));
+        let linked = matches!(link, Ok(true));
         let held = secs_left(inner.hold_until, Instant::now());
         apply_plugin_off_copy(cfg, linked, &mut collectors, &mut results);
         let view = TileInputs {
@@ -474,9 +513,10 @@ impl Runtime {
             status: inner.status.clone(),
             results,
             log: inner.log.iter().cloned().collect(),
-            device: device_state(inner.paused, held, inner.linked.clone()),
-            device_status: device_block(inner.paused, held, &inner.linked).map(|b| b.status()),
-            linked: inner.linked.as_ref().ok().copied(),
+            device: device_state(inner.paused, held, link.clone()),
+            held_secs: held,
+            linked: inner.linked.as_ref().and_then(|l| l.as_ref().ok().copied()),
+            link,
             line_status: inner.statuses.clone(),
             relink: inner.relink,
             tiles: tiles(&view),
@@ -660,17 +700,13 @@ async fn scan_and_upload(app: &AppHandle, rt: &Runtime) {
         }
     }
     crate::bg3_campaigns::persist_first_sight(&crate::bg3_campaigns::STORE, &shared);
-    let statuses = lines.iter().map(|(k, l)| (k.clone(), l.status)).collect();
-    let lines: BTreeMap<String, String> = lines.into_iter().map(|(k, l)| (k, l.text)).collect();
-    let joined: Vec<String> = lines.values().cloned().collect();
+    let joined: Vec<String> = lines.values().map(|l| l.text.clone()).collect();
     let line = status_line(&registry, &joined);
     let line = match device_note(paused, held.is_some(), linked.clone()) {
         Some(d) => format!("{d} · {line}"),
         None => line,
     };
-    rt.set_device(paused, linked);
-    rt.set_lines(lines, relink);
-    rt.set_statuses(statuses);
+    rt.end_scan(paused, linked, lines, relink);
     publish(app, rt, &line);
 }
 
@@ -753,7 +789,7 @@ async fn gate_and_upload(
         }
     };
     publish(app, rt, &format!("Uploading {waiting} export(s)…"));
-    upload_all(app, rt, &uploader, token, cfg, &scan.pending).await
+    upload_all(app, rt, &uploader, token, (id, cfg), &scan.pending).await
 }
 
 /// A screenshot is read and sent only while its collector is still switched
@@ -772,13 +808,13 @@ async fn upload_all(
     rt: &Runtime,
     uploader: &Uploader,
     token: &crate::token::DeviceToken,
-    scanned: &AppConfig,
+    (id, scanned): (&'static str, &AppConfig),
     pending: &[PendingUpload],
 ) -> (Line, bool) {
     let waiting = pending.len();
     let mut sent = 0usize;
-    let mut settled = 0usize;
-    for (i, p) in crate::bg3_campaigns::still_ticked(pending, app).enumerate() {
+    let mut queue = crate::bg3_campaigns::still_ticked(pending, app);
+    while let Some(p) = queue.next() {
         if app.state::<Shared>().is_paused() {
             let text = format!("Paused — uploaded {sent} of {waiting} export(s)");
             return (Line::new(LineStatus::Paused, text), false);
@@ -809,7 +845,9 @@ async fn upload_all(
             return (Line::new(LineStatus::Off, off_line(sent, waiting)), false);
         }
         let outcome = send_with_blobs(uploader, token, p, tokio::time::sleep).await;
-        events::record_outcome(p.contract, &outcome, waiting.saturating_sub(i));
+        // The batch's collector (not the contract name), and only what is
+        // still queued: this item plus the ticked ones after it.
+        events::record_outcome(id, &outcome, still_queued(&queue));
         let fx = effect(&outcome);
         rt.log_for(p.contract, format!("{}: {}", p.label, fx.text));
         if is_unknown_contract(&outcome) {
@@ -818,9 +856,6 @@ async fn upload_all(
         rt.finish(p, &fx);
         if fx.ok {
             sent += 1;
-        }
-        if fx.record {
-            settled += 1;
         }
         if let Some(wait) = fx.hold {
             rt.hold_for(wait);
@@ -838,6 +873,14 @@ async fn upload_all(
         }
     }
     let text = format!("Uploaded {sent} of {waiting} export(s)");
-    let status = finished_status(sent, waiting.saturating_sub(settled));
+    // Whatever is still unsettled — encoder refusals are settled too, as
+    // in the `pending` count — so the status agrees with that count.
+    let status = finished_status(sent, rt.unsettled(pending));
     (Line::new(status, text), false)
+}
+
+/// Exports held when the upload before `rest` stopped: that one plus the
+/// ones still queued after it (unticked BG3 campaigns are not).
+pub fn still_queued<I: Iterator + Clone>(rest: &I) -> usize {
+    1 + rest.clone().count()
 }

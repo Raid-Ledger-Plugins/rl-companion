@@ -201,7 +201,12 @@ pub struct EventLog {
 impl EventLog {
     /// Store `ev` stamped `ts` (RFC 3339 UTC; anything else is dropped).
     pub fn push_at(&self, ev: Event, ts: String) {
-        let Some(at) = parse_utc(&ts).filter(|_| ts.len() <= 24) else {
+        let at = parse_utc(&ts).filter(|_| ts.len() <= 24);
+        // A format change must not empty the route unnoticed; the message
+        // carries no payload (never the rejected text).
+        debug_assert!(at.is_some(), "events: row timestamp is not RFC 3339 UTC");
+        let Some(at) = at else {
+            eprintln!("dev-bridge events: dropped a row (timestamp not RFC 3339 UTC)");
             return;
         };
         let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
@@ -309,21 +314,12 @@ pub fn for_outcome(c: CollectorId, o: &crate::upload::UploadOutcome, held: usize
         }
         O::Unauthorized => Event::new(c, Kind::LinkRequired).status(401),
         O::RateLimited { .. } => Event::new(c, Kind::UploadHeld).status(429).count(held),
-        O::Deferred { reason } => Event::new(c, Kind::UploadRetry).code(deferred_code(reason)),
+        O::Deferred { status, code, .. } => {
+            let code = code.as_deref().map_or(ErrorCode::Other, ErrorCode::from_server);
+            let ev = Event::new(c, Kind::UploadRetry).code(code);
+            status.map_or(ev, |s| ev.status(s))
+        }
         O::GaveUp { .. } => Event::new(c, Kind::UploadRetry),
-    }
-}
-
-/// A deferral's code, from the uploader's own fixed reason constants (the
-/// reason carries no status/code yet; `unknown_contract` and
-/// `unknown_contract_version` share one reason, reported as the former).
-fn deferred_code(reason: &str) -> ErrorCode {
-    if reason == crate::upload::NOT_TAKEN_YET {
-        ErrorCode::UnknownContract
-    } else if reason == crate::upload::RETIRED_REASON {
-        ErrorCode::RetiredContractVersion
-    } else {
-        ErrorCode::Other
     }
 }
 

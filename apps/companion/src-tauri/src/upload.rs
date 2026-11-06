@@ -47,7 +47,13 @@ pub enum UploadOutcome {
     /// A 4xx that is not about this message: the server does not serve the
     /// contract yet (404), the version is retired (409), or a proxy answered.
     /// Nothing is recorded; the batch stops and the next scan tries again.
-    Deferred { reason: String },
+    /// `status` is the HTTP status and `code` the server's raw `code` (when
+    /// its body had one), so an event can report them without reading `reason`.
+    Deferred {
+        reason: String,
+        status: Option<u16>,
+        code: Option<String>,
+    },
     /// Out of attempts (5xx / 408 / network). Try again on the next scan.
     GaveUp { reason: String },
 }
@@ -183,11 +189,15 @@ fn other_status(status: u16, body: &[u8]) -> UploadOutcome {
     let Ok(parsed) = serde_json::from_slice::<ErrorBody>(body) else {
         return UploadOutcome::Deferred {
             reason: format!("unexpected answer {status} from the server"),
+            status: Some(status),
+            code: None,
         };
     };
     if !TERMINAL_CODES.contains(&parsed.code.as_str()) {
         return UploadOutcome::Deferred {
             reason: deferred_reason(status, &parsed.code),
+            status: Some(status),
+            code: (!parsed.code.is_empty()).then(|| parsed.code.clone()),
         };
     }
     let issue = parsed
@@ -211,7 +221,7 @@ pub const RETIRED_REASON: &str = "this app is out of date; update the Companion"
 /// The server does not serve this contract (yet): its `/config` may have
 /// changed, so the app refetches it (ROK-2067 D5).
 pub fn is_unknown_contract(outcome: &UploadOutcome) -> bool {
-    matches!(outcome, UploadOutcome::Deferred { reason } if reason == NOT_TAKEN_YET)
+    matches!(outcome, UploadOutcome::Deferred { reason, .. } if reason == NOT_TAKEN_YET)
 }
 
 fn deferred_reason(status: u16, code: &str) -> String {

@@ -138,8 +138,8 @@ pub fn select(
 /// pick yet keeps the scan's verdict. Other games always pass.
 pub fn still_ticked_by<'a>(
     pending: &'a [PendingUpload],
-    live: impl Fn() -> BTreeMap<String, bool> + 'a,
-) -> impl Iterator<Item = &'a PendingUpload> + 'a {
+    live: impl Fn() -> BTreeMap<String, bool> + Clone + 'a,
+) -> impl Iterator<Item = &'a PendingUpload> + Clone + 'a {
     pending.iter().filter(move |p| {
         p.campaign
             .as_deref()
@@ -151,7 +151,7 @@ pub fn still_ticked_by<'a>(
 pub fn still_ticked<'a>(
     pending: &'a [PendingUpload],
     app: &'a AppHandle,
-) -> impl Iterator<Item = &'a PendingUpload> + 'a {
+) -> impl Iterator<Item = &'a PendingUpload> + Clone + 'a {
     still_ticked_by(pending, move || {
         app.state::<Shared>().config().bg3_campaigns
     })

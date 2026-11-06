@@ -3,14 +3,15 @@
 //! and the served body against the pinned schema/fixtures.
 
 use super::dev_bridge_unit_tests::schema_errors;
+use crate::collector::PendingUpload;
 use crate::collector_status::{
-    device_block, fallback, finished_status, row_status, DeviceBlock, LineStatus,
+    device_block, fallback, finished_status, row_status, DeviceBlock, Line, LineStatus,
 };
 use crate::collector_view::device_state;
 use crate::config::AppConfig;
 use crate::dev_bridge::collectors::collectors_body;
 use crate::manifest::{BG3_SAVE, WOW_LEDGERLINK};
-use crate::runtime::{effect, stop_status, Runtime};
+use crate::runtime::{effect, still_queued, stop_status, Runtime};
 use crate::upload::{UploadOutcome, GALLERY_FULL_CODE};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -146,6 +147,8 @@ fn a_stopped_batch_maps_by_what_stopped_it() {
         (
             UploadOutcome::Deferred {
                 reason: "not yet".into(),
+        status: None,
+        code: None,
             },
             LineStatus::Retrying,
         ),
@@ -158,7 +161,12 @@ fn a_stopped_batch_maps_by_what_stopped_it() {
 }
 
 fn served(rt: &Runtime, cfg: &AppConfig) -> Value {
-    let body = collectors_body(&rt.snapshot(cfg), false);
+    served_live(rt, cfg, false)
+}
+
+/// Served with the LIVE pause flag `paused` (the tray's, not the scan's).
+fn served_live(rt: &Runtime, cfg: &AppConfig, paused: bool) -> Value {
+    let body = collectors_body(&rt.snapshot(cfg), paused);
     assert_eq!(
         schema_errors("collectors", &body),
         Vec::<String>::new(),
@@ -180,11 +188,12 @@ fn the_served_body_carries_each_rows_status_and_device_linked() {
     cfg.set_collector_enabled(WOW, true);
     cfg.set_collector_enabled(BG3_SAVE.id, false);
     let body = served(&rt, &cfg);
-    assert_eq!(body["linked"], Value::Bool(true));
+    assert_eq!(body.get("linked"), None, "not known before the first scan");
     assert_eq!(status_of(&body, WOW), "not-scanned");
     assert_eq!(status_of(&body, BG3_SAVE.id), "off");
 
-    rt.set_statuses(BTreeMap::from([(WOW.to_owned(), LineStatus::Uploaded)]));
+    let uploaded = Line::new(LineStatus::Uploaded, "Uploaded 1 of 1 export(s)");
+    rt.set_lines(BTreeMap::from([(WOW.to_owned(), uploaded)]), false);
     assert_eq!(status_of(&served(&rt, &cfg), WOW), "uploaded");
 
     rt.set_device(false, Ok(false));
@@ -193,8 +202,7 @@ fn the_served_body_carries_each_rows_status_and_device_linked() {
     assert_eq!(status_of(&body, WOW), "link-device");
     assert_eq!(status_of(&body, BG3_SAVE.id), "off");
 
-    rt.set_device(true, Ok(false));
-    assert_eq!(status_of(&served(&rt, &cfg), WOW), "paused");
+    assert_eq!(status_of(&served_live(&rt, &cfg, true), WOW), "paused");
 
     rt.set_device(false, Err("keychain locked".into()));
     let body = served(&rt, &cfg);
@@ -223,4 +231,93 @@ fn the_pinned_collectors_fixtures_agree_with_the_schema() {
         let errors = schema_errors("collectors", &load(&format!("invalid/{f}.json")));
         assert!(!errors.is_empty(), "{f} must be rejected");
     }
+}
+
+fn both_on() -> AppConfig {
+    let mut cfg = AppConfig::default();
+    cfg.set_collector_enabled(WOW, true);
+    cfg.set_collector_enabled(BG3_SAVE.id, true);
+    cfg
+}
+
+#[test]
+fn a_401_mid_pass_unlinks_the_device_for_every_enabled_row() {
+    let rt = Runtime::new(super::temp_dir("bridge-relink").join("sent.json"));
+    let cfg = both_on();
+    // The scan began linked; BG3 uploaded, then WoW's upload got a 401.
+    let lines = BTreeMap::from([
+        (
+            BG3_SAVE.id.to_owned(),
+            Line::new(LineStatus::Uploaded, "Uploaded 1 of 1 export(s)"),
+        ),
+        (
+            WOW.to_owned(),
+            Line::new(LineStatus::LinkDevice, "Re-link this device"),
+        ),
+    ]);
+    rt.end_scan(false, Ok(true), lines, true);
+    let body = served(&rt, &cfg);
+    assert_eq!(body["linked"], Value::Bool(false), "the 401 cleared the token");
+    assert_eq!(status_of(&body, WOW), "link-device");
+    assert_eq!(status_of(&body, BG3_SAVE.id), "link-device");
+    assert_eq!(schema_errors("collectors", &body), Vec::<String>::new());
+}
+
+#[test]
+fn the_device_block_follows_the_live_pause_flag_not_the_scans() {
+    let rt = Runtime::new(super::temp_dir("bridge-live-pause").join("sent.json"));
+    let cfg = both_on();
+    let up = || Line::new(LineStatus::Uploaded, "Uploaded 1 of 1 export(s)");
+    let lines = BTreeMap::from([(WOW.to_owned(), up()), (BG3_SAVE.id.to_owned(), up())]);
+    // Paused from the tray after an unpaused scan …
+    rt.end_scan(false, Ok(true), lines.clone(), false);
+    let body = served_live(&rt, &cfg, true);
+    assert_eq!(body["collectors"][0]["paused"], Value::Bool(true));
+    assert_eq!(status_of(&body, WOW), "paused", "paused row said uploaded");
+    // … and resumed after a paused scan.
+    rt.end_scan(true, Ok(true), lines, false);
+    let body = served_live(&rt, &cfg, false);
+    assert_eq!(status_of(&body, WOW), "uploaded", "paused stuck after resume");
+}
+
+fn shot(sha: &str, campaign: Option<&str>) -> PendingUpload {
+    PendingUpload {
+        contract: crate::manifest::BG3_SCREENSHOT.id,
+        scope: "https://rl.test|/shots".into(),
+        item: sha.into(),
+        sha256: sha.into(),
+        label: sha.into(),
+        body: serde_json::json!({}),
+        blobs: vec![],
+        campaign: campaign.map(str::to_owned),
+    }
+}
+
+#[test]
+fn a_pass_whose_screenshots_were_all_refused_is_up_to_date_like_its_pending_count() {
+    let rt = Runtime::new(super::temp_dir("bridge-refused").join("sent.json"));
+    let pending = vec![shot("refused-status-1", None), shot("refused-status-2", None)];
+    for p in &pending {
+        crate::bg3_screenshot::refuse(&p.sha256);
+    }
+    let left = rt.unsettled(&pending);
+    assert_eq!(left, 0, "refused screenshots are not pending");
+    assert_eq!(finished_status(0, left), LineStatus::UpToDate);
+}
+
+#[test]
+fn upload_held_counts_only_what_is_still_queued() {
+    // An unticked campaign's saves are skipped, not queued.
+    let pending = vec![
+        shot("a1", Some("a")),
+        shot("b1", Some("b")),
+        shot("b2", Some("b")),
+        shot("n1", None),
+    ];
+    let live = || BTreeMap::from([("a".to_owned(), true), ("b".to_owned(), false)]);
+    let mut queue = crate::bg3_campaigns::still_ticked_by(&pending, live);
+    assert_eq!(queue.next().map(|p| p.item.as_str()), Some("a1"));
+    assert_eq!(still_queued(&queue), 2, "a1 and n1, not the unticked b1/b2");
+    assert_eq!(queue.next().map(|p| p.item.as_str()), Some("n1"));
+    assert_eq!(still_queued(&queue), 1);
 }

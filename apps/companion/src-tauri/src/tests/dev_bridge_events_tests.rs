@@ -10,7 +10,7 @@ use crate::dev_bridge::events::{
 use crate::dev_bridge::paging::{encode_cursor, PAGE_MAX_BYTES};
 use crate::dev_bridge::server::{ServerCtx, Snapshot};
 use crate::dev_bridge::token::sha256_hex;
-use crate::upload::{UploadOutcome, NOT_TAKEN_YET, RETIRED_REASON};
+use crate::upload::{classify, Attempt, UploadOutcome};
 use hyper::Method;
 use serde_json::Value;
 use std::net::{IpAddr, Ipv4Addr};
@@ -246,19 +246,28 @@ fn server_codes_map_through_the_enum() {
     );
     let ev = for_outcome(c, &UploadOutcome::Unauthorized, 0);
     assert_eq!((ev.kind, ev.http_status), (Kind::LinkRequired, Some(401)));
-    let deferred = |r: &str| for_outcome(c, &UploadOutcome::Deferred { reason: r.into() }, 0);
-    assert_eq!(
-        deferred(NOT_TAKEN_YET).error_code,
-        Some(ErrorCode::UnknownContract)
-    );
-    assert_eq!(
-        deferred(RETIRED_REASON).error_code,
-        Some(ErrorCode::RetiredContractVersion)
-    );
-    assert_eq!(
-        deferred("server answered 418 (teapot)").error_code,
-        Some(ErrorCode::Other)
-    );
+    // A deferral reports the server's own code and status, never one
+    // rebuilt from the display text (unknown_contract_version stays itself).
+    let deferred = |status: u16, body: &str| match classify(status, None, body.as_bytes()) {
+        Attempt::Done(o) => for_outcome(c, &o, 0),
+        other => panic!("{status} {body} is not a deferral: {other:?}"),
+    };
+    let code = |c: &str| format!(r#"{{"code":"{c}"}}"#);
+    for (status, c, want) in [
+        (404, "unknown_contract", ErrorCode::UnknownContract),
+        (404, "unknown_contract_version", ErrorCode::UnknownContractVersion),
+        (409, "retired_contract_version", ErrorCode::RetiredContractVersion),
+        (418, "TEAPOT", ErrorCode::Other),
+    ] {
+        let ev = deferred(status, &code(c));
+        assert_eq!(
+            (ev.kind, ev.http_status, ev.error_code),
+            (Kind::UploadRetry, Some(status), Some(want)),
+            "deferral {status} {c}"
+        );
+    }
+    let ev = deferred(413, "<html>too large</html>");
+    assert_eq!((ev.http_status, ev.error_code), (Some(413), Some(ErrorCode::Other)));
     // The served row never carries the issue text or any key outside the schema.
     let log = leaked();
     log.push_at(for_outcome(c, &rej("hash_mismatch"), 0), ts(1));
@@ -279,4 +288,30 @@ fn only_built_in_collectors_have_ids_and_status_is_bounded() {
             .count,
         Some(1_000_000)
     );
+}
+
+/// The real record points stamp rows through `now()` into the process ring,
+/// and the served page is non-empty and schema-valid — so a timestamp-format
+/// change cannot empty the route with every other test green.
+#[test]
+fn record_points_land_in_the_served_ring() {
+    use crate::dev_bridge::events::{global, record, record_outcome, record_toggle};
+    let has = |kind: &str| {
+        let body = global().page(None, None).expect("page");
+        assert_eq!(schema_errors("events", &body), Vec::<String>::new());
+        let rows = body["events"].as_array().cloned().unwrap_or_default();
+        rows.iter()
+            .any(|r| r["collectorId"] == "bg3-save" && r["kind"] == kind)
+    };
+    record_toggle("bg3-save", true);
+    assert!(has("collector-on"), "record_toggle left no collector-on row");
+    record("bg3-save", Kind::Scan, |e| e.count(2));
+    assert!(has("scan"), "record left no scan row");
+    record_outcome("bg3-save", &UploadOutcome::Unauthorized, 0);
+    assert!(has("link-required"), "record_outcome left no link-required row");
+    let before = global().page(None, None).expect("page").to_string();
+    record("/Users/x/save.lsv", Kind::Error, |e| e);
+    assert!(!before.contains("/Users/x"));
+    let after = global().page(None, None).expect("page").to_string();
+    assert!(!after.contains("/Users/x"), "a non-collector id recorded a row");
 }

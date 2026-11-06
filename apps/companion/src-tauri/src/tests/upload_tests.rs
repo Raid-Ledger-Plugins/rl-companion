@@ -88,7 +88,9 @@ fn terminal_vs_retryable_codes() {
     assert_eq!(
         classify(413, None, b"not json"),
         Attempt::Done(UploadOutcome::Deferred {
-            reason: "unexpected answer 413 from the server".into()
+            reason: "unexpected answer 413 from the server".into(),
+            status: Some(413),
+            code: None,
         }),
         "a proxy's non-JSON 413 is not the server rejecting the message"
     );
@@ -255,7 +257,9 @@ async fn redirects_are_not_followed() {
     assert_eq!(
         send_to(&server, &clock).await,
         UploadOutcome::Deferred {
-            reason: "unexpected answer 302 from the server".into()
+            reason: "unexpected answer 302 from the server".into(),
+            status: Some(302),
+            code: None,
         }
     );
     assert_eq!(hits(&server).await, 1, "the Location is never requested");
