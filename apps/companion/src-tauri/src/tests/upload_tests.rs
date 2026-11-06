@@ -88,7 +88,9 @@ fn terminal_vs_retryable_codes() {
     assert_eq!(
         classify(413, None, b"not json"),
         Attempt::Done(UploadOutcome::Deferred {
-            reason: "unexpected answer 413 from the server".into()
+            reason: "unexpected answer 413 from the server".into(),
+            status: Some(413),
+            code: None,
         }),
         "a proxy's non-JSON 413 is not the server rejecting the message"
     );
@@ -180,6 +182,7 @@ fn effects_record_only_settled_outcomes() {
     );
     let fx = effect(&UploadOutcome::GaveUp {
         reason: "server error 503".into(),
+        status: Some(503),
     });
     assert!(
         !fx.record && !fx.stop,
@@ -255,7 +258,9 @@ async fn redirects_are_not_followed() {
     assert_eq!(
         send_to(&server, &clock).await,
         UploadOutcome::Deferred {
-            reason: "unexpected answer 302 from the server".into()
+            reason: "unexpected answer 302 from the server".into(),
+            status: Some(302),
+            code: None,
         }
     );
     assert_eq!(hits(&server).await, 1, "the Location is never requested");
@@ -313,7 +318,8 @@ async fn persistent_failure_gives_up_after_five_attempts() {
     assert_eq!(
         outcome,
         UploadOutcome::GaveUp {
-            reason: "server error 502".into()
+            reason: "server error 502".into(),
+            status: Some(502),
         }
     );
     assert_eq!(hits(&server).await, 5);

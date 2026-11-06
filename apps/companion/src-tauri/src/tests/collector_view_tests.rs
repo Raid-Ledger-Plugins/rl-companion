@@ -2,6 +2,7 @@
 //! first-upload preview hold.
 
 use crate::collector::{Blob, PendingUpload};
+use crate::collector_status::{Line, LineStatus};
 use crate::collector_view::{apply_root, device_note, device_state, rows, RETRYING};
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, BG3_SCREENSHOT, WOW_LEDGERLINK};
@@ -297,8 +298,14 @@ fn a_401_sets_the_structured_relink_flag_whatever_the_joined_line_says() {
     let fx = effect(&UploadOutcome::Unauthorized);
     assert!(fx.relink, "a 401 clears the token");
     let lines = BTreeMap::from([
-        (WOW_LEDGERLINK.id.to_owned(), "Up to date".to_owned()),
-        (BG3_SAVE.id.to_owned(), "Re-link this device".to_owned()),
+        (
+            WOW_LEDGERLINK.id.to_owned(),
+            Line::new(LineStatus::UpToDate, "Up to date"),
+        ),
+        (
+            BG3_SAVE.id.to_owned(),
+            Line::new(LineStatus::LinkDevice, "Re-link this device"),
+        ),
     ]);
     rt.set_lines(lines.clone(), fx.relink);
     rt.set_status("Up to date · Re-link this device");
@@ -313,7 +320,8 @@ fn a_401_sets_the_structured_relink_flag_whatever_the_joined_line_says() {
 fn relinked_runtime(tag: &str) -> Runtime {
     let rt = Runtime::new(super::temp_dir(tag).join("sent.json"));
     let fx = effect(&UploadOutcome::Unauthorized);
-    let lines = BTreeMap::from([(WOW_LEDGERLINK.id.to_owned(), fx.text.clone())]);
+    let line = Line::new(LineStatus::LinkDevice, fx.text.clone());
+    let lines = BTreeMap::from([(WOW_LEDGERLINK.id.to_owned(), line)]);
     rt.set_lines(lines, fx.relink);
     assert!(rt.snapshot(&AppConfig::default()).relink, "the 401 set it");
     rt
@@ -451,6 +459,8 @@ fn baked_text_never_carries_a_countdown() {
     assert_eq!(shown, vec![RETRYING.to_owned()], "the per-export result");
     let fx = effect(&UploadOutcome::Deferred {
         reason: "offline".into(),
+        status: None,
+        code: None,
     });
     assert_eq!(
         shown_text(&fx),

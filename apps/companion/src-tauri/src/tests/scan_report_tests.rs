@@ -115,6 +115,8 @@ fn a_refused_upload_sets_no_upload_time() {
     let rt = Runtime::new(super::temp_dir("scan-report-refused").join("sent.json"));
     let refused = effect(&UploadOutcome::Deferred {
         reason: "server busy".into(),
+        status: None,
+        code: None,
     });
     rt.finish(&item(WOW, "g1", "aa"), &refused);
     let r = row(&rt, &wow_on(), WOW);

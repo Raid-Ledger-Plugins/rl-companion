@@ -1,6 +1,7 @@
 //! `GET /dev/v1/collectors` (`$defs/collectors`): the same data the window's
 //! `get_collector_status` shows, reduced to the contract's fields.
 
+use crate::collector_status::row_status;
 use crate::runtime::CollectorStatusDto;
 use serde_json::{json, Value};
 
@@ -38,6 +39,8 @@ pub fn collectors_body(dto: &CollectorStatusDto, paused: bool) -> Value {
             } else {
                 (None, 0)
             };
+            let device = dto.device_status(paused);
+            let status = row_status(c.enabled, device, dto.line_status.get(&c.id).copied());
             json!({
                 "id": c.id,
                 "enabled": c.enabled,
@@ -45,8 +48,14 @@ pub fn collectors_body(dto: &CollectorStatusDto, paused: bool) -> Value {
                 "lastScanAt": last_scan,
                 "lastUploadAt": last_upload,
                 "pending": pending,
+                "status": status.as_str(),
             })
         })
         .collect();
-    json!({ "collectors": rows })
+    let mut body = json!({ "collectors": rows });
+    // Device-level, so top-level; omitted when the token cannot be read.
+    if let Some(linked) = dto.linked {
+        body["linked"] = Value::Bool(linked);
+    }
+    body
 }

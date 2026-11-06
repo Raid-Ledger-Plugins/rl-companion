@@ -11,6 +11,7 @@ pub mod bg3_screenshot;
 pub mod blob_send;
 pub mod collector;
 pub mod collector_commands;
+pub mod collector_status;
 pub mod collector_view;
 pub mod commands;
 pub mod config;

@@ -74,6 +74,7 @@ pub fn set_ledgerlink_enabled(
     state
         .update_config(|c| c.set_collector_enabled(WOW_LEDGERLINK.id, enabled))
         .map_err(|e| format!("Could not save settings: {e}"))?;
+    crate::dev_bridge::events::record_toggle(WOW_LEDGERLINK.id, enabled);
     rt.log_for(
         WOW_LEDGERLINK.id,
         if enabled {
@@ -109,6 +110,7 @@ pub fn set_collector_enabled(
 ) -> Result<CollectorStatusDto, String> {
     let m = known(&id)?;
     save(&state, |c| c.set_collector_enabled(m.id, enabled))?;
+    crate::dev_bridge::events::record_toggle(m.id, enabled);
     let verb = if enabled { "on" } else { "off" };
     rt.log_for(m.id, format!("{} uploads turned {verb}", m.display_name));
     rt.kick();

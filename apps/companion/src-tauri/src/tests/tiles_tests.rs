@@ -2,6 +2,7 @@
 //! per-collector results (spec ACs 5, 6, 8, 9, 11a, 14).
 
 use crate::collector::PendingUpload;
+use crate::collector_status::{Line, LineStatus};
 use crate::collector_view::rows;
 use crate::config::AppConfig;
 use crate::manifest::{Platform, BG3_SAVE, WOW_LEDGERLINK};
@@ -234,6 +235,8 @@ fn ac11_results_sharing_scope_and_item_stay_apart_per_collector() {
     let rt = Runtime::new(super::temp_dir("ac11-results").join("sent.json"));
     let deferred = UploadOutcome::Deferred {
         reason: NOT_TAKEN_YET.into(),
+        status: None,
+        code: None,
     };
     rt.finish(&upload("bg3-save", "AutoSave_9"), &effect(&deferred));
     rt.finish(
@@ -261,13 +264,21 @@ fn d9_plugin_off_replaces_the_generic_not_taken_copy() {
     let rt = Runtime::new(super::temp_dir("d9-copy").join("sent.json"));
     let fx = effect(&UploadOutcome::Deferred {
         reason: NOT_TAKEN_YET.into(),
+        status: None,
+        code: None,
     });
     rt.finish(&upload("bg3-save", "AutoSave_9"), &fx);
     let line = format!("Uploaded 0 of 1 export(s); {}", fx.text);
     rt.set_lines(
         BTreeMap::from([
-            ("bg3-save".to_owned(), line.clone()),
-            ("wow-ledgerlink".to_owned(), line),
+            (
+                "bg3-save".to_owned(),
+                Line::new(LineStatus::Retrying, line.clone()),
+            ),
+            (
+                "wow-ledgerlink".to_owned(),
+                Line::new(LineStatus::Retrying, line),
+            ),
         ]),
         false,
     );

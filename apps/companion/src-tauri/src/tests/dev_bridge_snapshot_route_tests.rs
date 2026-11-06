@@ -70,7 +70,15 @@ impl Env {
 
     fn get(&self, path: &str, q: &str) -> (u16, Value) {
         let logs = LogBuffer::default();
-        routes::get(&self.snap(true), path, &parse_query(Some(q)), None, &logs).expect("routed")
+        routes::get(
+            &self.snap(true),
+            path,
+            &parse_query(Some(q)),
+            None,
+            &logs,
+            &crate::dev_bridge::events::EventLog::default(),
+        )
+        .expect("routed")
     }
 }
 
@@ -189,7 +197,14 @@ fn a_cursor_survives_a_new_row_and_a_pruned_or_bad_cursor_is_400() {
 fn unknown_or_ambiguous_params_are_400_and_nothing_cached_is_404() {
     let env = Env::new("snap-route-errors");
     let logs = LogBuffer::default();
-    let off = routes::get(&env.snap(false), PAGE, &parse_query(None), None, &logs);
+    let off = routes::get(
+        &env.snap(false),
+        PAGE,
+        &parse_query(None),
+        None,
+        &logs,
+        &crate::dev_bridge::events::EventLog::default(),
+    );
     assert_eq!(off.map(|r| r.0), Some(404), "no cache handle");
     assert_eq!(env.get(PAGE, "").0, 404, "nothing cached");
     assert_eq!(env.get(HISTORY, "").0, 404, "no history");

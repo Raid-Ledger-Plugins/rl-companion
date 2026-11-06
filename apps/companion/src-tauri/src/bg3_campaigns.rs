@@ -134,12 +134,14 @@ pub fn select(
 
 /// `pending` in order, each BG3 save rechecked against the live picks just
 /// before it uploads, so unticking a campaign mid-batch stops the rest of
-/// that campaign (ROK-2068). `live` runs once per BG3 item; a key with no
-/// pick yet keeps the scan's verdict. Other games always pass.
+/// that campaign (ROK-2068). `live` runs once per BG3 item as the batch
+/// advances, and again per BG3 item still queued whenever a clone of the
+/// iterator is walked (a 429 counting what it held); a key with no pick yet
+/// keeps the scan's verdict. Other games always pass.
 pub fn still_ticked_by<'a>(
     pending: &'a [PendingUpload],
-    live: impl Fn() -> BTreeMap<String, bool> + 'a,
-) -> impl Iterator<Item = &'a PendingUpload> + 'a {
+    live: impl Fn() -> BTreeMap<String, bool> + Clone + 'a,
+) -> impl Iterator<Item = &'a PendingUpload> + Clone + 'a {
     pending.iter().filter(move |p| {
         p.campaign
             .as_deref()
@@ -151,7 +153,7 @@ pub fn still_ticked_by<'a>(
 pub fn still_ticked<'a>(
     pending: &'a [PendingUpload],
     app: &'a AppHandle,
-) -> impl Iterator<Item = &'a PendingUpload> + 'a {
+) -> impl Iterator<Item = &'a PendingUpload> + Clone + 'a {
     still_ticked_by(pending, move || {
         app.state::<Shared>().config().bg3_campaigns
     })

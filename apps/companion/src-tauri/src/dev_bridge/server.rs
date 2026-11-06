@@ -6,6 +6,7 @@ use super::bg3_routes;
 use super::bg3_saves::Bg3Source;
 use super::bind;
 use super::conn_budget::{ConnBudget, Slot};
+use super::events::{self, EventLog};
 use super::health::{health, HealthInput};
 use super::logbuf::{self, LogBuffer};
 use super::paging::parse_query;
@@ -63,6 +64,7 @@ pub struct ServerCtx {
     collectors: RwLock<Option<CollectorsFn>>,
     bg3: RwLock<Option<Arc<Bg3Source>>>,
     logs: Option<&'static LogBuffer>,
+    events: Option<&'static EventLog>,
     denials: Mutex<DenialLog>,
     closed: Mutex<Option<String>>,
     ip_probe: IpProbe,
@@ -123,6 +125,7 @@ impl Default for ServerCtx {
             collectors: RwLock::new(None),
             bg3: RwLock::new(None),
             logs: None,
+            events: None,
             denials: Mutex::new(DenialLog::default()),
             closed: Mutex::new(None),
             ip_probe: Arc::new(bind::ip_is_local),
@@ -147,6 +150,14 @@ impl ServerCtx {
 
     pub fn set_collectors(&self, f: CollectorsFn) {
         *self.collectors.write().unwrap_or_else(|p| p.into_inner()) = Some(f);
+    }
+
+    /// Serve `/dev/v1/events` from `events` instead of the process-wide ring.
+    pub fn with_events(events: &'static EventLog) -> Self {
+        Self {
+            events: Some(events),
+            ..Self::default()
+        }
     }
 
     /// Serve `/dev/v1/logs` from `logs` instead of the process-wide buffer.
@@ -254,8 +265,16 @@ impl ServerCtx {
                     .unwrap_or_else(|p| p.into_inner())
                     .clone();
                 let logs = self.logs.unwrap_or_else(logbuf::global);
-                routes::get(snap, path, &parse_query(query), collectors.as_ref(), logs)
-                    .unwrap_or_else(|| (404, json!({ "error": "not_found" })))
+                let events = self.events.unwrap_or_else(events::global);
+                routes::get(
+                    snap,
+                    path,
+                    &parse_query(query),
+                    collectors.as_ref(),
+                    logs,
+                    events,
+                )
+                .unwrap_or_else(|| (404, json!({ "error": "not_found" })))
             }
             _ => (404, json!({ "error": "not_found" })),
         }

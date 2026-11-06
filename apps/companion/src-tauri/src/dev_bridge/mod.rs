@@ -17,6 +17,7 @@ pub mod bind;
 pub mod collectors;
 pub mod commands;
 pub mod conn_budget;
+pub mod events;
 pub mod health;
 pub mod logbuf;
 pub mod paging;
