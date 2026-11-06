@@ -95,11 +95,15 @@ pub async fn check_link(app: AppHandle, state: State<'_, Shared>) -> Result<Chec
             }
         }
         Ok(SelfCheck::Unauthorized) => {
-            // Only the token the check sent: a re-link meanwhile keeps its own.
-            state.clear_token_if(&origin, &token).map_err(s)?;
-            tray::set_status(&app, "Re-link this device");
+            // Only the token the check sent: a re-link meanwhile keeps its own
+            // (and its tray status and notice).
+            let cleared = state.clear_token_if(&origin, &token).map_err(s)?;
+            if cleared {
+                tray::set_status(&app, "Re-link this device");
+            }
+            let has_token = cleared || state.token().map_err(s)?.is_some();
             CheckDto {
-                state: "revoked",
+                state: unauthorized_state(cleared, has_token),
                 device_name: None,
                 message: None,
             }
@@ -111,6 +115,18 @@ pub async fn check_link(app: AppHandle, state: State<'_, Shared>) -> Result<Chec
         },
     };
     Ok(dto)
+}
+
+/// What a self-check's 401 tells the window: `revoked` only when it cleared
+/// the token still stored. One whose token a re-link (or server switch)
+/// replaced mid-check reports the stored state instead — `linked` if a token
+/// is there, else `unlinked` — so it never overwrites the link's notice.
+pub(crate) fn unauthorized_state(cleared: bool, has_token: bool) -> &'static str {
+    match (cleared, has_token) {
+        (true, _) => "revoked",
+        (false, true) => "linked",
+        (false, false) => "unlinked",
+    }
 }
 
 #[tauri::command]

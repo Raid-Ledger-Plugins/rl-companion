@@ -249,7 +249,7 @@ fn re_link_mid_scan_then_the_old_tokens_401_leaves_the_new_token_in_place() {
     let gen = rt.begin_scan();
     shared.save_token(origin, &new).expect("re-link");
     rt.linked();
-    let (line, stop) = crate::runtime::upload_refused(&shared, origin, &old);
+    let (line, stop) = crate::runtime::upload_refused(&shared, &rt, origin, &old);
     rt.end_scan(
         gen,
         false,
@@ -267,7 +267,7 @@ fn re_link_mid_scan_then_the_old_tokens_401_leaves_the_new_token_in_place() {
         "a stale 401 asked for a re-link after a good link"
     );
     // A 401 for the token still stored does forget it.
-    let _ = crate::runtime::upload_refused(&shared, origin, &new);
+    let _ = crate::runtime::upload_refused(&shared, &rt, origin, &new);
     assert!(
         shared.token().expect("load").is_none(),
         "the refused token was kept"
@@ -309,7 +309,7 @@ fn a_switch_away_and_back_mid_scan_then_a_401_still_revokes_the_current_token() 
     rt.server_changed(true);
     let wow = CollectorId::known(WOW).expect("manifest id");
     log.push_now(for_outcome(wow, &UploadOutcome::Unauthorized, 0), 1);
-    let (line, stop) = crate::runtime::upload_refused(&shared, a, &token);
+    let (line, stop) = crate::runtime::upload_refused(&shared, &rt, a, &token);
     let lines = BTreeMap::from([(WOW.to_owned(), line)]);
     rt.end_scan(gen, false, Ok(true), lines, stop);
     assert!(
@@ -322,4 +322,67 @@ fn a_switch_away_and_back_mid_scan_then_a_401_still_revokes_the_current_token() 
     assert_eq!(body["linked"], Value::Bool(false), "no token, still linked");
     scan(&rt, Ok(false), tokenless_lines());
     assert_eq!(recorded(log).len(), 1, "the 401's event was doubled");
+}
+
+#[test]
+fn a_stale_401_after_a_switch_to_linked_b_then_unlink_b_records_b_s_link_required() {
+    use crate::token::DeviceToken;
+    let (a, b) = ("https://raid.example", "https://other.example");
+    let shared = shared_on("upload-401-stale-switch", a);
+    let (rt, log) = runtime("upload-401-stale-switch-rt");
+    let token = DeviceToken::parse(super::TOKEN).expect("token");
+    shared.save_token(a, &token).expect("save A");
+    shared.save_token(b, &token).expect("save B");
+    scan(&rt, Ok(true), uploaded_lines());
+    // The scan sent A's token; the user switches to the linked B before its 401.
+    let gen = rt.begin_scan();
+    shared
+        .update_config(|c| c.server_url = b.to_owned())
+        .expect("to B");
+    rt.server_changed(true);
+    let wow = CollectorId::known(WOW).expect("manifest id");
+    log.push_now(for_outcome(wow, &UploadOutcome::Unauthorized, 0), 1);
+    let (line, stop) = crate::runtime::upload_refused(&shared, &rt, a, &token);
+    let lines = BTreeMap::from([(WOW.to_owned(), line)]);
+    rt.end_scan(gen, false, Ok(true), lines, stop);
+    assert_eq!(recorded(log).len(), 1, "A's 401 records its own event");
+    // B is unlinked before any linked scan: B's own spell starts now.
+    rt.unlinked();
+    scan(&rt, Ok(false), tokenless_lines());
+    scan(&rt, Ok(false), tokenless_lines());
+    assert_eq!(
+        recorded(log).len(),
+        2,
+        "A's stale 401 suppressed (or doubled) B's link-required"
+    );
+}
+
+#[test]
+fn a_link_after_the_401_cleared_the_token_keeps_the_new_link_at_scan_end() {
+    use crate::token::DeviceToken;
+    let origin = "https://raid.example";
+    let shared = shared_on("upload-401-then-link", origin);
+    let (rt, _) = runtime("upload-401-then-link-rt");
+    let old = DeviceToken::parse(super::TOKEN).expect("token");
+    let new = DeviceToken::parse(&format!("rlcd_{}", "N".repeat(43))).expect("token");
+    shared.save_token(origin, &old).expect("save");
+    scan(&rt, Ok(true), uploaded_lines());
+    let gen = rt.begin_scan();
+    // The 401 clears `old`; a Link completes before the scan ends.
+    let (line, stop) = crate::runtime::upload_refused(&shared, &rt, origin, &old);
+    shared.save_token(origin, &new).expect("link");
+    rt.linked();
+    let lines = BTreeMap::from([(WOW.to_owned(), line)]);
+    rt.end_scan(gen, false, Ok(true), lines, stop);
+    let snap = rt.snapshot(&both_on());
+    assert!(
+        !snap.relink,
+        "the scan's 401 asked for a re-link after the Link"
+    );
+    let body = collectors_body(&snap, false);
+    assert_eq!(
+        body["linked"],
+        Value::Bool(true),
+        "the new link was overwritten"
+    );
 }

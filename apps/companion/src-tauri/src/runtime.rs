@@ -399,9 +399,10 @@ impl Runtime {
     /// cleared the token it sent, so the device is unlinked whatever the scan
     /// began with. `gen` is what `begin_scan` returned: if the link changed since
     /// (Unlink or Link mid-scan), the scan's link state is stale, so it
-    /// writes neither `linked` nor a `link-required` event — unless its 401
-    /// cleared the current server's still-stored token (`Relink::Revoked`,
-    /// e.g. after a switch away and back): that revocation is current.
+    /// writes neither `linked` nor a `link-required` event —
+    /// unless its 401 cleared the current server's still-stored token
+    /// (`Relink::Revoked`, e.g. after a switch away and back) and the link
+    /// has not changed since that clear: that revocation is current.
     pub fn end_scan(
         &self,
         gen: u64,
@@ -413,13 +414,18 @@ impl Runtime {
         let relink = relink.into();
         let mut inner = self.lock();
         inner.paused = paused;
-        if gen != inner.link_gen && relink != Relink::Revoked {
-            let relink = relink.any();
-            // A 401 in the pass still recorded its own `link-required`, so it
-            // stands for the current unlinked spell. The re-link notice is
-            // the link change's to set: Unlink/Link/a server switch cleared
-            // it, a `/config` 401 mid-scan raised it — keep whichever.
-            inner.link_reported |= relink;
+        let current = match relink {
+            Relink::Revoked(cleared_at) => cleared_at == inner.link_gen,
+            Relink::No | Relink::Refused => gen == inner.link_gen,
+        };
+        if !current {
+            // A stale 401 recorded its own `link-required`; it stands for the
+            // current spell only while the device is still unlinked (an
+            // Unlink mid-scan), never after a Link or a switch to a linked
+            // server. The re-link notice is the link change's to set:
+            // Unlink/Link/a switch cleared it, a `/config` 401 raised it.
+            let unlinked_now = inner.linked == Some(Ok(false));
+            inner.link_reported |= relink.any() && unlinked_now;
             let keep = inner.relink;
             store_lines(&mut inner, lines, keep);
             return;
@@ -482,6 +488,11 @@ impl Runtime {
         let mut inner = self.lock();
         inner.relink = false;
         inner.link_gen
+    }
+
+    /// The current link generation (read when a 401 clears the token).
+    pub fn link_gen(&self) -> u64 {
+        self.lock().link_gen
     }
 
     /// The device linked (or re-linked): the old 401 no longer applies, and a
@@ -959,7 +970,7 @@ async fn upload_all(
             rt.hold_for(wait);
         }
         if fx.relink {
-            return upload_refused(&app.state::<Shared>(), &scanned.server_url, token);
+            return upload_refused(&app.state::<Shared>(), rt, &scanned.server_url, token);
         }
         if fx.stop {
             let text = stopped_line(sent, waiting, &fx);
@@ -978,12 +989,18 @@ async fn upload_all(
 /// replaced it while the request was out, in which case the new credential
 /// stays. The scan still stops and reports the 401 either way: its event is
 /// recorded, so `end_scan` must count it whatever happened to the token.
-/// `Relink::Revoked` says the 401 cleared the token still current, which
-/// `end_scan` honours even when the link generation moved meanwhile.
-pub fn upload_refused(shared: &Shared, origin: &str, sent: &DeviceToken) -> (Line, Relink) {
-    let relink = match shared.clear_token_if(origin, sent) {
-        Ok(true) => Relink::Revoked,
-        Ok(false) | Err(_) => Relink::Refused,
+/// `Relink::Revoked` says the 401 cleared the token still current; it
+/// carries `rt`'s link generation read under the clear's lock, so
+/// `end_scan` honours it only if no link change came after the clear.
+pub fn upload_refused(
+    shared: &Shared,
+    rt: &Runtime,
+    origin: &str,
+    sent: &DeviceToken,
+) -> (Line, Relink) {
+    let relink = match shared.clear_token_if_with(origin, sent, || rt.link_gen()) {
+        Ok(Some(cleared_at)) => Relink::Revoked(cleared_at),
+        Ok(None) | Err(_) => Relink::Refused,
     };
     let line = Line::new(LineStatus::LinkDevice, "Re-link this device");
     (line, relink)
@@ -997,9 +1014,10 @@ pub enum Relink {
     /// A 401 that cleared nothing (the token was replaced or already gone):
     /// it stops the scan, but a stale scan's link state ignores it.
     Refused,
-    /// A 401 that cleared the current server's still-stored token: the
-    /// device is unlinked now, however stale the scan.
-    Revoked,
+    /// A 401 that cleared the current server's still-stored token, with the
+    /// link generation at the clear: the device is unlinked now, however
+    /// stale the scan — unless the link changed after the clear.
+    Revoked(u64),
 }
 
 impl Relink {
@@ -1009,6 +1027,7 @@ impl Relink {
     }
 }
 
+#[cfg(test)]
 impl From<bool> for Relink {
     /// `true` is a 401 that cleared nothing; `false` is no 401.
     fn from(stopped: bool) -> Self {

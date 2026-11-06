@@ -66,13 +66,25 @@ impl Shared {
     /// a server switch) between the request and its 401 keeps the new
     /// credential. Returns whether the token was cleared.
     pub fn clear_token_if(&self, origin: &str, sent: &DeviceToken) -> Result<bool, TokenError> {
+        Ok(self.clear_token_if_with(origin, sent, || ())?.is_some())
+    }
+
+    /// `clear_token_if`, running `on_clear` under the same lock once the
+    /// token is cleared: whatever it reads (the link generation) predates
+    /// any re-link's `save_token`. `None` when nothing was cleared.
+    pub fn clear_token_if_with<R>(
+        &self,
+        origin: &str,
+        sent: &DeviceToken,
+        on_clear: impl FnOnce() -> R,
+    ) -> Result<Option<R>, TokenError> {
         let _w = lock(&self.token_write);
         let cfg = lock(&self.config);
         if cfg.server_url != origin || self.tokens.load(origin)?.as_ref() != Some(sent) {
-            return Ok(false);
+            return Ok(None);
         }
         self.tokens.clear(origin)?;
-        Ok(true)
+        Ok(Some(on_clear()))
     }
 
     /// Forget the token for the current origin (401 or user "Unlink").
