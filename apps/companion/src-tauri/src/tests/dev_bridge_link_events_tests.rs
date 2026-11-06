@@ -386,3 +386,44 @@ fn a_link_after_the_401_cleared_the_token_keeps_the_new_link_at_scan_end() {
         "the new link was overwritten"
     );
 }
+
+#[test]
+fn a_switch_mid_scan_then_a_401_that_cleared_nothing_stays_linked() {
+    use crate::token::DeviceToken;
+    let (a, b) = ("https://raid.example", "https://other.example");
+    let shared = shared_on("upload-401-switch-cleared-nothing", a);
+    let (rt, _) = runtime("upload-401-switch-cleared-nothing-rt");
+    let token = DeviceToken::parse(super::TOKEN).expect("token");
+    shared.save_token(a, &token).expect("save A");
+    shared.save_token(b, &token).expect("save B");
+    scan(&rt, Ok(true), uploaded_lines());
+    // The scan sent A's token; the user switches to the linked B before its 401.
+    let gen = rt.begin_scan();
+    shared
+        .update_config(|c| c.server_url = b.to_owned())
+        .expect("to B");
+    rt.server_changed(true);
+    let (line, stop) = crate::runtime::upload_refused(&shared, &rt, a, &token);
+    assert_eq!(
+        stop,
+        crate::runtime::Relink::Refused,
+        "A's 401 cleared something"
+    );
+    let lines = BTreeMap::from([(WOW.to_owned(), line)]);
+    rt.end_scan(gen, false, Ok(true), lines, stop);
+    assert!(
+        shared.token().expect("load").is_some(),
+        "B's token was cleared"
+    );
+    let snap = rt.snapshot(&both_on());
+    assert!(
+        !snap.relink,
+        "a stale 401 that cleared nothing raised a re-link"
+    );
+    let body = collectors_body(&snap, false);
+    assert_eq!(
+        body["linked"],
+        Value::Bool(true),
+        "a stale 401 that cleared nothing unlinked B"
+    );
+}
