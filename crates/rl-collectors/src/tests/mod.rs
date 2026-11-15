@@ -34,6 +34,7 @@ mod robustness_tests;
 mod schema_tests;
 mod settle_tests;
 mod vdf_tests;
+mod wow_sv_dev_probe_tests;
 mod wow_sv_dev_tests;
 mod wow_sv_paths_tests;
 mod wow_sv_robustness_tests;
