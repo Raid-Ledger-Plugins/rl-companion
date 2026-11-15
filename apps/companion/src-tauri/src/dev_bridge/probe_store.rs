@@ -121,7 +121,12 @@ impl ProbeStore {
             recs[i].status = ProbeStatus::Queued;
             return Err(e);
         }
-        let _ = self.save(&recs);
+        // Unsaved, a restart would bring it back as queued: undo instead.
+        if let Err(e) = self.save(&recs) {
+            recs[i].status = ProbeStatus::Queued;
+            let _ = write_queue(wow_dir, &recs, &flavor, now);
+            return Err(ProbeStoreError::Persist(e));
+        }
         Ok(recs[i].clone())
     }
 

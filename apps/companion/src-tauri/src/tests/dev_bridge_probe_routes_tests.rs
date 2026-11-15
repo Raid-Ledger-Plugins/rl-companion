@@ -352,6 +352,25 @@ fn a_probe_expires_after_its_ttl() {
 }
 
 #[test]
+fn an_answer_read_after_the_ttl_is_still_applied() {
+    let e = env("late-answer", true);
+    let id = e.queued(&professions());
+    write_answers(&e.wow, &[(&id, result_for(&id).to_string())]);
+    refresh(&e.store, &e.ctx.snapshot().wow_dir, now_secs() + 73 * 3600);
+    let (s, d) = e.detail(&id, None);
+    assert_eq!((s, d["status"].clone()), (200, json!("answered")));
+}
+
+#[test]
+fn a_g_prefixed_name_bearing_fn_is_held_to_presence_only() {
+    let req = json!({ "calls": [{ "id": "me", "fn": "_G.UnitName" }] });
+    let leak = json!({ "calls": [{ "id": "me", "status": "ok", "values": ["Somebody"] }] });
+    assert!(check_name_bearing(&req, &leak).is_err());
+    let ok = json!({ "calls": [{ "id": "me", "status": "ok", "values": ["function"] }] });
+    assert_eq!(check_name_bearing(&req, &ok), Ok(()));
+}
+
+#[test]
 fn delete_cancels_idempotently_and_refuses_finished_probes() {
     let e = env("delete", true);
     let id = e.queued(&professions());

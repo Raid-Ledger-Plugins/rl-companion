@@ -14,12 +14,14 @@ pub fn queue_json(entries: &[Value]) -> String {
     json!({ "queueVersion": QUEUE_VERSION, "probes": entries }).to_string()
 }
 
-/// The smallest long-bracket level whose closing `]=…=]` the text never
-/// holds, so the JSON cannot end the Lua string early.
+/// The smallest long-bracket level, at least 1, whose closing `]=…=]` the
+/// text never holds, so the JSON cannot end the Lua string early. Level 0 is
+/// never used: WoW's Lua 5.1 (`LUA_COMPAT_LSTR`) refuses a `[[` nested inside
+/// a `[[ … ]]` string, so a title or arg holding `[[` would break the file.
 pub fn bracket_level(text: &str) -> usize {
-    (0..)
+    (1..)
         .find(|n| !text.contains(&format!("]{}]", "=".repeat(*n))))
-        .unwrap_or(0)
+        .unwrap_or(1)
 }
 
 /// The whole DevQueue.lua file. The JSON never starts with a newline, so

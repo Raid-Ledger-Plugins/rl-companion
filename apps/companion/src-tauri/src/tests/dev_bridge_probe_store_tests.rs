@@ -77,9 +77,13 @@ fn the_queue_fixture_round_trips_through_the_long_bracket() {
 
 #[test]
 fn the_bracket_level_escalates_past_every_closer_in_the_json() {
-    assert_eq!(bracket_level(r#"{"a":"x"}"#), 0);
-    assert_eq!(bracket_level(r#"{"a":"]]"}"#), 1);
-    assert_eq!(bracket_level(r#"{"a":"]] ]=]"}"#), 2);
+    assert_eq!(bracket_level(r#"{"a":"x"}"#), 1, "never level 0");
+    assert_eq!(
+        bracket_level(r#"{"a":"[[ ]]"}"#),
+        1,
+        "[[ is safe at level 1"
+    );
+    assert_eq!(bracket_level(r#"{"a":"]=]"}"#), 2);
     assert_eq!(bracket_level(r#"{"a":"]] ]=] ]==]"}"#), 3);
     let entry = json!({ "a": "]] ]=] ]==]" });
     let text = render(std::slice::from_ref(&entry));

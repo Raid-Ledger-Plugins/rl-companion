@@ -1,6 +1,7 @@
-//! Probe answer ingest (ROK-2191): expire due probes, then read each flavor's
-//! account-scope `LedgerLink.lua` (`LedgerLinkDB.dev.probes`) and settle every
-//! queued probe LedgerLink answered — `answered` when the result validates and
+//! Probe answer ingest (ROK-2191): read each flavor's account-scope
+//! `LedgerLink.lua` (`LedgerLinkDB.dev.probes`) and settle every queued probe
+//! LedgerLink answered, then expire the rest that are past their ttl (answers
+//! first, so one stored in time but read late is not thrown away) — `answered` when the result validates and
 //! keeps name-bearing calls presence-only, else `rejected`. Runs before every
 //! probe route and on the 30 s poll. Result values are never logged.
 
@@ -13,14 +14,13 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Expire, then apply every stored answer to its queued probe.
+/// Apply every stored answer to its queued probe, then expire.
 pub fn refresh(store: &ProbeStore, wow_dir: &str, now: i64) {
     let dir = wow_dir.trim();
     if dir.is_empty() {
         return;
     }
     let wow = Path::new(dir);
-    store.expire_due(wow, now);
     let queued = store.list(Some(ProbeStatus::Queued));
     let mut flavors: Vec<&str> = queued.iter().map(|r| r.flavor.as_str()).collect();
     flavors.sort_unstable();
@@ -33,6 +33,7 @@ pub fn refresh(store: &ProbeStore, wow_dir: &str, now: i64) {
             }
         }
     }
+    store.expire_due(wow, now);
 }
 
 /// The stored result → `Ok(result)` or `Err(why it is rejected)`.
@@ -69,7 +70,7 @@ pub fn check_name_bearing(request: &Value, result: &Value) -> Result<(), String>
     let results = result.get("calls").and_then(Value::as_array);
     for call in calls.into_iter().flatten() {
         let named = call.get("fn").and_then(Value::as_str);
-        if !named.is_some_and(|f| NAME_BEARING_FNS.contains(&f)) {
+        if !named.is_some_and(is_name_bearing) {
             continue;
         }
         let id = call.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -86,6 +87,13 @@ pub fn check_name_bearing(request: &Value, result: &Value) -> Result<(), String>
         }
     }
     Ok(())
+}
+
+/// By the path's LAST segment, so `_G.UnitName` (an alias LedgerLink may
+/// resolve to the same function) is held to presence-only too.
+fn is_name_bearing(path: &str) -> bool {
+    let leaf = path.rsplit('.').next().unwrap_or(path);
+    NAME_BEARING_FNS.contains(&leaf)
 }
 
 fn presence_only(item: &Value) -> bool {
