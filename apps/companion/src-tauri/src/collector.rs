@@ -9,9 +9,6 @@ use std::path::{Path, PathBuf};
 /// File in the app data dir holding [`SentState`].
 pub const SENT_STATE_FILE: &str = "sent-state.json";
 
-/// The envelope's `appVersion` (`MAJOR.MINOR.PATCH`).
-pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-
 /// Companion envelope version (envelope/v1).
 pub const ENVELOPE_VERSION: u32 = 1;
 
@@ -125,7 +122,7 @@ pub fn envelope(contract: &str, contract_version: u32, captured_at: &str, payloa
         "contract": contract,
         "contractVersion": contract_version,
         "capturedAt": captured_at,
-        "appVersion": APP_VERSION,
+        "appVersion": crate::app_version::get(),
         "collectorVersion": rl_collectors::COLLECTOR_VERSION,
         "payload": payload,
     })

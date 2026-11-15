@@ -25,7 +25,7 @@ pub fn health(input: &HealthInput<'_>) -> Value {
     };
     json!({
         "app": "rl-companion",
-        "appVersion": env!("CARGO_PKG_VERSION"),
+        "appVersion": crate::app_version::get(),
         "bridgeVersion": 1,
         "devMode": true,
         "probesEnabled": input.probes_enabled,

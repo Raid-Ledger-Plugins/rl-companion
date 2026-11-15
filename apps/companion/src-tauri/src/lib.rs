@@ -4,6 +4,7 @@
 //! and the collector runtime (lane C-3): watch WoW's `LedgerLink.lua`, settle,
 //! upload changed exports, honour the tray's Upload now / Pause.
 
+pub mod app_version;
 pub mod autostart;
 pub mod bg3_campaigns;
 pub mod bg3_collector;
@@ -66,6 +67,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            app_version::set(app.package_info().version.to_string());
             let config_dir = app.path().app_config_dir()?;
             let shared = state::Shared::new(
                 config_dir.join(state::CONFIG_FILE),
