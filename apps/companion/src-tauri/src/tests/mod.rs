@@ -22,6 +22,7 @@ mod dev_bridge_lifecycle_tests;
 mod dev_bridge_link_events_tests;
 mod dev_bridge_probe_request_tests;
 mod dev_bridge_probe_result_tests;
+mod dev_bridge_probe_routes_tests;
 mod dev_bridge_probe_store_tests;
 mod dev_bridge_routes_tests;
 mod dev_bridge_server_tests;

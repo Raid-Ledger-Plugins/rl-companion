@@ -89,9 +89,6 @@ fn post(snap: &Snapshot, body: &ReqBody, now: i64) -> Res {
     if !snap.probes_enabled {
         return disabled();
     }
-    let Some(store) = snap.probe_store.as_deref() else {
-        return internal();
-    };
     let json = match parse_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -99,6 +96,9 @@ fn post(snap: &Snapshot, body: &ReqBody, now: i64) -> Res {
     let req = match validate(&json) {
         Ok(r) => r,
         Err(issues) => return (400, error_body(&issues)),
+    };
+    let Some(store) = snap.probe_store.as_deref() else {
+        return internal();
     };
     match store.submit(Path::new(snap.wow_dir.trim()), &req, now) {
         Ok(rec) => (
