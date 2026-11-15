@@ -18,7 +18,7 @@ pub const SNAPSHOT_HEAD_MAX_BYTES: usize = 4_096;
 pub const RESULT_ITEM_MAX_BYTES: usize = 3_072;
 /// Zod 4 `.int()` bounds: ±(2^53 − 1).
 const MAX_SAFE_INT: i64 = (1 << 53) - 1;
-const LUA_TYPES: &[&str] = &[
+pub const LUA_TYPES: &[&str] = &[
     "nil", "function", "table", "string", "number", "boolean", "userdata", "thread",
 ];
 

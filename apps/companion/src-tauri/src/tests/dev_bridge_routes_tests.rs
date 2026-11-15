@@ -34,6 +34,7 @@ fn snap(wow: &Path) -> Snapshot {
         wow_dir: wow.to_string_lossy().into_owned(),
         probes_enabled: false,
         snapshot_cache: None,
+        probe_store: None,
     }
 }
 

@@ -74,6 +74,7 @@ pub async fn poll_loop(ctx: Arc<ServerCtx>) {
         };
         let prune = std::mem::replace(&mut first, false);
         let wow = snap.wow_dir;
+        let probes = snap.probe_store;
         let live = ctx.clone();
         let _ = tokio::task::spawn_blocking(move || {
             // `abort()` in `shut` cancels the await, not this closure: one
@@ -86,6 +87,9 @@ pub async fn poll_loop(ctx: Arc<ServerCtx>) {
                 cache.prune(now);
             }
             poll_once(&cache, &wow, now);
+            if let Some(store) = probes {
+                super::probe_ingest::refresh(&store, &wow, now);
+            }
         })
         .await;
     }

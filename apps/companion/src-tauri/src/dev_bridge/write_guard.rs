@@ -1,27 +1,31 @@
-//! The one function the dev bridge writes files through (spec §7, AC-13).
-//! Only `<wowDir>/<flavor>/Interface/AddOns/LedgerLinkProbe/…` is writable —
-//! `Queue.lua` and the bundled probe-addon files (C4). Every other target is
-//! refused before anything touches the disk.
+//! The one function the dev bridge writes WoW files through (spec §7, AC-13).
+//! Exactly one file is writable: `<wowDir>/<flavor>/Interface/AddOns/
+//! LedgerLink/DevQueue.lua`, the probe queue LedgerLink reads under
+//! `/rl dev on` (ROK-2191). LedgerLink is a real addon, so its code and every
+//! other file in its folder stay unwritable, and the folder is never created:
+//! a missing LedgerLink install is [`WriteGuardError::NotInstalled`].
 
 use super::health::is_flavor;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-pub const PROBE_ADDON: &str = "LedgerLinkProbe";
-pub const QUEUE_FILE: &str = "Queue.lua";
+pub const LEDGERLINK_ADDON: &str = "LedgerLink";
+pub const QUEUE_FILE: &str = "DevQueue.lua";
 
 #[derive(Debug, thiserror::Error)]
 pub enum WriteGuardError {
     #[error("not a WoW flavor folder: {0}")]
     BadFlavor(String),
-    #[error("refused to write outside the probe addon folder: {0}")]
+    #[error("refused to write anything but LedgerLink's DevQueue.lua: {0}")]
     Outside(PathBuf),
+    #[error("LedgerLink is not installed for this flavor: {0}")]
+    NotInstalled(PathBuf),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
-/// `<wowDir>/<flavor>/Interface/AddOns/LedgerLinkProbe`.
-pub fn probe_addon_dir(wow_dir: &Path, flavor: &str) -> Result<PathBuf, WriteGuardError> {
+/// `<wowDir>/<flavor>/Interface/AddOns/LedgerLink`.
+pub fn ledgerlink_dir(wow_dir: &Path, flavor: &str) -> Result<PathBuf, WriteGuardError> {
     if !is_flavor(flavor) {
         return Err(WriteGuardError::BadFlavor(flavor.to_owned()));
     }
@@ -29,15 +33,16 @@ pub fn probe_addon_dir(wow_dir: &Path, flavor: &str) -> Result<PathBuf, WriteGua
         .join(flavor)
         .join("Interface")
         .join("AddOns")
-        .join(PROBE_ADDON))
+        .join(LEDGERLINK_ADDON))
 }
 
+/// `<wowDir>/<flavor>/Interface/AddOns/LedgerLink/DevQueue.lua`.
 pub fn queue_path(wow_dir: &Path, flavor: &str) -> Result<PathBuf, WriteGuardError> {
-    Ok(probe_addon_dir(wow_dir, flavor)?.join(QUEUE_FILE))
+    Ok(ledgerlink_dir(wow_dir, flavor)?.join(QUEUE_FILE))
 }
 
-/// Lexical check: `target` is a file strictly inside a flavor's probe addon
-/// folder, reached through plain path segments only (no `..`, roots, drives).
+/// Lexical check: `target` is exactly a flavor's LedgerLink `DevQueue.lua`,
+/// reached through plain path segments only (no `..`, roots, drives).
 pub fn assert_allowed(wow_dir: &Path, target: &Path) -> Result<(), WriteGuardError> {
     let outside = || WriteGuardError::Outside(target.to_path_buf());
     let rel = target.strip_prefix(wow_dir).map_err(|_| outside())?;
@@ -48,23 +53,19 @@ pub fn assert_allowed(wow_dir: &Path, target: &Path) -> Result<(), WriteGuardErr
             _ => return Err(outside()),
         }
     }
-    let ok = parts.len() >= 5
-        && is_flavor(parts[0])
-        && parts[1] == "Interface"
-        && parts[2] == "AddOns"
-        && parts[3] == PROBE_ADDON;
-    if ok {
-        Ok(())
-    } else {
-        Err(outside())
+    match parts.as_slice() {
+        [flavor, "Interface", "AddOns", LEDGERLINK_ADDON, QUEUE_FILE] if is_flavor(flavor) => {
+            Ok(())
+        }
+        _ => Err(outside()),
     }
 }
 
 /// Write `bytes` to `target` atomically (temp file + rename). Every folder
-/// from `wow_dir` down is checked BEFORE anything is created: a symlinked or
-/// redirected step is refused, and the resolved parent must sit inside the
-/// flavor's probe addon folder. The temp file is opened `create_new`, so a
-/// link planted at its name is never followed.
+/// from `wow_dir` down must already exist as a real folder (never a link,
+/// never redirected) — nothing is created; a missing step is `NotInstalled`.
+/// The resolved parent must BE the flavor's LedgerLink folder. The temp file
+/// is opened `create_new`, so a link planted at its name is never followed.
 pub fn guarded_write(wow_dir: &Path, target: &Path, bytes: &[u8]) -> Result<(), WriteGuardError> {
     assert_allowed(wow_dir, target)?;
     let outside = || WriteGuardError::Outside(target.to_path_buf());
@@ -79,13 +80,15 @@ pub fn guarded_write(wow_dir: &Path, target: &Path, bytes: &[u8]) -> Result<(), 
             Ok(m) if m.file_type().is_symlink() || !m.is_dir() => return Err(outside()),
             Ok(_) if !same_path(&std::fs::canonicalize(&cur)?, &expect) => return Err(outside()),
             Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&cur)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(WriteGuardError::NotInstalled(parent.to_path_buf()))
+            }
             Err(e) => return Err(e.into()),
         }
     }
     let flavor = rel.components().next().ok_or_else(outside)?;
-    let probe_root = probe_addon_dir(&real_root, &flavor.as_os_str().to_string_lossy())?;
-    if !path_inside(&std::fs::canonicalize(parent)?, &probe_root) {
+    let ll_root = ledgerlink_dir(&real_root, &flavor.as_os_str().to_string_lossy())?;
+    if !same_path(&std::fs::canonicalize(parent)?, &ll_root) {
         return Err(outside());
     }
     Ok(write_new_then_rename(target, bytes, None)?)
@@ -116,6 +119,12 @@ pub fn lower_parts(p: &Path) -> Vec<String> {
     p.components()
         .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
         .collect()
+}
+
+/// Atomic write of a companion-owned file outside the WoW folder (the probe
+/// store under the app data dir).
+pub fn write_atomic(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_new_then_rename(target, bytes, None)
 }
 
 /// Atomic write of a secret (the TLS key): owner-only (0600) on unix.

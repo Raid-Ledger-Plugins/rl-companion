@@ -7,6 +7,7 @@
 const ALLOWED: &[(&str, &str)] = &[
     ("Mailworthy", "Mailworthy.lua"),
     ("!BugGrabber", "!BugGrabber.lua"),
+    ("DungeonBuddy", "DungeonBuddy.lua"),
 ];
 
 /// The route's `<folder>` segment of `path`, still percent-encoded, or `None`

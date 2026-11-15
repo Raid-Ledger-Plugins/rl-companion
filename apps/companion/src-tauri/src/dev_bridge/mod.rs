@@ -17,10 +17,26 @@ pub mod bind;
 pub mod collectors;
 pub mod commands;
 pub mod conn_budget;
+pub mod denial_log;
 pub mod events;
 pub mod health;
 pub mod logbuf;
 pub mod paging;
+pub mod probe_allowlist;
+pub mod probe_detail;
+pub mod probe_flavor;
+pub mod probe_id;
+pub mod probe_ingest;
+pub mod probe_queue;
+pub mod probe_record;
+pub mod probe_request;
+pub mod probe_request_call;
+pub mod probe_request_rules;
+pub mod probe_result;
+pub mod probe_result_page;
+pub mod probe_routes;
+pub mod probe_store;
+pub mod request_body;
 pub mod routes;
 pub mod server;
 pub mod settings;
@@ -33,6 +49,7 @@ pub mod token;
 pub mod write_guard;
 
 use crate::config::AppConfig;
+use probe_store::ProbeStore;
 use serde::Serialize;
 use server::{ServerCtx, Snapshot};
 use settings::DevBridgeConfig;
@@ -92,6 +109,7 @@ pub fn snapshot(cfg: &AppConfig) -> Snapshot {
         wow_dir: cfg.wow_dir.clone(),
         probes_enabled: b.probes_enabled,
         snapshot_cache: None,
+        probe_store: None,
     }
 }
 
@@ -101,6 +119,8 @@ pub struct DevBridge {
     running: Mutex<Option<Running>>,
     /// `<app_data_dir>/dev-bridge/snapshots` (ROK-2072); served only while listening.
     cache: Option<Arc<SnapshotCache>>,
+    /// `<app_data_dir>/dev-bridge/probes.json` (ROK-2191); served only while listening.
+    probes: Option<Arc<ProbeStore>>,
 }
 
 impl DevBridge {
@@ -110,6 +130,7 @@ impl DevBridge {
             ctx: Arc::new(ServerCtx::default()),
             running: Mutex::new(None),
             cache: app_data_dir.map(|d| Arc::new(SnapshotCache::in_app_data(d))),
+            probes: app_data_dir.map(|d| Arc::new(ProbeStore::in_app_data(d))),
         }
     }
 
@@ -121,6 +142,7 @@ impl DevBridge {
             ctx: Arc::new(ctx),
             running: Mutex::new(None),
             cache: None,
+            probes: None,
         }
     }
 
@@ -130,6 +152,7 @@ impl DevBridge {
         let mut snap = snapshot(cfg);
         if on {
             snap.snapshot_cache = self.cache.clone();
+            snap.probe_store = self.probes.clone();
         } else {
             snap.policy = auth::AuthPolicy::default();
         }
@@ -239,6 +262,7 @@ impl DevBridge {
         let mut snap = snapshot(cfg);
         if desired(&cfg.dev_bridge).is_ok_and(|w| w.is_some()) {
             snap.snapshot_cache = self.cache.clone();
+            snap.probe_store = self.probes.clone();
         }
         self.ctx.set_snapshot(snap);
     }

@@ -33,6 +33,7 @@ fn ctx(log: &'static EventLog) -> ServerCtx {
         wow_dir: String::new(),
         probes_enabled: false,
         snapshot_cache: None,
+        probe_store: None,
     });
     ctx
 }

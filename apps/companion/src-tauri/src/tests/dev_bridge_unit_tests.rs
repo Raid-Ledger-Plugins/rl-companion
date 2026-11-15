@@ -239,9 +239,11 @@ fn health_body_validates_against_the_pinned_schema() {
 }
 
 #[test]
-fn guarded_write_only_reaches_the_probe_addon_folder() {
+fn guarded_write_only_reaches_ledgerlinks_dev_queue() {
     let wow = super::temp_dir("bridge-guard");
     let queue = queue_path(&wow, "_classic_era_").expect("flavor ok");
+    assert!(queue.ends_with("_classic_era_/Interface/AddOns/LedgerLink/DevQueue.lua"));
+    std::fs::create_dir_all(queue.parent().expect("parent")).expect("install LedgerLink");
     guarded_write(&wow, &queue, b"RaidLedgerProbeQueue = [==[{}]==]").expect("queue write");
     assert_eq!(
         std::fs::read(&queue).expect("read"),
@@ -254,9 +256,13 @@ fn guarded_write_only_reaches_the_probe_addon_folder() {
     let refused = [
         wow.join("_classic_era_/WTF/Account/A/SavedVariables/LedgerLink.lua"),
         wow.join("_classic_era_/Interface/AddOns/LedgerLink/LedgerLink.lua"),
-        wow.join("_classic_era_/Interface/AddOns/LedgerLinkProbe/../LedgerLink/x.lua"),
-        wow.join("_classic_era_/Interface/AddOns/LedgerLinkProbe"),
-        wow.join("Data/Interface/AddOns/LedgerLinkProbe/Queue.lua"),
+        wow.join("_classic_era_/Interface/AddOns/LedgerLink/LedgerLink.toc"),
+        wow.join("_classic_era_/Interface/AddOns/LedgerLink/sub/DevQueue.lua"),
+        wow.join("_classic_era_/Interface/AddOns/LedgerLink/../LedgerLink/DevQueue.lua"),
+        wow.join("_classic_era_/Interface/AddOns/LedgerLink"),
+        wow.join("_classic_era_/Interface/AddOns/LedgerLinkProbe/Queue.lua"),
+        wow.join("_classic_era_/Interface/AddOns/LedgerLinkProbe/DevQueue.lua"),
+        wow.join("Data/Interface/AddOns/LedgerLink/DevQueue.lua"),
         std::env::temp_dir().join("elsewhere.lua"),
     ];
     for target in refused {
@@ -274,6 +280,32 @@ fn guarded_write_only_reaches_the_probe_addon_folder() {
             target.display()
         );
     }
+    let code = wow.join("_classic_era_/Interface/AddOns/LedgerLink/LedgerLink.lua");
+    assert!(!code.exists(), "LedgerLink's own code was written");
+    let _ = std::fs::remove_dir_all(wow);
+}
+
+#[test]
+fn guarded_write_never_creates_a_missing_ledgerlink_folder() {
+    let wow = super::temp_dir("bridge-guard-missing");
+    let addons = wow.join("_anniversary_/Interface/AddOns");
+    std::fs::create_dir_all(&addons).expect("mkdir AddOns");
+    let queue = queue_path(&wow, "_anniversary_").expect("flavor ok");
+    let got = guarded_write(&wow, &queue, b"Q");
+    assert!(
+        matches!(got, Err(WriteGuardError::NotInstalled(_))),
+        "LedgerLink missing must be NotInstalled, got {got:?}"
+    );
+    assert!(
+        !addons.join("LedgerLink").exists(),
+        "LedgerLink folder created"
+    );
+    let bare = queue_path(&wow, "_retail_").expect("flavor ok");
+    assert!(matches!(
+        guarded_write(&wow, &bare, b"Q"),
+        Err(WriteGuardError::NotInstalled(_))
+    ));
+    assert!(!wow.join("_retail_").exists(), "flavor folder created");
     let _ = std::fs::remove_dir_all(wow);
 }
 
@@ -281,8 +313,8 @@ fn guarded_write_only_reaches_the_probe_addon_folder() {
 fn write_guard_compares_folder_case_like_the_filesystem() {
     use crate::dev_bridge::write_guard::{lower_parts, path_inside, same_path};
     use std::path::Path;
-    let built = Path::new("C:/WoW/_retail_/Interface/AddOns/LedgerLinkProbe");
-    let on_disk = Path::new("C:/WoW/_retail_/Interface/Addons/LedgerLinkProbe");
+    let built = Path::new("C:/WoW/_retail_/Interface/AddOns/LedgerLink");
+    let on_disk = Path::new("C:/WoW/_retail_/Interface/Addons/LedgerLink");
     assert_eq!(
         lower_parts(built),
         lower_parts(on_disk),

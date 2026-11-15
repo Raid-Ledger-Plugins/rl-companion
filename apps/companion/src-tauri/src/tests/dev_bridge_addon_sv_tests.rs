@@ -1,5 +1,5 @@
 //! `GET /dev/v1/addons/<folder>/sv` (`sv-raw`): only the fixed allowlist
-//! (`Mailworthy`, `!BugGrabber`, literal or percent-encoded) is served, with
+//! (`Mailworthy`, `!BugGrabber`, `DungeonBuddy`, literal or percent-encoded) is served, with
 //! the same paging/cursor/file choice as `/dev/v1/ledgerlink/sv`; anything
 //! else is 404 and the ledgerlink route still reads only `LedgerLink.lua`.
 
@@ -320,4 +320,21 @@ fn a_symlinked_sv_file_is_not_followed_on_either_route() {
         json!(acct_rel("!BugGrabber.lua")),
         "an unlinked sibling is still served"
     );
+}
+
+#[test]
+fn dungeon_buddy_account_file_is_served() {
+    let wow = super::temp_dir("addon-sv-dungeonbuddy");
+    let rel = acct_rel("DungeonBuddy.lua");
+    write(
+        &wow.join(&rel),
+        b"DungeonBuddyDB = {\n\t[\"ranges\"] = { 15, 25 },\n}\n",
+    );
+    let c = ctx(&wow);
+    let q = format!("flavor={FLAVOR}");
+    let all = pages(&c, "/dev/v1/addons/DungeonBuddy/sv", "sv-raw", &q);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0]["path"], json!(rel));
+    assert_eq!(joined(&all), text_of(&wow, &rel));
+    not_found(&c, "/dev/v1/addons/dungeonbuddy/sv", &q);
 }

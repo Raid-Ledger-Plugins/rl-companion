@@ -6,17 +6,21 @@ use super::bg3_routes;
 use super::bg3_saves::Bg3Source;
 use super::bind;
 use super::conn_budget::{ConnBudget, Slot};
+pub use super::denial_log::{DenialLog, DENIAL_LOG_WINDOW};
 use super::events::{self, EventLog};
 use super::health::{health, HealthInput};
 use super::logbuf::{self, LogBuffer};
 use super::paging::parse_query;
+use super::probe_routes;
+use super::probe_store::ProbeStore;
+use super::request_body::{self, ReqBody};
 use super::routes::{self, CollectorsFn};
 use super::snapshot_cache::SnapshotCache;
+use super::snapshot_routes::now_secs;
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::{header, Method, Request, Response};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// Says whether an IPv4 is still an address of this PC (injectable for tests).
@@ -41,10 +45,6 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// How often the listener re-checks that its bound IP is still this PC's
 /// (spec §7 fallback for the network-profile watch).
 pub const BIND_CHECK_INTERVAL: Duration = Duration::from_secs(30);
-/// Refused requests are logged at most once per host per window, without
-/// the path, so a LAN host can neither flush nor write into the audit ring.
-pub const DENIAL_LOG_WINDOW: Duration = Duration::from_secs(60);
-const DENIAL_LOG_MAX_HOSTS: usize = 256;
 
 /// The config slice requests are served from; swapped on every reconcile so
 /// allowlist/token changes apply without a restart.
@@ -55,6 +55,8 @@ pub struct Snapshot {
     pub probes_enabled: bool,
     /// The dev snapshot cache (ROK-2072); `None` while the listener is off.
     pub snapshot_cache: Option<Arc<SnapshotCache>>,
+    /// The probe store (ROK-2191); `None` while the listener is off.
+    pub probe_store: Option<Arc<ProbeStore>>,
 }
 
 pub struct ServerCtx {
@@ -80,43 +82,6 @@ pub struct Routed {
     pub status: u16,
     pub body: Value,
     pub admitted: bool,
-}
-
-/// Per-host rate limit for audit lines about refused requests.
-#[derive(Debug, Default)]
-pub struct DenialLog(HashMap<IpAddr, (Instant, u32)>);
-
-impl DenialLog {
-    /// Count a refusal from `ip`. Returns the line to log — the first refusal
-    /// per host per window (with the count held back since), else `None`.
-    /// Never contains request text. Past the host cap, hosts share one bucket.
-    pub fn note(&mut self, ip: IpAddr, status: u16, now: Instant) -> Option<String> {
-        let live = |t: &Instant| now.duration_since(*t) < DENIAL_LOG_WINDOW;
-        if self.0.len() >= DENIAL_LOG_MAX_HOSTS && !self.0.contains_key(&ip) {
-            self.0.retain(|_, (t, _)| live(t));
-        }
-        let key = if self.0.len() >= DENIAL_LOG_MAX_HOSTS && !self.0.contains_key(&ip) {
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
-        } else {
-            ip
-        };
-        if let Some((since, held)) = self.0.get_mut(&key) {
-            if live(since) {
-                *held += 1;
-                return None;
-            }
-        }
-        let held = self.0.get(&key).map_or(0, |e| e.1);
-        self.0.insert(key, (now, 0));
-        let who = if key.is_unspecified() {
-            "other hosts".to_owned()
-        } else {
-            key.to_string()
-        };
-        Some(format!(
-            "refused {status} from {who} (path not logged; {held} more refused since the last line)"
-        ))
-    }
 }
 
 impl Default for ServerCtx {
@@ -224,23 +189,56 @@ impl ServerCtx {
         query: Option<&str>,
         auth: Option<&str>,
     ) -> Routed {
+        self.route_full(peer, method, path, query, auth, &ReqBody::None)
+    }
+
+    /// [`Self::route_audited`] with a request body (`POST /dev/v1/probes`).
+    pub fn route_full(
+        &self,
+        peer: IpAddr,
+        method: &Method,
+        path: &str,
+        query: Option<&str>,
+        auth: Option<&str>,
+        body: &ReqBody,
+    ) -> Routed {
         let snap = self.snapshot();
+        match self.admit_peer(&snap, peer, auth) {
+            Ok(()) => self.dispatch_admitted(&snap, method, path, query, body),
+            Err(denied) => denied,
+        }
+    }
+
+    /// Admission (allowlist, token, lockout); runs before any body is read.
+    pub(crate) fn admit_peer(
+        &self,
+        snap: &Snapshot,
+        peer: IpAddr,
+        auth: Option<&str>,
+    ) -> Result<(), Routed> {
         let denied = |status: u16, code: &str| Routed {
             status,
             body: json!({ "error": code }),
             admitted: false,
         };
         let IpAddr::V4(ip) = peer else {
-            return denied(403, "forbidden");
+            return Err(denied(403, "forbidden"));
         };
-        let admitted = {
-            let mut lockout = self.lockout.lock().unwrap_or_else(|p| p.into_inner());
-            admit(&snap.policy, &mut lockout, ip, auth, Instant::now())
-        };
-        if let Err(d) = admitted {
-            return denied(d.status(), d.code());
-        }
-        let (status, body) = self.dispatch(&snap, method, path, query);
+        let mut lockout = self.lockout.lock().unwrap_or_else(|p| p.into_inner());
+        admit(&snap.policy, &mut lockout, ip, auth, Instant::now())
+            .map_err(|d| denied(d.status(), d.code()))
+    }
+
+    /// Route an already-admitted request.
+    pub(crate) fn dispatch_admitted(
+        &self,
+        snap: &Snapshot,
+        method: &Method,
+        path: &str,
+        query: Option<&str>,
+        body: &ReqBody,
+    ) -> Routed {
+        let (status, body) = self.dispatch(snap, method, path, query, body);
         Routed {
             status,
             body,
@@ -254,7 +252,11 @@ impl ServerCtx {
         method: &Method,
         path: &str,
         query: Option<&str>,
+        body: &ReqBody,
     ) -> (u16, Value) {
+        if let Some(r) = probe_routes::dispatch(snap, method, path, query, body, now_secs()) {
+            return r;
+        }
         match (method, path) {
             (&Method::GET, "/dev/v1/health") => (200, self.health(snap)),
             (&Method::GET, p) if p.starts_with("/dev/v1/bg3/") => {
@@ -364,31 +366,49 @@ async fn respond(
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
+    let snap = ctx.snapshot();
+    // Admission first: a refused caller's body is never read.
+    if let Err(denied) = ctx.admit_peer(&snap, peer.ip(), auth.as_deref()) {
+        return Ok(reply(&ctx, peer, &method, &path, &denied));
+    }
+    let body = if request_body::wants_body(&method, &path, snap.probes_enabled) {
+        request_body::read(req).await
+    } else {
+        ReqBody::None
+    };
     // Routes read files (SavedVariables up to 16 MiB): keep them off the
     // shared async workers.
     let job = (ctx.clone(), method.clone(), path.clone());
     let routed = tokio::task::spawn_blocking(move || {
         let (c, m, p) = job;
-        c.route_audited(peer.ip(), &m, &p, query.as_deref(), auth.as_deref())
+        c.dispatch_admitted(&snap, &m, &p, query.as_deref(), &body)
     })
     .await;
-    let routed = match routed {
-        Ok(r) => r,
-        Err(_) => {
-            // A route panicked: v1's `500 {"error":"internal"}`, then close.
-            // Logged as a refusal would be — never with the path.
-            ctx.log(
-                "warn",
-                &format!(
-                    "request from {} failed inside the bridge; answered 500 (path not logged)",
-                    peer.ip()
-                ),
-            );
-            return Ok(internal_error());
-        }
+    let Ok(routed) = routed else {
+        // A route panicked: v1's `500 {"error":"internal"}`, then close.
+        // Logged as a refusal would be — never with the path.
+        ctx.log(
+            "warn",
+            &format!(
+                "request from {} failed inside the bridge; answered 500 (path not logged)",
+                peer.ip()
+            ),
+        );
+        return Ok(internal_error());
     };
+    Ok(reply(&ctx, peer, &method, &path, &routed))
+}
+
+/// The response for `routed`, audited (never the body or query).
+fn reply(
+    ctx: &ServerCtx,
+    peer: SocketAddr,
+    method: &Method,
+    path: &str,
+    routed: &Routed,
+) -> Response<Full<Bytes>> {
     let bytes = serde_json::to_vec(&routed.body).unwrap_or_default();
-    ctx.audit(peer.ip(), &method, &path, &routed, bytes.len());
+    ctx.audit(peer.ip(), method, path, routed, bytes.len());
     let mut res = Response::new(Full::new(Bytes::from(bytes)));
     *res.status_mut() = hyper::StatusCode::from_u16(routed.status)
         .unwrap_or(hyper::StatusCode::INTERNAL_SERVER_ERROR);
@@ -403,7 +423,7 @@ async fn respond(
             header::HeaderValue::from_static("close"),
         );
     }
-    Ok(res)
+    res
 }
 
 /// `500 {"error":"internal"}` with `Connection: close`.

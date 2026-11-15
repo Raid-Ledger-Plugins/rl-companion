@@ -17,13 +17,20 @@ use std::time::{Duration, SystemTime};
 const FLAVOR: &str = "_anniversary_";
 const G1: &str = "Player-0000-0A000001";
 
-/// The minimal fixture with a distinct build (a distinct digest).
+/// The minimal fixture with a distinct build (a distinct digest), captured
+/// a minute ago: the fixture's own fixed `capturedAt` falls outside the 7-day
+/// retention once the calendar passes it, and the prune then keeps only the
+/// newest row.
 fn variant(i: i64) -> Value {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../contracts/dev-bridge/v1/fixtures/ledgerlink-snapshot--minimal.json");
     let mut v: Value =
         serde_json::from_str(&std::fs::read_to_string(p).expect("fixture")).expect("fixture json");
     v["client"]["build"] = json!(format!("{}", 1000 + i));
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    v["capturedAt"] = json!(rl_collectors::rfc3339_utc_from_unix_seconds(now - 60 + i));
     v
 }
 
@@ -155,6 +162,7 @@ async fn the_poll_ingests_a_changed_saved_variables_file() {
     ctx.set_snapshot(Snapshot {
         wow_dir: wow.to_string_lossy().into_owned(),
         snapshot_cache: Some(cache.clone()),
+        probe_store: None,
         ..Snapshot::default()
     });
     let t0 = SystemTime::now() - Duration::from_secs(60);
@@ -194,6 +202,7 @@ async fn nothing_is_ingested_or_served_while_the_bridge_is_off() {
     let on_ctx = Arc::new(ServerCtx::default());
     on_ctx.set_snapshot(Snapshot {
         snapshot_cache: Some(Arc::new(SnapshotCache::in_app_data(&control_dir))),
+        probe_store: None,
         ..served.clone()
     });
     let control = SnapshotCache::in_app_data(&control_dir);

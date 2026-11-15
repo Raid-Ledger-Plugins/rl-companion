@@ -23,8 +23,8 @@ use crate::extract::sha256_hex;
 use lua::{LuaKey, LuaValue, parse_assignments};
 
 pub use dev::{
-    DEV_SNAPSHOT_MAX_BYTES, DevSnapshotEntry, DevSnapshots, is_player_guid,
-    parse_ledgerlink_dev_snapshots,
+    DEV_PROBE_RESULT_MAX_BYTES, DEV_SNAPSHOT_MAX_BYTES, DevProbes, DevSnapshotEntry, DevSnapshots,
+    is_player_guid, is_probe_id, parse_ledgerlink_dev_probes, parse_ledgerlink_dev_snapshots,
 };
 pub use paths::{
     LEDGERLINK_SV_FILE, SvCandidate, is_flavor_folder, ledgerlink_sv_candidates, ledgerlink_sv_path,
@@ -79,6 +79,10 @@ pub enum SkipReason {
     NotAString,
     /// `dev.snapshots`: the string is over [`DEV_SNAPSHOT_MAX_BYTES`].
     SnapshotTooLarge { size: usize },
+    /// `dev.probes`: the key is not a probe id (`^[0-9A-HJKMNP-TV-Z]{26}$`).
+    BadProbeId,
+    /// `dev.probes`: the string is over [`DEV_PROBE_RESULT_MAX_BYTES`].
+    ProbeResultTooLarge { size: usize },
 }
 
 /// An outbox entry that was dropped (log it locally; never upload it).
