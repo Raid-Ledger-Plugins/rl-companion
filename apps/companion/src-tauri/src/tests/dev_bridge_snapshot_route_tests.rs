@@ -64,6 +64,7 @@ impl Env {
         Snapshot {
             wow_dir: self.wow.to_string_lossy().into_owned(),
             snapshot_cache: with_cache.then(|| self.cache.clone()),
+            probe_store: None,
             ..Snapshot::default()
         }
     }

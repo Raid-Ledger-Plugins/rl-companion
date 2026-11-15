@@ -35,6 +35,7 @@ pub enum ProbeStoreError {
     NotQueued(String, &'static str),
 }
 
+#[derive(Debug)]
 pub struct ProbeStore {
     path: PathBuf,
     records: Mutex<Vec<ProbeRecord>>,

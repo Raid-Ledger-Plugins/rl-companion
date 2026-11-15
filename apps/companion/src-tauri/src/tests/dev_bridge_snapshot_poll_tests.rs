@@ -162,6 +162,7 @@ async fn the_poll_ingests_a_changed_saved_variables_file() {
     ctx.set_snapshot(Snapshot {
         wow_dir: wow.to_string_lossy().into_owned(),
         snapshot_cache: Some(cache.clone()),
+        probe_store: None,
         ..Snapshot::default()
     });
     let t0 = SystemTime::now() - Duration::from_secs(60);
@@ -201,6 +202,7 @@ async fn nothing_is_ingested_or_served_while_the_bridge_is_off() {
     let on_ctx = Arc::new(ServerCtx::default());
     on_ctx.set_snapshot(Snapshot {
         snapshot_cache: Some(Arc::new(SnapshotCache::in_app_data(&control_dir))),
+        probe_store: None,
         ..served.clone()
     });
     let control = SnapshotCache::in_app_data(&control_dir);
