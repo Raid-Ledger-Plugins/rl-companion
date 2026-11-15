@@ -25,6 +25,8 @@ pub mod probe_allowlist;
 pub mod probe_request;
 pub mod probe_request_call;
 pub mod probe_request_rules;
+pub mod probe_result;
+pub mod probe_result_page;
 pub mod routes;
 pub mod server;
 pub mod settings;
