@@ -177,7 +177,7 @@ pub async fn start_link(app: AppHandle, state: State<'_, Shared>) -> Result<Link
         name: cfg.device_name.clone().unwrap_or_else(default_device_name),
         os: device_os().to_owned(),
         os_version: None,
-        app_version: env!("CARGO_PKG_VERSION").to_owned(),
+        app_version: crate::app_version::get().to_owned(),
     };
     let client = LinkClient::new(&cfg.server_url).map_err(s)?;
     let start = client.start(&device).await.map_err(s)?;

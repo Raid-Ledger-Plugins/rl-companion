@@ -6,9 +6,7 @@
 use crate::bg3_campaigns::{
     campaign_name, first_sight, now_unix, select, unix, CampaignStore, SaveCampaign,
 };
-use crate::collector::{
-    captured_at, scope_key, Blob, Collector, PendingUpload, Scan, SentState, APP_VERSION,
-};
+use crate::collector::{captured_at, scope_key, Blob, Collector, PendingUpload, Scan, SentState};
 use crate::manifest::BG3_SAVE;
 use crate::scope::WatchScope;
 use rl_collectors::{
@@ -256,7 +254,7 @@ fn build_from(
     };
     let payload = normalise_save_info(info, &meta).map_err(|e| e.to_string())?;
     let label = payload.save_name.clone();
-    let message = Bg3SaveMessage::new(payload, captured_at(None), APP_VERSION);
+    let message = Bg3SaveMessage::new(payload, captured_at(None), crate::app_version::get());
     let body = serde_json::to_value(message).map_err(|e| e.to_string())?;
     let blobs = thumb
         .map(|(bytes, r)| Blob {

@@ -181,7 +181,7 @@ async fn uploads_a_scanned_export_to_the_mock_ingest() {
     assert_eq!(sent["envelopeVersion"], json!(1));
     assert_eq!(sent["contract"], json!(CONTRACT));
     assert_eq!(sent["contractVersion"], json!(1));
-    assert_eq!(sent["appVersion"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(sent["appVersion"], json!(crate::app_version::get()));
     assert_eq!(
         sent["collectorVersion"],
         json!(rl_collectors::COLLECTOR_VERSION)

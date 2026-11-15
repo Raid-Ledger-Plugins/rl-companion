@@ -224,7 +224,7 @@ impl LinkClient {
             .map_err(|e| LinkError::BadUrl(e.to_string()))?;
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .user_agent(concat!("rl-companion/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("rl-companion/{}", crate::app_version::get()))
             .build()
             .map_err(|e| LinkError::Network(e.to_string()))?;
         Ok(Self { http, api_base })
