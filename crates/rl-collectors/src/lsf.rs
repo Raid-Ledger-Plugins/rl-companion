@@ -45,8 +45,16 @@ use crate::lspk::{lz4_can_hold, zstd_decode};
 pub const LSF_MAGIC: [u8; 4] = *b"LSOF";
 /// The only supported LSF version (BG3 saves, engine 4.8).
 pub const LSF_VERSION: u32 = 7;
-/// Cap on one decompressed section (spec D4).
+/// Cap on one decompressed section of a small resource such as `meta.lsf`
+/// (spec D4; a real `meta.lsf` is ~1.7 KB in all).
 pub const LSF_MAX_SECTION_BYTES: u64 = 1024 * 1024;
+/// Cap on the decompressed strings and attributes sections of `Globals.lsf`
+/// (ROK-2078). A real save's Globals attributes section is ~3.16 MB
+/// decompressed (strings ~0.1 MB, nodes ~2.1 MB, values ~9.1 MB), so the
+/// 1 MiB [`LSF_MAX_SECTION_BYTES`] refused every save. 32 MiB leaves ~10×
+/// headroom for a long campaign while staying half the 64 MiB
+/// [`LSF_MAX_BLOB_SECTION_BYTES`] that already bounds the values section.
+pub const LSF_MAX_GLOBALS_SECTION_BYTES: u64 = 32 * 1024 * 1024;
 /// Cap on the decompressed values section when a blob attribute is read with
 /// [`read_lsf_attribute_bytes`] (`NewAge` is ~6.7 MB in a real save).
 pub const LSF_MAX_BLOB_SECTION_BYTES: u64 = 64 * 1024 * 1024;
@@ -58,8 +66,15 @@ const METADATA_START: usize = 16;
 const SECTION_NAMES: [&str; 5] = ["strings", "keys", "nodes", "attributes", "values"];
 const SECTIONS_START: usize = 64;
 const LZ4_FRAME_MAGIC: [u8; 4] = [0x04, 0x22, 0x4D, 0x18];
-/// Most blocks one LZ4 frame may hold (a 1 MiB section in 64 KiB blocks is 16).
-pub const LZ4_FRAME_MAX_BLOCKS: usize = 1024;
+/// Largest block a BG3 LZ4 frame declares (BD `0x40`).
+const LZ4_FRAME_BLOCK_BYTES: u64 = 64 * 1024;
+/// Most blocks one LZ4 frame may hold: the largest capped section
+/// ([`LSF_MAX_BLOB_SECTION_BYTES`]) in 64 KiB blocks, i.e. 1024. That also
+/// covers a [`LSF_MAX_GLOBALS_SECTION_BYTES`] section (512 blocks).
+pub const LZ4_FRAME_MAX_BLOCKS: usize =
+    (LSF_MAX_BLOB_SECTION_BYTES / LZ4_FRAME_BLOCK_BYTES) as usize;
+const _: () =
+    assert!(LSF_MAX_GLOBALS_SECTION_BYTES / LZ4_FRAME_BLOCK_BYTES <= LZ4_FRAME_MAX_BLOCKS as u64);
 const UUID_TYPE: u32 = 31;
 const STRING_TYPES: [u32; 6] = [20, 21, 22, 23, 29, 30];
 
@@ -75,7 +90,7 @@ struct Sizes {
 /// string types without their NUL terminator, a UUID in LSLib's display form.
 /// `Ok(None)` when no attribute has that name.
 pub fn read_lsf_attribute(bytes: &[u8], name: &str) -> Result<Option<String>, LsfError> {
-    let t = tables(bytes)?;
+    let t = tables(bytes, LSF_MAX_SECTION_BYTES)?;
     let mut at = t.values_at;
     let values = section(bytes, &mut at, t.values, t.flags)?;
     find_attribute(&t.names, &t.attributes, &values, t.v3, name)
@@ -93,8 +108,20 @@ pub fn lsf_version(bytes: &[u8]) -> Option<u32> {
 /// string / node / attribute tables, and a values section that fits the file
 /// (it is bounds-checked, not decompressed). `None` for a truncated or
 /// corrupt file that still carries the 8-byte `LSOF` + version prefix.
+/// Tables are held to the `meta.lsf` cap; use
+/// [`globals_lsf_parsed_version`] for `Globals.lsf`.
 pub fn lsf_parsed_version(bytes: &[u8]) -> Option<u32> {
-    let t = tables(bytes).ok()?;
+    parsed_version(bytes, LSF_MAX_SECTION_BYTES)
+}
+
+/// [`lsf_parsed_version`] for `Globals.lsf`: its strings and attributes
+/// sections may be up to [`LSF_MAX_GLOBALS_SECTION_BYTES`].
+pub fn globals_lsf_parsed_version(bytes: &[u8]) -> Option<u32> {
+    parsed_version(bytes, LSF_MAX_GLOBALS_SECTION_BYTES)
+}
+
+fn parsed_version(bytes: &[u8], table_cap: u64) -> Option<u32> {
+    let t = tables(bytes, table_cap).ok()?;
     take(
         bytes,
         t.values_at,
@@ -108,8 +135,9 @@ pub fn lsf_parsed_version(bytes: &[u8]) -> Option<u32> {
 /// The byte length of the first attribute called `name`, read from the
 /// attribute records only: the values section is never decompressed, so a
 /// large blob (`Globals.lsf` → `NewAge`) is measured without being read.
+/// Strings and attributes may be up to [`LSF_MAX_GLOBALS_SECTION_BYTES`].
 pub fn lsf_attribute_len(bytes: &[u8], name: &str) -> Result<Option<u64>, LsfError> {
-    let t = tables(bytes)?;
+    let t = tables(bytes, LSF_MAX_GLOBALS_SECTION_BYTES)?;
     let record = if t.v3 { 16 } else { 12 };
     for rec in t.attributes.chunks_exact(record) {
         let name_ref = le_u32(rec, 0);
@@ -128,9 +156,10 @@ pub fn lsf_attribute_len(bytes: &[u8], name: &str) -> Result<Option<u64>, LsfErr
 /// The raw bytes of the first attribute called `name` (a ScratchBuffer such as
 /// `Globals.lsf` → `NewAge`). Unlike [`read_lsf_attribute`] the values section
 /// may be up to [`LSF_MAX_BLOB_SECTION_BYTES`]; strings and attribute records
-/// keep the 1 MiB cap. `Ok(None)` when no attribute has that name.
+/// up to [`LSF_MAX_GLOBALS_SECTION_BYTES`]. `Ok(None)` when no attribute has
+/// that name.
 pub fn read_lsf_attribute_bytes(bytes: &[u8], name: &str) -> Result<Option<Vec<u8>>, LsfError> {
-    let t = tables(bytes)?;
+    let t = tables(bytes, LSF_MAX_GLOBALS_SECTION_BYTES)?;
     let Some((offset, len)) = attribute_span(&t, name)? else {
         return Ok(None);
     };
@@ -194,7 +223,8 @@ struct Tables {
     v3: bool,
 }
 
-fn tables(bytes: &[u8]) -> Result<Tables, LsfError> {
+/// `table_cap` bounds the decompressed strings and attributes sections.
+fn tables(bytes: &[u8], table_cap: u64) -> Result<Tables, LsfError> {
     if let Some(m) = bytes.get(0..4)
         && m != LSF_MAGIC
     {
@@ -213,9 +243,9 @@ fn tables(bytes: &[u8]) -> Result<Tables, LsfError> {
     let flags = head[56];
     let v3 = le_u32(head, 60) == 1;
     let mut at = SECTIONS_START;
-    let names = read_strings(&section(bytes, &mut at, strings, flags)?)?;
+    let names = read_strings(&section_capped(bytes, &mut at, strings, flags, table_cap)?)?;
     skip(bytes, &mut at, nodes, flags)?;
-    let attributes = section(bytes, &mut at, attrs, flags)?;
+    let attributes = section_capped(bytes, &mut at, attrs, flags, table_cap)?;
     Ok(Tables {
         names,
         attributes,

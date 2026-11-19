@@ -20,6 +20,7 @@ mod bg3_lsx_tests;
 mod bg3_stats_tests;
 mod extract_tests;
 mod fixtures;
+mod globals_cap_tests;
 mod lsf_fixture_tests;
 mod lsf_frame_tests;
 mod lsf_tests;
