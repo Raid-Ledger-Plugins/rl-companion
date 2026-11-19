@@ -27,13 +27,33 @@ const PARTY: u32 = 5;
 
 /// A stored (uncompressed) LSF v7 with one `NewAge` ScratchBuffer attribute.
 fn globals_lsf(newage: &[u8]) -> Vec<u8> {
+    globals_lsf_padded(newage, 0)
+}
+
+/// [`globals_lsf`] plus `pad` zero-length `Pad` records after `NewAge`, so
+/// the attributes section can be pushed past `meta.lsf`'s 1 MiB cap.
+fn globals_lsf_padded(newage: &[u8], pad: usize) -> Vec<u8> {
+    // `Pad` joins the string table only when used, so the unpadded layout
+    // (a 14-byte strings section) is unchanged for the offset-forging tests.
+    let names: &[&[u8]] = if pad == 0 {
+        &[b"NewAge"]
+    } else {
+        &[b"NewAge", b"Pad"]
+    };
     let mut strings = 1u32.to_le_bytes().to_vec();
-    strings.extend_from_slice(&1u16.to_le_bytes());
-    strings.extend_from_slice(&6u16.to_le_bytes());
-    strings.extend_from_slice(b"NewAge");
+    strings.extend_from_slice(&(names.len() as u16).to_le_bytes());
+    for name in names {
+        strings.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        strings.extend_from_slice(name);
+    }
     let mut attr = 0u32.to_le_bytes().to_vec();
     attr.extend_from_slice(&(((newage.len() as u32) << 6) | 28).to_le_bytes());
     attr.extend_from_slice(&0i32.to_le_bytes());
+    for _ in 0..pad {
+        attr.extend_from_slice(&1u32.to_le_bytes());
+        attr.extend_from_slice(&4u32.to_le_bytes());
+        attr.extend_from_slice(&0i32.to_le_bytes());
+    }
     let mut out = vec![0u8; 64];
     out[..4].copy_from_slice(b"LSOF");
     out[4..8].copy_from_slice(&7u32.to_le_bytes());
@@ -279,6 +299,24 @@ fn a_garbage_or_truncated_newage_is_unreadable_not_a_crash() {
             json!("newage-unreadable")
         );
     }
+}
+
+/// ROK-2078 sweep: a real Globals attributes section is ~3.16 MB, over the
+/// 1 MiB `meta.lsf` cap; it must still read (version, no fallback, decoded types).
+#[test]
+fn a_globals_attributes_section_over_one_mib_still_reads() {
+    let pad = rl_collectors::LSF_MAX_SECTION_BYTES as usize / 12 + 4_096;
+    let globals = globals_lsf_padded(&party_blob(36), pad);
+    let (src, r) = source_with_globals("bg3-newage-big-attrs", globals);
+    let body = structure(&src, &r);
+    assert_ne!(body["types"], json!([]), "the structure read decodes types");
+    let saves = get(&src, "/dev/v1/bg3/saves");
+    assert_eq!(saves["saves"][0]["fallbackReason"], Value::Null, "{saves}");
+    assert_eq!(
+        saves["saves"][0]["lsfVersions"]["globals"],
+        json!(7),
+        "{saves}"
+    );
 }
 
 /// Codex P2 / review MINOR: the attribute table reads but the values section

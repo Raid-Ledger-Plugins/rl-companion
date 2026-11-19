@@ -73,8 +73,9 @@ pub use extract::{
     extract_thumbnail_webp, game_id_from_package, sha256_hex, thumbnail_ref,
 };
 pub use lsf::{
-    LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION,
-    LZ4_FRAME_MAX_BLOCKS, lsf_attribute_len, lsf_parsed_version, lsf_version, read_lsf_attribute,
+    LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_GLOBALS_SECTION_BYTES, LSF_MAX_SECTION_BYTES,
+    LSF_MAX_STRINGS, LSF_VERSION, LZ4_FRAME_MAX_BLOCKS, globals_lsf_parsed_version,
+    lsf_attribute_len, lsf_parsed_version, lsf_version, read_lsf_attribute,
     read_lsf_attribute_bytes, uuid_display,
 };
 pub use lspk::{

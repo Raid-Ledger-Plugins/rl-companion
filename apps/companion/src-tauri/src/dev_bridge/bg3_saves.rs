@@ -10,8 +10,8 @@ use crate::collector::captured_at;
 use crate::manifest::BG3_SAVE;
 use crate::scope::WatchScope;
 use rl_collectors::{
-    campaign_key_from_package, extract_save_info, lsf_attribute_len, lsf_parsed_version,
-    read_lsf_attribute, read_lspk, Package, META_LSF_MAX_BYTES, META_LSF_NAME,
+    campaign_key_from_package, extract_save_info, globals_lsf_parsed_version, lsf_attribute_len,
+    lsf_parsed_version, read_lsf_attribute, read_lspk, Package, META_LSF_MAX_BYTES, META_LSF_NAME,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -301,7 +301,7 @@ impl Bg3Source {
         let readable = globals.map_or(Readability::NotChecked, |g| self.decoder.readable(g));
         // A Globals values section that fails to decode reports no version.
         let globals_version = globals
-            .and_then(lsf_parsed_version)
+            .and_then(globals_lsf_parsed_version)
             .filter(|v| (1..=255).contains(v))
             .filter(|_| readable != Readability::LsfUnreadable);
         let fallback = fallback_reason(
