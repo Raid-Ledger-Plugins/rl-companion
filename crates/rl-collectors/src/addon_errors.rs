@@ -23,7 +23,9 @@ use crate::normalise::{COLLECTOR_VERSION, ENVELOPE_VERSION};
 
 pub use batch::{AddonErrorsError, PayloadHeader, build_messages, toc_version};
 pub use parse::{BugGrabberScan, ScrubContext, TimeContext, scan_buggrabber};
-pub use scrub::{has_unscrubbed_path, scrub_names, scrub_paths};
+pub use scrub::{
+    has_unscrubbed_home, has_unscrubbed_path, scrub_battletags, scrub_names, scrub_paths,
+};
 pub use state::AddonErrorsState;
 
 /// `contract` of the envelope.

@@ -58,7 +58,8 @@ pub use addon_errors::{
     ADDON_ERRORS_MAX_RECORDS, ADDON_ERRORS_SOURCE, AddonErrorRecord, AddonErrorsError,
     AddonErrorsMessage, AddonErrorsPayload, AddonErrorsState, BUGGRABBER_DB, BUGGRABBER_SV_FILE,
     BugGrabberScan, CharacterHint, PayloadHeader, ScrubContext, TRUNCATED_MARKER, TimeContext,
-    build_messages, has_unscrubbed_path, scan_buggrabber, scrub_names, scrub_paths, toc_version,
+    build_messages, has_unscrubbed_home, has_unscrubbed_path, scan_buggrabber, scrub_battletags,
+    scrub_names, scrub_paths, toc_version,
 };
 pub use bg3_cat::{
     CAT_GUID_HEX_RUN, CAT_MAX_DIGIT_RUN, CAT_MAX_MATCHED_ENTRIES, CAT_MAX_NAME_UTF16, CAT_MAX_ROWS,

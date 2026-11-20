@@ -39,19 +39,10 @@ fn users_at(s: &[u8], p: usize) -> bool {
     seg_at(s, p, b"users")
 }
 
-/// `p` begins a path: start of text, after whitespace, a quote, a bracket,
-/// `=`, `<` or Lua's `@` chunk prefix.
-fn opener_at(b: &[u8], p: usize) -> bool {
-    p == 0
-        || matches!(
-            b[p - 1],
-            b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'(' | b'[' | b'=' | b'<' | b'@'
-        )
-}
-
-/// A Linux / Wine home: `/home/` at a path start or `X:\home\` (any case).
+/// A Linux / Wine home: `/home/` (any case) not glued to a word before it —
+/// a path start, mid-string after `:` / `,` / `{` etc., or `X:\home\`.
 fn home_at(b: &[u8], p: usize) -> bool {
-    seg_at(b, p, b"home") && (opener_at(b, p) || (p >= 2 && drive_at(b, p - 2)))
+    seg_at(b, p, b"home") && (p == 0 || !b[p - 1].is_ascii_alphanumeric())
 }
 
 /// The folder-word length of a home folder at `p` (`users` / `home`).
@@ -65,9 +56,28 @@ fn home_word(b: &[u8], p: usize) -> Option<usize> {
     }
 }
 
-/// A network share `\\server\…` at a path start.
+/// A network share `\\server\…` not glued to a word before it.
 fn unc_at(b: &[u8], p: usize) -> bool {
-    p + 2 < b.len() && b[p] == b'\\' && b[p + 1] == b'\\' && !is_sep(b[p + 2]) && opener_at(b, p)
+    p + 2 < b.len()
+        && b[p] == b'\\'
+        && b[p + 1] == b'\\'
+        && !is_sep(b[p + 2])
+        && (p == 0 || !b[p - 1].is_ascii_alphanumeric())
+}
+
+/// Stricter than the schema (review D3): a Linux / Wine home or a network
+/// share is still in the text. Scrubbed output never holds either.
+pub fn has_unscrubbed_home(s: &str) -> bool {
+    let b = s.as_bytes();
+    (0..b.len()).any(|p| home_at(b, p) || unc_at(b, p))
+}
+
+/// Past every consecutive separator from `p` (doubled `\\`, escaped `\/`).
+fn skip_seps(b: &[u8], mut p: usize) -> usize {
+    while p < b.len() && is_sep(b[p]) {
+        p += 1;
+    }
+    p
 }
 
 /// End of the folder part of an absolute path whose first separator is at
@@ -150,19 +160,13 @@ fn home_span(b: &[u8], i: usize, word: usize) -> (usize, usize) {
     } else {
         i
     };
-    let name = i + word + 2;
+    let name = skip_seps(b, i + word + 1);
     let stop = |c: u8| is_sep(c) || matches!(c, b'\n' | b'\r' | b'"' | b'\'' | b':');
     let len = b[name..]
         .iter()
         .position(|&c| stop(c))
         .unwrap_or(b.len() - name);
-    let end = name + len;
-    let end = if end < b.len() && is_sep(b[end]) {
-        end + 1
-    } else {
-        end
-    };
-    (start, end)
+    (start, skip_seps(b, name + len))
 }
 
 /// Replace WoW install roots, home folders and any leftover drive prefix.
@@ -218,8 +222,9 @@ fn drive_path(b: &[u8], i: usize) -> (usize, &'static str, usize) {
     if let Some(end) = wow_root_ahead(b, i) {
         return (i, WOW, end);
     }
-    if let Some(word) = home_word(b, i + 2) {
-        return (i, HOME, home_span(b, i + 2, word).1);
+    let sep = skip_seps(b, i + 2) - 1;
+    if let Some(word) = home_word(b, sep) {
+        return (i, HOME, home_span(b, sep, word).1);
     }
     (i, PATH, folder_end(b, i + 2))
 }
@@ -262,4 +267,47 @@ pub fn scrub_names(s: &str, names: &[(String, &'static str)]) -> String {
     sorted.into_iter().fold(s.to_owned(), |acc, (token, repl)| {
         replace_word(&acc, token, repl)
     })
+}
+
+/// A BattleTag in free text (`Name#1234`: a letter, then 1–11 letters or
+/// digits, `#`, 4–6 digits, word boundaries both sides) → `<battletag>`.
+/// Runs after the account scrub, so a `<digits>#<n>` account folder is
+/// already `<account>`; `#123` ids and `|cff00ff00` colours never match.
+pub fn scrub_battletags(s: &str) -> String {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    let byte = |k: usize| chars.get(k).map_or(s.len(), |&(p, _)| p);
+    let mut out = String::with_capacity(s.len());
+    let (mut done, mut k) = (0, 0);
+    while k < chars.len() {
+        if chars[k].1 != '#' {
+            k += 1;
+            continue;
+        }
+        let digits = chars[k + 1..]
+            .iter()
+            .take_while(|(_, d)| d.is_ascii_digit())
+            .count();
+        let after = chars.get(k + 1 + digits).map(|&(_, c)| c);
+        let name = chars[..k]
+            .iter()
+            .rev()
+            .take_while(|(_, c)| c.is_alphanumeric())
+            .count();
+        let first = chars.get(k - name).map(|&(_, c)| c);
+        let hit = (4..=6).contains(&digits)
+            && !is_word_char(after)
+            && (2..=12).contains(&name)
+            && first.is_some_and(char::is_alphabetic)
+            && byte(k - name) >= done;
+        if hit {
+            out.push_str(&s[done..byte(k - name)]);
+            out.push_str("<battletag>");
+            k += 1 + digits;
+            done = byte(k);
+        } else {
+            k += 1;
+        }
+    }
+    out.push_str(&s[done..]);
+    out
 }

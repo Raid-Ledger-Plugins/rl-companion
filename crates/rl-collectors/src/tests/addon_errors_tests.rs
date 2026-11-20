@@ -5,8 +5,9 @@
 use crate::{
     ADDON_ERRORS_MAX_BYTES, AddonErrorRecord, AddonErrorsMessage, AddonErrorsState, CharacterHint,
     PayloadHeader, ScrubContext, TRUNCATED_MARKER, TimeContext, account_characters,
-    account_sv_candidates, build_messages, has_unscrubbed_path, hmac_sha256_hex, scan_buggrabber,
-    scrub_names, scrub_paths, sha256_hex, toc_version,
+    account_sv_candidates, build_messages, has_unscrubbed_home, has_unscrubbed_path,
+    hmac_sha256_hex, scan_buggrabber, scrub_battletags, scrub_names, scrub_paths, sha256_hex,
+    toc_version,
 };
 
 pub(crate) const BUGGRABBER: &[u8] =
@@ -318,5 +319,64 @@ rl_test! {
         assert_ne!(a, sha256_hex(b"12345678#1"), "never the bare SHA-256 of the folder");
         assert_eq!(a, hmac_sha256_hex(&INSTALL_KEY, b"12345678#1"));
         assert!(a.len() == 64 && a.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+    }
+}
+
+rl_test! {
+    fn scrubs_doubled_escaped_and_mid_string_home_folders() {
+        let cases = [
+            (r"x\\Users\\bob\\a.lua:1", r"x\<home>\a.lua:1"),
+            (r"at \/Users\/bob\/a.lua:1", r"at \<home>\a.lua:1"),
+            (r"C:\\Users\\bob\\a.lua:1", r"<home>\a.lua:1"),
+            ("file:/home/bob/a.lua:1", r"file:<home>\a.lua:1"),
+            ("x,/home/bob/a.lua:1", r"x,<home>\a.lua:1"),
+            ("x//home//bob//a.lua:1", r"x/<home>\a.lua:1"),
+            (r"{\\NAS\bob\notes.txt:2", r"{<path>\notes.txt:2"),
+            (r"x,\\NAS\bob\notes.txt:2", r"x,<path>\notes.txt:2"),
+            (r"Interface\AddOns\Home\home\x.lua:1", r"Interface\AddOns\Home\home\x.lua:1"),
+        ];
+        for (raw, want) in cases {
+            let got = scrub_paths(raw);
+            assert_eq!(got, want, "{raw}");
+            assert!(!got.contains("bob") && !has_unscrubbed_home(&got), "{raw} -> {got}");
+        }
+        assert!(has_unscrubbed_home("x,/home/bob/") && has_unscrubbed_home(r"{\\NAS\x"));
+    }
+}
+
+rl_test! {
+    fn mid_string_homes_never_reach_message_stack_or_addon() {
+        let lua = br#"BugGrabberDB = { ["errors"] = { { ["message"] = "file:/home/bob/x\\Users\\bob\\Interface\\AddOns\\Foo\\F.lua:1: {\\\\NAS\\bob\\n.txt", ["stack"] = "x,/home/bob/a.lua:2: in main\n\\/Users\\/bob\\/b.lua:3", ["counter"] = 1 } } }"#;
+        let scan = scan_buggrabber(lua, &ctx(), &UTC).expect("parses");
+        let r = scan.records.first().expect("one record");
+        let all = format!("{} {} {:?}", r.addon, r.message, r.stack);
+        assert!(!all.contains("bob"), "{all}");
+    }
+}
+
+rl_test! {
+    fn scrubs_battletags_but_not_ids_or_colours() {
+        let cases = [
+            ("whisper from Bob#1234 failed", "whisper from <battletag> failed"),
+            ("Ünïcødé#123456: x", "<battletag>: x"),
+            ("(Ab1#12345)", "(<battletag>)"),
+            ("quest #123 and item#12", "quest #123 and item#12"),
+            ("|cff00ff00Item|r #45678", "|cff00ff00Item|r #45678"),
+            ("Bob#1234567 Bob#123 1Bob#1234 TwelveLetters#1234", "Bob#1234567 Bob#123 1Bob#1234 TwelveLetters#1234"),
+        ];
+        for (raw, want) in cases {
+            assert_eq!(scrub_battletags(raw), want, "{raw}");
+        }
+    }
+}
+
+rl_test! {
+    fn the_account_folder_scrub_wins_over_the_battletag_scrub() {
+        let lua = br#"BugGrabberDB = { ["errors"] = { { ["message"] = "WTF\\Account\\Legacy#1234\\SavedVariables\\A.lua:1: Bob#5678 quest #123", ["stack"] = "from Bob#5678", ["counter"] = 1 } } }"#;
+        let ctx = ScrubContext { account: Some("Legacy#1234".into()), ..ctx() };
+        let scan = scan_buggrabber(lua, &ctx, &UTC).expect("parses");
+        let r = scan.records.first().expect("one record");
+        assert_eq!(r.message, r"WTF\Account\<account>\SavedVariables\A.lua:1: <battletag> quest #123");
+        assert_eq!(r.stack.as_deref(), Some("from <battletag>"));
     }
 }

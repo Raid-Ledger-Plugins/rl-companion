@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use super::scrub::{has_unscrubbed_path, scrub_names, scrub_paths};
+use super::scrub::{
+    has_unscrubbed_home, has_unscrubbed_path, scrub_battletags, scrub_names, scrub_paths,
+};
 use super::text::{mask_addresses, multi_line, one_line};
 use super::{
     ADDON_ERROR_ADDON_MAX, ADDON_ERROR_COUNT_MAX, ADDON_ERROR_MESSAGE_MAX, ADDON_ERROR_STACK_MAX,
@@ -122,9 +124,10 @@ fn merge(into: &mut BTreeMap<String, AddonErrorRecord>, r: AddonErrorRecord) {
 }
 
 fn clean(raw: &str, names: &[(String, &'static str)], max: usize) -> Option<String> {
-    let scrubbed = mask_addresses(&scrub_paths(&scrub_names(&scrub_paths(raw), names)));
+    let named = scrub_battletags(&scrub_names(&scrub_paths(raw), names));
+    let scrubbed = mask_addresses(&scrub_paths(&named));
     let out = multi_line(&scrubbed, max)?;
-    (!has_unscrubbed_path(&out)).then_some(out)
+    (!has_unscrubbed_path(&out) && !has_unscrubbed_home(&out)).then_some(out)
 }
 
 /// Never reads `locals` (contract ruling 7).
