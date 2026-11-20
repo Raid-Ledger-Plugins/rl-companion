@@ -79,7 +79,7 @@ pub use error::{
 pub use extract::{
     META_LSF_MAX_BYTES, META_LSF_NAME, SAVE_INFO_MAX_BYTES, SAVE_INFO_NAME, WEBP_MAX_BYTES,
     campaign_key_from_package, campaign_key_from_save_folder, extract_save_info,
-    extract_thumbnail_webp, game_id_from_package, sha256_hex, thumbnail_ref,
+    extract_thumbnail_webp, game_id_from_package, hmac_sha256_hex, sha256_hex, thumbnail_ref,
 };
 pub use lsf::{
     LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION,

@@ -5,8 +5,8 @@
 use crate::{
     ADDON_ERRORS_MAX_BYTES, AddonErrorRecord, AddonErrorsMessage, AddonErrorsState, CharacterHint,
     PayloadHeader, ScrubContext, TRUNCATED_MARKER, TimeContext, account_characters,
-    account_sv_candidates, build_messages, has_unscrubbed_path, scan_buggrabber, scrub_names,
-    scrub_paths, sha256_hex, toc_version,
+    account_sv_candidates, build_messages, has_unscrubbed_path, hmac_sha256_hex, scan_buggrabber,
+    scrub_names, scrub_paths, sha256_hex, toc_version,
 };
 
 pub(crate) const BUGGRABBER: &[u8] =
@@ -157,6 +157,9 @@ rl_test! {
     }
 }
 
+/// A fixed per-install key for tests (production: 32 CSPRNG bytes on disk).
+pub(crate) const INSTALL_KEY: [u8; 32] = [7u8; 32];
+
 pub(crate) fn header() -> PayloadHeader {
     let hint = CharacterHint {
         name: "Testchar".into(),
@@ -165,6 +168,7 @@ pub(crate) fn header() -> PayloadHeader {
     PayloadHeader::new(
         "12.1.1",
         "EXAMPLEACCOUNT",
+        &INSTALL_KEY,
         Some(hint),
         Some("_classic_era_"),
     )
@@ -200,11 +204,10 @@ rl_test! {
 }
 
 rl_test! {
-    fn validates_the_header_and_hashes_the_account() {
-        assert_eq!(header().account_key, "df0c21ea2a73aa9274591916713c9ffe97adab716e7f463e1b9b0bb10098cc84");
-        assert!(PayloadHeader::new(r"C:\Users\x", "A", None, None).is_err());
-        assert!(PayloadHeader::new("1.0", "A", None, Some("retail")).is_err());
-        assert!(PayloadHeader::new("1.0", "", None, None).is_err());
+    fn validates_the_header() {
+        assert!(PayloadHeader::new(r"C:\Users\x", "A", &INSTALL_KEY, None, None).is_err());
+        assert!(PayloadHeader::new("1.0", "A", &INSTALL_KEY, None, Some("retail")).is_err());
+        assert!(PayloadHeader::new("1.0", "", &INSTALL_KEY, None, None).is_err());
         assert_eq!(toc_version(b"## Title: BugGrabber\r\n## Version: 12.1.1\r\n").as_deref(), Some("12.1.1"));
         assert_eq!(toc_version(b"## Title: x"), None);
     }
@@ -293,5 +296,27 @@ rl_test! {
         let over = msgs(n, rem + 1);
         assert_eq!(over.len(), 2, "one byte over the cap splits");
         assert!(over.iter().all(|m| serde_json::to_vec(m).expect("json").len() <= ADDON_ERRORS_MAX_BYTES));
+    }
+}
+
+rl_test! {
+    fn hmac_matches_rfc_4231_case_2() {
+        let mac = hmac_sha256_hex(b"Jefe", b"what do ya want for nothing?");
+        assert_eq!(mac, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
+}
+
+rl_test! {
+    fn account_key_is_an_install_keyed_hmac_not_a_bare_hash() {
+        let key = |folder: &str, install: &[u8; 32]| {
+            PayloadHeader::new("1.0", folder, install, None, None).expect("valid").account_key
+        };
+        let a = key("12345678#1", &INSTALL_KEY);
+        assert_eq!(a, key("12345678#1", &INSTALL_KEY), "same folder + same key => same value");
+        assert_ne!(a, key("12345678#1", &[8u8; 32]), "another install => another value");
+        assert_ne!(a, key("12345678#2", &INSTALL_KEY));
+        assert_ne!(a, sha256_hex(b"12345678#1"), "never the bare SHA-256 of the folder");
+        assert_eq!(a, hmac_sha256_hex(&INSTALL_KEY, b"12345678#1"));
+        assert!(a.len() == 64 && a.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
     }
 }

@@ -10,6 +10,7 @@
 //! ([`crate::collector::settled_items`]) — a failed upload is re-sent on the
 //! next scan.
 
+use crate::addon_errors_key;
 use crate::collector::{scope_key, Collector, PendingUpload, Scan, SentState};
 use crate::scope::WatchScope;
 use crate::wow_collector::LedgerLinkCollector;
@@ -21,6 +22,7 @@ use rl_collectors::{
 };
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const CONTRACT: &str = ADDON_ERRORS_CONTRACT;
 pub const CONTRACT_VERSION: u32 = ADDON_ERRORS_CONTRACT_VERSION;
@@ -35,6 +37,10 @@ pub struct AddonErrorsCollector {
     files: LedgerLinkCollector,
     /// Local = UTC + offset; BugGrabber writes local wall-clock times.
     utc_offset_seconds: i32,
+    /// Where the `accountKey` install secret lives (default: the app data dir
+    /// set at startup, see [`crate::addon_errors_key`]).
+    key_dir: Option<PathBuf>,
+    key: OnceLock<Option<[u8; 32]>>,
 }
 
 impl AddonErrorsCollector {
@@ -53,7 +59,23 @@ impl AddonErrorsCollector {
             root,
             scope,
             utc_offset_seconds: local_utc_offset_seconds(),
+            key_dir: None,
+            key: OnceLock::new(),
         }
+    }
+
+    /// Keep the `accountKey` install secret in `dir` (tests).
+    pub fn with_key_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.key_dir = Some(dir.into());
+        self
+    }
+
+    /// The per-install HMAC key, loaded (or created) once per collector.
+    fn install_key(&self) -> Option<[u8; 32]> {
+        *self.key.get_or_init(|| {
+            let dir = self.key_dir.clone().or_else(addon_errors_key::default_dir);
+            addon_errors_key::load_or_create(dir.as_deref())
+        })
     }
 
     /// Pin the UTC offset (tests).
@@ -114,9 +136,16 @@ impl AddonErrorsCollector {
             scan.retain
                 .push((scope.clone(), live.uploaded.into_keys().collect()));
         }
+        let Some(key) = self.install_key() else {
+            return note(
+                scan,
+                "addon errors not sent (no OS randomness for the key)".into(),
+            );
+        };
         let messages = PayloadHeader::new(
             &self.source_version(cand),
             &cand.account,
+            &key,
             None,
             Some(&cand.flavor),
         )

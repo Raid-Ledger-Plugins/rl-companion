@@ -6,7 +6,7 @@ use super::{
     ADDON_ERRORS_MAX_BYTES, ADDON_ERRORS_MAX_RECORDS, ADDON_ERRORS_SOURCE, AddonErrorRecord,
     AddonErrorsMessage, AddonErrorsPayload, CharacterHint,
 };
-use crate::extract::sha256_hex;
+use crate::extract::hmac_sha256_hex;
 use crate::wow_sv::is_flavor_folder;
 
 /// A header field the contract would refuse.
@@ -30,10 +30,13 @@ pub struct PayloadHeader {
 
 impl PayloadHeader {
     /// Validate the header; `account_folder` (the raw `WTF/Account/<folder>`
-    /// name) is only ever sent as its SHA-256.
+    /// name) is only ever sent as HMAC-SHA256 keyed with `install_key` — 32
+    /// random bytes kept only on this machine — so the low-entropy folder
+    /// name cannot be recovered by hashing guesses (review D1).
     pub fn new(
         source_version: &str,
         account_folder: &str,
+        install_key: &[u8; 32],
         character_hint: Option<CharacterHint>,
         wow_flavor: Option<&str>,
     ) -> Result<Self, AddonErrorsError> {
@@ -55,7 +58,7 @@ impl PayloadHeader {
         }
         Ok(Self {
             source_version: source_version.to_owned(),
-            account_key: sha256_hex(account_folder.as_bytes()),
+            account_key: hmac_sha256_hex(install_key, account_folder.as_bytes()),
             character_hint,
             wow_flavor: wow_flavor.map(str::to_owned),
         })

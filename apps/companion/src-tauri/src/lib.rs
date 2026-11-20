@@ -5,6 +5,7 @@
 //! upload changed exports, honour the tray's Upload now / Pause.
 
 pub mod addon_errors_collector;
+pub mod addon_errors_key;
 pub mod app_version;
 pub mod autostart;
 pub mod bg3_campaigns;
@@ -93,6 +94,8 @@ pub fn run() {
                 tray::set_dev_bridge(&tray_app, s.listening.is_some());
             });
             tray_promote::start(app.handle());
+            // ROK-2099 S5 D1: the addon-errors accountKey secret sits next to sent-state.json.
+            addon_errors_key::set_dir(app.path().app_data_dir()?);
             let sent_path = app.path().app_data_dir()?.join(collector::SENT_STATE_FILE);
             let rt = Arc::new(runtime::Runtime::new(sent_path));
             app.manage(rt.clone());
