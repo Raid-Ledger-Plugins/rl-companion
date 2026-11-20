@@ -10,3 +10,4 @@ commit and updating its source line below.
 | `bg3-screenshot/v1/` | `packages/contract/companion/bg3-screenshot/v1/` on `main` | `0864fef24` (2026-11-03; ROK-1966 merged as Raid-Ledger #1934) |
 | `wow-ledgerlink/v1/` | `packages/contract/companion/wow-ledgerlink/v1/` on the ROK-1964 branch (not yet on `main`) | `5dd3acd52` (2026-10-28) — re-pin from `main` once ROK-1964 merges |
 | `dev-bridge/v1/` | `packages/contract/companion/dev-bridge/v1/` on `main` | `1d5397a42` (Raid-Ledger #2175 squash, ROK-2190 — LedgerLink is the probe consumer: queue at `LedgerLink/DevQueue.lua`, results in `LedgerLinkDB.dev.probes`; `DungeonBuddy` readable; byte-identical to the earlier branch pin `6a3a713aa`) — re-pins copy from `main` |
+| `wow-addon-errors/v1/` | `packages/contract/companion/wow-addon-errors/v1/` on `main` | `5f8450078` (Raid-Ledger #2253, ROK-2099 S1 — BugGrabber addon errors; validated by `crates/rl-collectors/src/tests/addon_errors_schema_tests.rs`) |

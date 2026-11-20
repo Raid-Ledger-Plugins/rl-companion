@@ -69,9 +69,9 @@ fn wow_root_end(b: &[u8], i: usize) -> Option<usize> {
     is_flavor_folder(flavor).then_some(after + 1 + len + 1)
 }
 
-/// A WoW root later on the drive path starting at `p` (same line, within
+/// A WoW root later on the path starting at `p` (a drive or `/Users/`) (same line, within
 /// [`MAX_PATH_LOOKBACK`], before any other drive letter): its end.
-fn wow_root_after_drive(b: &[u8], p: usize) -> Option<usize> {
+fn wow_root_ahead(b: &[u8], p: usize) -> Option<usize> {
     let limit = b.len().min(p + MAX_PATH_LOOKBACK);
     for j in p + 3..limit {
         if b[j] == b'\n' || drive_at(b, j) {
@@ -92,7 +92,7 @@ fn home_span(b: &[u8], i: usize) -> (usize, usize) {
         i
     };
     let name = i + 7;
-    let stop = |c: u8| is_sep(c) || matches!(c, b'\n' | b'\r' | b'"' | b'\'' | b':' | b' ');
+    let stop = |c: u8| is_sep(c) || matches!(c, b'\n' | b'\r' | b'"' | b'\'' | b':');
     let len = b[name..]
         .iter()
         .position(|&c| stop(c))
@@ -106,9 +106,21 @@ fn home_span(b: &[u8], i: usize) -> (usize, usize) {
     (start, end)
 }
 
-/// Replace WoW install roots, then home folders, then any leftover drive
-/// prefix, so the result never matches [`has_unscrubbed_path`].
+/// Replace WoW install roots, home folders and any leftover drive prefix.
+/// Repeats while a replacement's trailing `\` forms a new match (e.g.
+/// `/Users/a/Users/b/`); callers still drop text that stays refusable.
 pub fn scrub_paths(s: &str) -> String {
+    let mut out = scrub_once(s);
+    for _ in 0..8 {
+        if !has_unscrubbed_path(&out) {
+            break;
+        }
+        out = scrub_once(&out);
+    }
+    out
+}
+
+fn scrub_once(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let (mut done, mut i) = (0, 0);
@@ -119,16 +131,17 @@ pub fn scrub_paths(s: &str) -> String {
             out.push_str(WOW);
             (done, i) = (end, end);
         } else if users_at(b, i) {
-            let (start, end) = home_span(b, i);
+            let (start, home_end) = home_span(b, i);
+            let (repl, end) = wow_root_ahead(b, i).map_or((HOME, home_end), |e| (WOW, e));
             out.push_str(&s[done..start]);
-            out.push_str(HOME);
+            out.push_str(repl);
             (done, i) = (end, end);
         } else if drive_at(b, i) {
             out.push_str(&s[done..i]);
-            let (repl, end) = if users_at(b, i + 2) {
-                (HOME, home_span(b, i + 2).1)
-            } else if let Some(end) = wow_root_after_drive(b, i) {
+            let (repl, end) = if let Some(end) = wow_root_ahead(b, i) {
                 (WOW, end)
+            } else if users_at(b, i + 2) {
+                (HOME, home_span(b, i + 2).1)
             } else {
                 (DRIVE, i + 2)
             };
