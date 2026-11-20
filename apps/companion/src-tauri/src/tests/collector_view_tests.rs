@@ -67,7 +67,15 @@ fn one_row_per_registered_collector_with_detected_folder() {
         &BTreeMap::new(),
     );
     let ids: Vec<&str> = r.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(ids, [WOW_LEDGERLINK.id, BG3_SAVE.id, BG3_SCREENSHOT.id]);
+    assert_eq!(
+        ids,
+        [
+            WOW_LEDGERLINK.id,
+            BG3_SAVE.id,
+            BG3_SCREENSHOT.id,
+            "wow-addon-errors"
+        ]
+    );
     let bg3 = &r[1];
     assert!(!bg3.enabled && bg3.confirm_first_upload && !bg3.consented);
     assert_eq!(bg3.status, "Off");

@@ -119,6 +119,7 @@ impl<'a> ScanPass<'a> {
             rt.forget_scan(entry.manifest.id);
             return None;
         };
+        rt.retain_sent(&scan.retain);
         crate::dev_bridge::events::record(
             entry.manifest.id,
             crate::dev_bridge::events::Kind::Scan,
@@ -146,7 +147,7 @@ impl Drop for ScanPass<'_> {
 pub fn unsettled(sent: &SentState, pending: &[PendingUpload]) -> usize {
     pending
         .iter()
-        .filter(|p| sent.0.get(&p.scope).and_then(|m| m.get(&p.item)) != Some(&p.sha256))
+        .filter(|p| !crate::collector::is_settled(sent, p))
         .filter(|p| !crate::bg3_screenshot::refused(&p.sha256))
         .count()
 }

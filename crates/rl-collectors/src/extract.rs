@@ -75,6 +75,26 @@ pub fn thumbnail_ref(webp: &[u8]) -> Result<ThumbnailRef, WebpError> {
     })
 }
 
+/// RFC 2104 HMAC-SHA256 as lowercase hex (sha2 only; no extra dependency).
+pub fn hmac_sha256_hex(key: &[u8], msg: &[u8]) -> String {
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        k[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let pad = |b: u8| k.map(|x| x ^ b);
+    let inner = Sha256::new()
+        .chain_update(pad(0x36))
+        .chain_update(msg)
+        .finalize();
+    let mac = Sha256::new()
+        .chain_update(pad(0x5c))
+        .chain_update(inner)
+        .finalize();
+    mac.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// `campaignKey` for `campaignKeySource: "save-folder"` (contract §3.3): the
 /// lowercase hex SHA-256 of the folder's own name (no path), UTF-8.
 pub fn campaign_key_from_save_folder(folder_name: &str) -> String {

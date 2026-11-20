@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// File in the app data dir holding [`SentState`].
@@ -53,6 +53,9 @@ pub struct Scan {
     /// Items found but not queued yet (BG3 screenshots waiting for a hub
     /// pick): still unsettled, so they count in `/dev/v1/collectors` pending.
     pub waiting: usize,
+    /// `(scope, items)`: settled items of `scope` to keep; the rest are
+    /// dropped from the sent state (addon errors BugGrabber no longer holds).
+    pub retain: Vec<(String, BTreeSet<String>)>,
 }
 
 /// A game collector: where to watch, which changes matter, and how to turn
@@ -107,12 +110,39 @@ impl SentState {
         self.0.get(scope).cloned().unwrap_or_default()
     }
 
+    /// Keep only `keep`'s items of `scope`; true when something was dropped.
+    pub fn retain(&mut self, scope: &str, keep: &BTreeSet<String>) -> bool {
+        let Some(items) = self.0.get_mut(scope) else {
+            return false;
+        };
+        let before = items.len();
+        items.retain(|k, _| keep.contains(k));
+        items.len() != before
+    }
+
     pub fn record(&mut self, scope: &str, item: &str, sha256: &str) {
         self.0
             .entry(scope.to_owned())
             .or_default()
             .insert(item.to_owned(), sha256.to_owned());
     }
+}
+
+/// What to record once the server settled `p` (`item → sha256` pairs in
+/// `p.scope`): the upload itself, or for an addon-errors batch one
+/// `record key → count` per record it carried (ROK-2099 S5).
+pub fn settled_items(p: &PendingUpload) -> Vec<(String, String)> {
+    if p.contract == crate::addon_errors_collector::CONTRACT {
+        return crate::addon_errors_collector::record_items(&p.body);
+    }
+    vec![(p.item.clone(), p.sha256.clone())]
+}
+
+/// Whether `sent` already holds everything [`settled_items`] would record.
+pub fn is_settled(sent: &SentState, p: &PendingUpload) -> bool {
+    let done = sent.scope(&p.scope);
+    let items = settled_items(p);
+    !items.is_empty() && items.iter().all(|(k, v)| done.get(k) == Some(v))
 }
 
 /// Wrap a payload in the companion envelope (envelope/v1 §2).

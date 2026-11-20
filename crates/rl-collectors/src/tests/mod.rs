@@ -13,6 +13,9 @@ macro_rules! rl_test {
     };
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+mod addon_errors_schema_tests;
+mod addon_errors_tests;
 mod bg3_build_tests;
 mod bg3_display_tests;
 mod bg3_loca_tests;

@@ -192,7 +192,8 @@ fn titles_prefer_the_server_game_then_the_manifest() {
     let plain = by_id(&AppConfig::default(), "wow-ledgerlink");
     assert_eq!(
         (plain.title.as_str(), plain.subtitle.as_deref()),
-        ("World of Warcraft", Some("LedgerLink addon"))
+        ("World of Warcraft", None),
+        "two WoW collectors share the tile, so no per-collector subtitle"
     );
     assert_eq!(
         by_id(&AppConfig::default(), "bg3-save").title,

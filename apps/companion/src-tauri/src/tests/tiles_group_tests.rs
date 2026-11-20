@@ -83,15 +83,25 @@ fn ac1_bg3_saves_and_screenshots_are_one_tile_with_two_lines() {
 }
 
 #[test]
-fn wow_stays_one_tile_with_its_single_line() {
-    let wow = all(&with(json!([{ "id": "wow-ledgerlink", "enabled": true }])))
-        .into_iter()
-        .next()
-        .expect("wow");
-    assert_eq!(wow.subtitle.as_deref(), Some("LedgerLink addon"));
+fn wow_is_one_tile_with_a_line_per_collector() {
+    // ROK-2099 S5: addon errors joined LedgerLink on the WoW tile.
+    let wow = all(&with(json!([
+        { "id": "wow-ledgerlink", "enabled": true },
+        { "id": "wow-addon-errors", "enabled": true }
+    ])))
+    .into_iter()
+    .next()
+    .expect("wow");
+    assert_eq!(
+        wow.subtitle, None,
+        "no per-collector subtitle on a shared tile"
+    );
     assert_eq!(
         line_states(&wow),
-        [("wow-ledgerlink", "LedgerLink addon", TileState::Supported)]
+        [
+            ("wow-ledgerlink", "LedgerLink addon", TileState::Supported),
+            ("wow-addon-errors", "Addon errors", TileState::Supported)
+        ]
     );
 }
 

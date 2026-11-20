@@ -2,13 +2,14 @@
 //! manifest + the user's settings, each bound to its own [`WatchScope`]. The
 //! runtime iterates this instead of naming a collector.
 
+use crate::addon_errors_collector::AddonErrorsCollector;
 use crate::bg3_collector::Bg3SaveCollector;
 use crate::bg3_screenshot::Bg3ScreenshotCollector;
 use crate::collector::{Collector, Scan, SentState};
 use crate::config::AppConfig;
 use crate::manifest::{
     resolve_override, validate_all, CollectorManifest, ManifestError, Platform, BG3_SAVE,
-    BG3_SCREENSHOT, WOW_LEDGERLINK,
+    BG3_SCREENSHOT, WOW_ADDON_ERRORS, WOW_LEDGERLINK,
 };
 use crate::scope::WatchScope;
 use crate::wow_collector::LedgerLinkCollector;
@@ -28,6 +29,11 @@ pub struct Builtin {
 fn make_wow(roots: &[PathBuf], scope: WatchScope, _: &AppConfig) -> Box<dyn Collector> {
     let root = roots.first().cloned().unwrap_or_default();
     Box::new(LedgerLinkCollector::scoped(root, scope))
+}
+
+fn make_addon_errors(roots: &[PathBuf], scope: WatchScope, _: &AppConfig) -> Box<dyn Collector> {
+    let root = roots.first().cloned().unwrap_or_default();
+    Box::new(AddonErrorsCollector::scoped(root, scope))
 }
 
 fn make_bg3(roots: &[PathBuf], scope: WatchScope, cfg: &AppConfig) -> Box<dyn Collector> {
@@ -66,6 +72,10 @@ pub const BUILTINS: &[Builtin] = &[
     Builtin {
         manifest: &BG3_SCREENSHOT,
         make: make_bg3_screenshot,
+    },
+    Builtin {
+        manifest: &WOW_ADDON_ERRORS,
+        make: make_addon_errors,
     },
 ];
 

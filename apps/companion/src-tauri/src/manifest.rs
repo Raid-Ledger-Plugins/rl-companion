@@ -267,6 +267,26 @@ pub const WOW_LEDGERLINK: CollectorManifest = CollectorManifest {
     confirm_first_upload: false,
 };
 
+/// The WoW addon-errors collector (ROK-2099 S5, contract
+/// `wow-addon-errors/v1`): BugGrabber's account-wide saved variables. Same
+/// roots as LedgerLink (the WoW folder); off until the user turns it on.
+pub const WOW_ADDON_ERRORS: CollectorManifest = CollectorManifest {
+    id: "wow-addon-errors",
+    display_name: "Addon errors",
+    game_key: "world-of-warcraft",
+    game_name: "World of Warcraft",
+    game_subtitle: Some("LedgerLink addon"),
+    line_label: "Addon errors",
+    contract_id: "wow-addon-errors",
+    contract_version: 1,
+    default_enabled: false,
+    default_roots: WOW_LEDGERLINK.default_roots,
+    file_patterns: &["!BugGrabber.lua"],
+    settle_ms: 3_000,
+    no_files_hint: "No !BugGrabber.lua found — install BugGrabber or BugSack in WoW",
+    confirm_first_upload: false,
+};
+
 /// The BG3 save collector (ROK-2061 lane 2, contract `bg3-save/v1`). Its roots
 /// are the `Savegames/Story` folders; each save sits in its own sub-folder.
 pub const BG3_SAVE: CollectorManifest = CollectorManifest {

@@ -34,6 +34,7 @@
 
 #![forbid(unsafe_code)]
 
+mod addon_errors;
 mod bg3_cat;
 mod error;
 mod extract;
@@ -51,6 +52,15 @@ mod wow_sv;
 #[cfg(test)]
 mod tests;
 
+pub use addon_errors::{
+    ADDON_ERROR_ADDON_MAX, ADDON_ERROR_COUNT_MAX, ADDON_ERROR_MESSAGE_MAX, ADDON_ERROR_STACK_MAX,
+    ADDON_ERRORS_CONTRACT, ADDON_ERRORS_CONTRACT_VERSION, ADDON_ERRORS_MAX_BYTES,
+    ADDON_ERRORS_MAX_RECORDS, ADDON_ERRORS_SOURCE, AddonErrorRecord, AddonErrorsError,
+    AddonErrorsMessage, AddonErrorsPayload, AddonErrorsState, BUGGRABBER_DB, BUGGRABBER_SV_FILE,
+    BugGrabberScan, CharacterHint, PayloadHeader, ScrubContext, TRUNCATED_MARKER, TimeContext,
+    build_messages, has_unscrubbed_home, has_unscrubbed_path, scan_buggrabber, scrub_battletags,
+    scrub_names, scrub_paths, toc_version,
+};
 pub use bg3_cat::{
     CAT_GUID_HEX_RUN, CAT_MAX_DIGIT_RUN, CAT_MAX_MATCHED_ENTRIES, CAT_MAX_NAME_UTF16, CAT_MAX_ROWS,
     CatalogueBuilder, CatalogueCounts, CatalogueJoin, CatalogueTables, ENTRY_GLOBS, EntryKind,
@@ -70,7 +80,7 @@ pub use error::{
 pub use extract::{
     META_LSF_MAX_BYTES, META_LSF_NAME, SAVE_INFO_MAX_BYTES, SAVE_INFO_NAME, WEBP_MAX_BYTES,
     campaign_key_from_package, campaign_key_from_save_folder, extract_save_info,
-    extract_thumbnail_webp, game_id_from_package, sha256_hex, thumbnail_ref,
+    extract_thumbnail_webp, game_id_from_package, hmac_sha256_hex, sha256_hex, thumbnail_ref,
 };
 pub use lsf::{
     LSF_MAGIC, LSF_MAX_BLOB_SECTION_BYTES, LSF_MAX_SECTION_BYTES, LSF_MAX_STRINGS, LSF_VERSION,
@@ -99,8 +109,8 @@ pub use webp::webp_dimensions;
 pub use wow_sv::{
     DEV_PROBE_RESULT_MAX_BYTES, DEV_SNAPSHOT_MAX_BYTES, DevProbes, DevSnapshotEntry, DevSnapshots,
     LEDGERLINK_DB, LEDGERLINK_SV_FILE, MAX_EXPORT_TEXT_BYTES, MAX_SV_BYTES, Outbox, OutboxEntry,
-    SkipReason, SkippedEntry, SvCandidate, changed_entries, is_flavor_folder, is_player_guid,
-    is_probe_id, is_valid_page_token, ledgerlink_sv_candidates, ledgerlink_sv_path,
-    parse_ledgerlink_dev_probes, parse_ledgerlink_dev_snapshots, parse_ledgerlink_outbox,
-    validate_export_text,
+    SkipReason, SkippedEntry, SvCandidate, account_characters, account_sv_candidates,
+    account_sv_path, changed_entries, is_flavor_folder, is_player_guid, is_probe_id,
+    is_valid_page_token, ledgerlink_sv_candidates, ledgerlink_sv_path, parse_ledgerlink_dev_probes,
+    parse_ledgerlink_dev_snapshots, parse_ledgerlink_outbox, validate_export_text,
 };

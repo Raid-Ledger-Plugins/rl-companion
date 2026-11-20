@@ -11,7 +11,7 @@
 //! interpreter: [`lua`] parses only the subset the client writes.
 
 mod dev;
-mod lua;
+pub(crate) mod lua;
 mod paths;
 
 use std::collections::BTreeMap;
@@ -27,7 +27,8 @@ pub use dev::{
     is_player_guid, is_probe_id, parse_ledgerlink_dev_probes, parse_ledgerlink_dev_snapshots,
 };
 pub use paths::{
-    LEDGERLINK_SV_FILE, SvCandidate, is_flavor_folder, ledgerlink_sv_candidates, ledgerlink_sv_path,
+    LEDGERLINK_SV_FILE, SvCandidate, account_characters, account_sv_candidates, account_sv_path,
+    is_flavor_folder, ledgerlink_sv_candidates, ledgerlink_sv_path,
 };
 
 /// The account-wide SavedVariables table the addon declares.
