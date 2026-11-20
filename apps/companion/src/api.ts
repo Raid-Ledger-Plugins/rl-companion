@@ -182,6 +182,8 @@ export interface CollectorRow {
 export const LEDGERLINK_ID = "wow-ledgerlink";
 export const BG3_ID = "bg3-save";
 export const BG3_SCREENSHOT_ID = "bg3-screenshot";
+/** WoW addon errors from BugGrabber (ROK-2099 S5). */
+export const ADDON_ERRORS_ID = "wow-addon-errors";
 
 /** A hub BG3 screenshots may go to (ROK-1966). */
 export interface HubTarget {
