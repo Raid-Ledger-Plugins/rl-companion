@@ -39,6 +39,12 @@ fn separator(root: &str) -> char {
 /// `<root>/<flavor>/WTF/Account/<account>/SavedVariables/LedgerLink.lua`,
 /// using the root's own separator (`\` for a Windows root).
 pub fn ledgerlink_sv_path(root: &str, flavor: &str, account: &str) -> String {
+    account_sv_path(root, flavor, account, LEDGERLINK_SV_FILE)
+}
+
+/// `<root>/<flavor>/WTF/Account/<account>/SavedVariables/<file>`, using the
+/// root's own separator.
+pub fn account_sv_path(root: &str, flavor: &str, account: &str, file: &str) -> String {
     let sep = separator(root);
     let base = root.trim_end_matches(['/', '\\']);
     [
@@ -48,7 +54,7 @@ pub fn ledgerlink_sv_path(root: &str, flavor: &str, account: &str) -> String {
         "Account",
         account,
         "SavedVariables",
-        LEDGERLINK_SV_FILE,
+        file,
     ]
     .join(&sep.to_string())
 }
@@ -62,6 +68,15 @@ pub fn ledgerlink_sv_path(root: &str, flavor: &str, account: &str) -> String {
 /// (`…/<Realm>/<Character>/SavedVariables/LedgerLink.lua`) and backups
 /// (`LedgerLink.lua.bak`) are excluded. The result is sorted and deduped.
 pub fn ledgerlink_sv_candidates<'a, I>(root: &str, listing: I) -> Vec<SvCandidate>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    account_sv_candidates(root, listing, LEDGERLINK_SV_FILE)
+}
+
+/// [`ledgerlink_sv_candidates`] for any account-wide SavedVariables `file`
+/// (e.g. `!BugGrabber.lua`).
+pub fn account_sv_candidates<'a, I>(root: &str, listing: I, file_name: &str) -> Vec<SvCandidate>
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -81,13 +96,51 @@ where
                 && wtf.eq_ignore_ascii_case("WTF")
                 && acc_dir.eq_ignore_ascii_case("Account")
                 && sv.eq_ignore_ascii_case("SavedVariables")
-                && file.eq_ignore_ascii_case(LEDGERLINK_SV_FILE)
+                && file.eq_ignore_ascii_case(file_name)
                 && !account.eq_ignore_ascii_case("SavedVariables");
             ok.then(|| SvCandidate {
                 flavor: (*flavor).to_string(),
                 account: (*account).to_string(),
-                path: ledgerlink_sv_path(root, flavor, account),
+                path: account_sv_path(root, flavor, account, file_name),
             })
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The `(realm, character)` folders of one account, from a listing in the
+/// same form as [`account_sv_candidates`]: any entry under
+/// `<flavor>/WTF/Account/<account>/<realm>/<character>/`. Sorted, deduped.
+/// These names feed the addon-errors scrub (contract §4.3).
+pub fn account_characters<'a, I>(
+    root: &str,
+    listing: I,
+    flavor: &str,
+    account: &str,
+) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let base = root.trim_end_matches(['/', '\\']);
+    let mut out: Vec<(String, String)> = listing
+        .into_iter()
+        .filter_map(|entry| {
+            let rel = match entry.strip_prefix(base) {
+                Some(rest) if !base.is_empty() && rest.starts_with(['/', '\\']) => rest,
+                _ => entry,
+            };
+            let parts: Vec<&str> = rel.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+            let [f, wtf, acc_dir, acc, realm, character, _, ..] = parts.as_slice() else {
+                return None;
+            };
+            let ok = f.eq_ignore_ascii_case(flavor)
+                && wtf.eq_ignore_ascii_case("WTF")
+                && acc_dir.eq_ignore_ascii_case("Account")
+                && acc.eq_ignore_ascii_case(account)
+                && !realm.eq_ignore_ascii_case("SavedVariables");
+            ok.then(|| ((*realm).to_string(), (*character).to_string()))
         })
         .collect();
     out.sort();
