@@ -53,6 +53,8 @@ http-body-util = "0.1"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 sha2 = "0.10"
+# Local UTC offset for BugGrabber's wall-clock times (ROK-2099 S5); already in the lock.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 subtle = "2"
 getrandom = "0.2"
 base64 = "0.22"

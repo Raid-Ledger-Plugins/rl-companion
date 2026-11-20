@@ -4,6 +4,7 @@
 //! and the collector runtime (lane C-3): watch WoW's `LedgerLink.lua`, settle,
 //! upload changed exports, honour the tray's Upload now / Pause.
 
+pub mod addon_errors_collector;
 pub mod app_version;
 pub mod autostart;
 pub mod bg3_campaigns;

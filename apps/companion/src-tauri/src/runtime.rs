@@ -387,9 +387,9 @@ impl Runtime {
             inner.book.uploads.clone()
         });
         if fx.record {
-            inner
-                .sent
-                .record(&pending.scope, &pending.item, &pending.sha256);
+            for (item, sha) in crate::collector::settled_items(pending) {
+                inner.sent.record(&pending.scope, &item, &sha);
+            }
             if let Err(e) = inner.sent.save(&self.sent_path) {
                 inner.log.push_front(LogLine {
                     at: now(),

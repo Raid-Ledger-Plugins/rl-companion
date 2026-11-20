@@ -169,7 +169,15 @@ fn default_config_registers_wow_disabled_with_the_wow_dir() {
     };
     let reg = build(&cfg);
     let ids: Vec<_> = reg.entries().iter().map(|e| e.manifest.id).collect();
-    assert_eq!(ids, vec!["wow-ledgerlink", "bg3-save", "bg3-screenshot"]);
+    assert_eq!(
+        ids,
+        vec![
+            "wow-ledgerlink",
+            "bg3-save",
+            "bg3-screenshot",
+            "wow-addon-errors"
+        ]
+    );
     let wow = reg.get("wow-ledgerlink").expect("wow registered");
     assert!(!wow.enabled, "opt-in: off until the user turns it on");
     assert_eq!(wow.roots, vec![PathBuf::from(dir)]);
@@ -238,6 +246,15 @@ fn snapshot_is_a_read_only_view_of_each_collector() {
             "roots": [r"C:\Program Files (x86)\Steam\userdata"],
             "filePatterns": ["*.jpg", "*.png"],
             "settleMs": 2000
+        }, {
+            "id": "wow-addon-errors",
+            "displayName": "Addon errors",
+            "contractId": "wow-addon-errors",
+            "contractVersion": 1,
+            "enabled": false,
+            "roots": [dir],
+            "filePatterns": ["!BugGrabber.lua"],
+            "settleMs": 3000
         }])
     );
 }

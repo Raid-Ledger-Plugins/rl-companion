@@ -146,7 +146,7 @@ impl Drop for ScanPass<'_> {
 pub fn unsettled(sent: &SentState, pending: &[PendingUpload]) -> usize {
     pending
         .iter()
-        .filter(|p| sent.0.get(&p.scope).and_then(|m| m.get(&p.item)) != Some(&p.sha256))
+        .filter(|p| !crate::collector::is_settled(sent, p))
         .filter(|p| !crate::bg3_screenshot::refused(&p.sha256))
         .count()
 }

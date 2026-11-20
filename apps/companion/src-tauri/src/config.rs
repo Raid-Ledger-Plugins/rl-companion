@@ -158,6 +158,15 @@ impl AppConfig {
             let dir = self.wow_dir.trim();
             return (!dir.is_empty()).then(|| vec![dir.to_owned()]);
         }
+        let roots = self.listed_roots(id);
+        if roots.is_none() && id == crate::manifest::WOW_ADDON_ERRORS.id {
+            // Addon errors live in the same WoW folder LedgerLink reads.
+            return self.roots_override(LEGACY_LEDGERLINK_ID);
+        }
+        roots
+    }
+
+    fn listed_roots(&self, id: &str) -> Option<Vec<String>> {
         let roots: Vec<String> = self
             .collector_roots
             .get(id)?

@@ -115,6 +115,23 @@ impl SentState {
     }
 }
 
+/// What to record once the server settled `p` (`item → sha256` pairs in
+/// `p.scope`): the upload itself, or for an addon-errors batch one
+/// `record key → count` per record it carried (ROK-2099 S5).
+pub fn settled_items(p: &PendingUpload) -> Vec<(String, String)> {
+    if p.contract == crate::addon_errors_collector::CONTRACT {
+        return crate::addon_errors_collector::record_items(&p.body);
+    }
+    vec![(p.item.clone(), p.sha256.clone())]
+}
+
+/// Whether `sent` already holds everything [`settled_items`] would record.
+pub fn is_settled(sent: &SentState, p: &PendingUpload) -> bool {
+    let done = sent.scope(&p.scope);
+    let items = settled_items(p);
+    !items.is_empty() && items.iter().all(|(k, v)| done.get(k) == Some(v))
+}
+
 /// Wrap a payload in the companion envelope (envelope/v1 §2).
 pub fn envelope(contract: &str, contract_version: u32, captured_at: &str, payload: Value) -> Value {
     json!({
