@@ -319,6 +319,29 @@ impl Runtime {
         self.lock().sent.clone()
     }
 
+    /// Apply a scan's [`crate::collector::Scan::retain`] so `sent-state.json`
+    /// stays bounded (ROK-2099 S5: purged addon errors are forgotten).
+    pub fn retain_sent(&self, keep: &[(String, std::collections::BTreeSet<String>)]) {
+        if keep.is_empty() {
+            return;
+        }
+        let mut inner = self.lock();
+        let mut changed = false;
+        for (scope, items) in keep {
+            changed |= inner.sent.retain(scope, items);
+        }
+        if !changed {
+            return;
+        }
+        if let Err(e) = inner.sent.save(&self.sent_path) {
+            inner.log.push_front(LogLine {
+                at: now(),
+                text: format!("Could not save upload state ({e})"),
+                collector_id: None,
+            });
+        }
+    }
+
     /// A device-level activity line.
     pub fn log(&self, text: impl Into<String>) {
         self.push_log(None, text.into());
@@ -389,6 +412,13 @@ impl Runtime {
         if fx.record {
             for (item, sha) in crate::collector::settled_items(pending) {
                 inner.sent.record(&pending.scope, &item, &sha);
+            }
+            if let Some(text) = crate::addon_errors_collector::refused_note(pending, fx) {
+                inner.log.push_front(LogLine {
+                    at: now(),
+                    text,
+                    collector_id: None,
+                });
             }
             if let Err(e) = inner.sent.save(&self.sent_path) {
                 inner.log.push_front(LogLine {

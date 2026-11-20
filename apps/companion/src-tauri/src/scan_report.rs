@@ -119,6 +119,7 @@ impl<'a> ScanPass<'a> {
             rt.forget_scan(entry.manifest.id);
             return None;
         };
+        rt.retain_sent(&scan.retain);
         crate::dev_bridge::events::record(
             entry.manifest.id,
             crate::dev_bridge::events::Kind::Scan,

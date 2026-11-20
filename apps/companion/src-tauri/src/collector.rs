@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// File in the app data dir holding [`SentState`].
@@ -53,6 +53,9 @@ pub struct Scan {
     /// Items found but not queued yet (BG3 screenshots waiting for a hub
     /// pick): still unsettled, so they count in `/dev/v1/collectors` pending.
     pub waiting: usize,
+    /// `(scope, items)`: settled items of `scope` to keep; the rest are
+    /// dropped from the sent state (addon errors BugGrabber no longer holds).
+    pub retain: Vec<(String, BTreeSet<String>)>,
 }
 
 /// A game collector: where to watch, which changes matter, and how to turn
@@ -105,6 +108,16 @@ impl SentState {
     /// The `item → sha256` map for one scope (empty if never seen).
     pub fn scope(&self, scope: &str) -> BTreeMap<String, String> {
         self.0.get(scope).cloned().unwrap_or_default()
+    }
+
+    /// Keep only `keep`'s items of `scope`; true when something was dropped.
+    pub fn retain(&mut self, scope: &str, keep: &BTreeSet<String>) -> bool {
+        let Some(items) = self.0.get_mut(scope) else {
+            return false;
+        };
+        let before = items.len();
+        items.retain(|k, _| keep.contains(k));
+        items.len() != before
     }
 
     pub fn record(&mut self, scope: &str, item: &str, sha256: &str) {

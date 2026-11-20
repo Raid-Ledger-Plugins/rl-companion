@@ -4,7 +4,7 @@
 //! `/dev/v1/collectors` row.
 
 use super::dev_bridge_unit_tests::schema_errors;
-use crate::addon_errors_collector::{record_items, AddonErrorsCollector, CONTRACT};
+use crate::addon_errors_collector::{record_items, refused_note, AddonErrorsCollector, CONTRACT};
 use crate::collector::{Collector, SentState};
 use crate::config::AppConfig;
 use crate::dev_bridge::collectors::collectors_body;
@@ -222,4 +222,56 @@ fn the_addon_errors_root_follows_the_wow_folder_unless_overridden() {
         cfg.roots_override(WOW_ADDON_ERRORS.id),
         Some(vec!["E:\\WoW".to_owned()])
     );
+}
+
+#[test]
+fn the_account_folder_name_never_leaves_the_machine() {
+    let lua = "BugGrabberDB = {\n[\"errors\"] = {\n{ [\"message\"] = \"WTF\\\\Account\\\\ACCT1\\\\SavedVariables\\\\Foo.lua:1: bad ACCT1\", [\"counter\"] = 1 },\n},\n}\n";
+    let root = wow_root("ae-account", lua);
+    let scan = collector(&root).scan(ORIGIN, &SentState::default());
+    let body = scan.pending.first().expect("one batch").body.to_string();
+    assert!(!body.contains("ACCT1"), "{body}");
+    assert!(body.contains("<account>"), "{body}");
+}
+
+#[test]
+fn a_scan_prunes_settled_errors_buggrabber_no_longer_holds() {
+    let root = wow_root("ae-prune", &many_errors(3));
+    let c = collector(&root);
+    let first = c.scan(ORIGIN, &SentState::default());
+    let scope = first.pending.first().expect("batch").scope.clone();
+    let mut sent = SentState::default();
+    for p in &first.pending {
+        for (k, v) in record_items(&p.body) {
+            sent.record(&scope, &k, &v);
+        }
+    }
+    sent.record(&scope, "purged-key", "4");
+    let again = c.scan(ORIGIN, &sent);
+    assert!(again.pending.is_empty(), "all live errors already settled");
+    let (s, keep) = again.retain.first().expect("prunes the purged key");
+    assert_eq!(s, &scope);
+    assert_eq!(keep.len(), 3);
+    assert!(!keep.contains("purged-key"));
+    assert!(sent.retain(&scope, keep));
+    assert!(!sent.scope(&scope).contains_key("purged-key"));
+    assert_eq!(sent.scope(&scope).len(), 3);
+    assert!(c.scan(ORIGIN, &sent).retain.is_empty(), "nothing left to prune");
+}
+
+#[test]
+fn a_refused_batch_is_settled_and_logged_by_count_only() {
+    let root = wow_root("ae-refused", &many_errors(2));
+    let mut scan = collector(&root).scan(ORIGIN, &SentState::default());
+    let p = scan.pending.remove(0);
+    let fx = effect(&UploadOutcome::Rejected {
+        status: 400,
+        code: "invalid_payload".into(),
+        issue: None,
+    });
+    assert!(fx.record, "settled: never re-sent, never blocks later uploads");
+    let note = refused_note(&p, &fx).expect("note");
+    assert_eq!(note, "2 addon error(s) refused by the server and not re-sent");
+    assert!(!note.contains("boom"));
+    assert!(refused_note(&p, &effect(&UploadOutcome::Accepted)).is_none());
 }

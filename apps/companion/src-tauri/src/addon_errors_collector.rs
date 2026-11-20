@@ -106,7 +106,14 @@ impl AddonErrorsCollector {
             );
         }
         let scope = scope_key(origin, &cand.path);
-        let records = accepted_state(sent, &scope).pending(&parsed);
+        let accepted = accepted_state(sent, &scope);
+        let records = accepted.pending(&parsed);
+        let mut live = accepted.clone();
+        live.finish_scan(&parsed);
+        if live.uploaded.len() < accepted.uploaded.len() {
+            scan.retain
+                .push((scope.clone(), live.uploaded.into_keys().collect()));
+        }
         let messages = PayloadHeader::new(
             &self.source_version(cand),
             &cand.account,
@@ -154,6 +161,7 @@ impl AddonErrorsCollector {
             characters: pairs.into_iter().map(|(_, c)| c).collect(),
             realms,
             battle_tag: None,
+            account: Some(cand.account.clone()),
         }
     }
 
@@ -254,6 +262,19 @@ pub fn record_items(body: &Value) -> Vec<(String, String)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A content rejection settles the batch, so it neither blocks later
+/// uploads nor loops; this says how many errors that dropped, never their text.
+pub fn refused_note(p: &PendingUpload, fx: &crate::runtime::Effect) -> Option<String> {
+    (p.contract == CONTRACT && fx.record && !fx.ok).then(|| {
+        let n = p
+            .body
+            .pointer("/payload/records")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        format!("{n} addon error(s) refused by the server and not re-sent")
+    })
 }
 
 fn unix_seconds(t: Option<std::time::SystemTime>) -> i64 {
