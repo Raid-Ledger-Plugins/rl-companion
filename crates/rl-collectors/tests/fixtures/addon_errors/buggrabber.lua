@@ -14,7 +14,7 @@ BugGrabberDB = {
 		{
 			["message"] = "C:\\Users\\ExampleUser\\Games\\World of Warcraft\\_classic_era_\\Interface\\AddOns\\BuffRadar\\Core.lua:5: Testchar of Example Realm: bad argument",
 			["time"] = "2026/11/18 21:30:15",
-			["stack"] = "/Users/exampleuser/Applications/World of Warcraft/_retail_/Interface/AddOns/BuffRadar/Core.lua:5: in main chunk\nD:/Saved/notes.txt\nTestchar-ExampleRealm",
+			["stack"] = "/Users/exampleuser/Applications/World of Warcraft/_retail_/Interface/AddOns/BuffRadar/Core.lua:5: in main chunk\nD:/Saved/notes.txt\nWTF\\Account\\ACCT1\\SavedVariables\\BuffRadar.lua\nTestchar-ExampleRealm",
 			["session"] = 42,
 			["counter"] = 1,
 		}, -- [2]

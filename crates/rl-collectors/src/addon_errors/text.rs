@@ -55,3 +55,36 @@ pub(super) fn one_line(s: &str, max: usize) -> Option<String> {
 pub(super) fn is_one_line(s: &str, max: usize) -> bool {
     !s.trim().is_empty() && utf16_len(s) <= max && !s.chars().any(is_one_line_banned)
 }
+
+/// Hex runs of 8+ characters holding a digit (Lua `table: 000001F3…`,
+/// `0x…`, GUID parts) → `<addr>`, so an error that prints a fresh address
+/// on every occurrence keeps one key and one record.
+pub(super) fn mask_addresses(s: &str) -> String {
+    let b = s.as_bytes();
+    let boundary = |p: usize| p == 0 || !b[p - 1].is_ascii_alphanumeric();
+    let mut out = String::with_capacity(s.len());
+    let (mut done, mut i) = (0, 0);
+    while i < b.len() {
+        let hex = if i + 1 < b.len() && b[i] == b'0' && (b[i + 1] | 0x20) == b'x' && boundary(i) {
+            Some(i + 2)
+        } else if b[i].is_ascii_hexdigit() && boundary(i) {
+            Some(i)
+        } else {
+            None
+        };
+        if let Some(h) = hex {
+            let n = b[h..].iter().take_while(|c| c.is_ascii_hexdigit()).count();
+            let end = h + n;
+            let whole = end == b.len() || !b[end].is_ascii_alphanumeric();
+            if n >= 8 && whole && b[h..end].iter().any(u8::is_ascii_digit) {
+                out.push_str(&s[done..i]);
+                out.push_str("<addr>");
+                (done, i) = (end, end);
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&s[done..]);
+    out
+}

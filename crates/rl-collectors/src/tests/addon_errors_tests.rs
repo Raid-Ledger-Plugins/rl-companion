@@ -3,7 +3,7 @@
 //! `ExampleUser`, invented messages), compiled in with `include_bytes!`.
 
 use crate::{
-    ADDON_ERRORS_MAX_BYTES, AddonErrorRecord, AddonErrorsState, CharacterHint, PayloadHeader,
+    ADDON_ERRORS_MAX_BYTES, AddonErrorRecord, AddonErrorsMessage, AddonErrorsState, CharacterHint, PayloadHeader,
     ScrubContext, TRUNCATED_MARKER, TimeContext, account_characters, account_sv_candidates,
     build_messages, has_unscrubbed_path, scan_buggrabber, scrub_names, scrub_paths, sha256_hex,
     toc_version,
@@ -17,6 +17,7 @@ pub(crate) fn ctx() -> ScrubContext {
         characters: vec!["Testchar".into()],
         realms: vec!["Example Realm".into()],
         battle_tag: None,
+        account: Some("ACCT1".into()),
     }
 }
 
@@ -53,13 +54,15 @@ rl_test! {
         assert_eq!(buff.message, r"<wow>\Interface\AddOns\BuffRadar\Core.lua:5: <char> of <realm>: bad argument");
         let stack = buff.stack.as_deref().expect("stack");
         assert!(stack.starts_with(r"<wow>\Interface/AddOns/BuffRadar/Core.lua:5"), "{stack}");
-        assert!(stack.contains("<drive>/Saved/notes.txt"), "{stack}");
+        assert!(stack.contains("\n<path>\\notes.txt\n"), "{stack}");
+        assert!(stack.contains(r"WTF\Account\<account>\SavedVariables\BuffRadar.lua"), "{stack}");
         assert!(stack.ends_with("<char>-<realm>"), "{stack}");
         for r in &scan.records {
             for text in [Some(r.message.as_str()), r.stack.as_deref()].into_iter().flatten() {
                 assert!(!has_unscrubbed_path(text), "{text}");
                 assert!(!text.contains("ExampleUser") && !text.to_lowercase().contains("exampleuser"), "{text}");
                 assert!(!text.contains("Testchar") && !text.contains("Example Realm"), "{text}");
+                assert!(!text.contains("ACCT1"), "{text}");
             }
         }
     }
@@ -221,5 +224,74 @@ rl_test! {
         assert_eq!(found[0].path, "/wow/_retail_/WTF/Account/ACCT1/SavedVariables/!BugGrabber.lua");
         let chars = account_characters("/wow", listing, "_retail_", "ACCT1");
         assert_eq!(chars, [("Example Realm".to_owned(), "Otheralt".to_owned()), ("Example Realm".to_owned(), "Testchar".to_owned())]);
+    }
+}
+
+rl_test! {
+    fn scrubs_the_account_folder_name_and_its_number() {
+        let lua = br#"BugGrabberDB = { ["errors"] = { { ["message"] = "WTF\\Account\\12345678#1\\SavedVariables\\A.lua:1: 12345678 failed", ["counter"] = 1 } } }"#;
+        let ctx = ScrubContext { account: Some("12345678#1".into()), ..ctx() };
+        let scan = scan_buggrabber(lua, &ctx, &UTC).expect("parses");
+        let r = scan.records.first().expect("one record");
+        assert_eq!(r.message, r"WTF\Account\<account>\SavedVariables\A.lua:1: <account> failed");
+    }
+}
+
+rl_test! {
+    fn scrubs_wine_linux_unc_and_other_drive_paths() {
+        assert_eq!(scrub_paths(r"at Z:\home\bob\Games\x.lua:3"), r"at <home>\Games\x.lua:3");
+        assert_eq!(scrub_paths("at /home/bob/.wine/x.lua:3"), r"at <home>\.wine/x.lua:3");
+        assert_eq!(scrub_paths("/home/bob/World of Warcraft/_retail_/Interface/AddOns/X/a.lua:1"), r"<wow>\Interface/AddOns/X/a.lua:1");
+        assert_eq!(scrub_paths(r"\\NAS\bob\World of Warcraft\_retail_\Interface\AddOns\X\a.lua:1"), r"<wow>\Interface\AddOns\X\a.lua:1");
+        assert_eq!(scrub_paths(r"see \\NAS\bob\notes.txt:2"), r"see <path>\notes.txt:2");
+        assert_eq!(scrub_paths(r"D:\Bob\Games\x.lua:3: boom"), r"<path>\x.lua:3: boom");
+        assert_eq!(scrub_paths(r"D:\Bob\Interface\AddOns\X\a.lua:1"), r"<path>\Interface\AddOns\X\a.lua:1");
+        assert_eq!(scrub_paths(r"Interface\AddOns\Home\home\x.lua:1"), r"Interface\AddOns\Home\home\x.lua:1");
+    }
+}
+
+rl_test! {
+    fn masks_memory_addresses_so_a_varying_error_keeps_one_key() {
+        let lua = br#"BugGrabberDB = { ["errors"] = { { ["message"] = "Interface\\AddOns\\Foo\\F.lua:1: bad table: 000001F3A2B4C5D0", ["counter"] = 1 }, { ["message"] = "Interface\\AddOns\\Foo\\F.lua:1: bad table: 0x7ffd12a4", ["counter"] = 2 } } }"#;
+        let scan = scan_buggrabber(lua, &ctx(), &UTC).expect("parses");
+        assert_eq!(scan.records.len(), 1, "{:#?}", scan.records);
+        let r = scan.records.first().expect("one record");
+        assert_eq!(r.message, r"Interface\AddOns\Foo\F.lua:1: bad table: <addr>");
+        assert_eq!(r.count, 3);
+    }
+}
+
+rl_test! {
+    fn fifty_records_stay_one_message_and_fifty_one_split() {
+        for (n, parts) in [(50, vec![50]), (51, vec![50, 1])] {
+            let rs: Vec<_> = (0..n).map(|i| record(i, "boom", None)).collect();
+            let msgs = build_messages(&header(), rs, "2026-11-19T12:00:05Z", "0.4.0").expect("builds");
+            assert_eq!(msgs.iter().map(|m| m.payload.records.len()).collect::<Vec<_>>(), parts);
+        }
+    }
+}
+
+rl_test! {
+    fn a_batch_of_exactly_the_byte_cap_stays_one_message() {
+        let msgs = |n: usize, extra: usize| {
+            let mut rs: Vec<_> = (0..n).map(|i| record(i, "boom", Some("€".repeat(2000)))).collect();
+            let stack = format!("a{}{}", "€".repeat(extra / 3), "a".repeat(extra % 3));
+            rs.push(record(n, "edge", Some(stack)));
+            build_messages(&header(), rs, "2026-11-19T12:00:05Z", "0.4.0").expect("builds")
+        };
+        let size = |ms: &[AddonErrorsMessage]| serde_json::to_vec(ms.first().expect("one")).expect("json").len();
+        let mut n = 0;
+        while size(&msgs(n + 1, 0)) <= ADDON_ERRORS_MAX_BYTES && msgs(n + 1, 0).len() == 1 {
+            n += 1;
+        }
+        let rem = ADDON_ERRORS_MAX_BYTES - size(&msgs(n, 0));
+        assert!(rem > 1 && rem < 7000, "filler fits one stack: {rem}");
+        let under = msgs(n, rem - 1);
+        assert_eq!((under.len(), size(&under)), (1, ADDON_ERRORS_MAX_BYTES - 1));
+        let exact = msgs(n, rem);
+        assert_eq!((exact.len(), size(&exact)), (1, ADDON_ERRORS_MAX_BYTES), "equal to the cap stays one message");
+        let over = msgs(n, rem + 1);
+        assert_eq!(over.len(), 2, "one byte over the cap splits");
+        assert!(over.iter().all(|m| serde_json::to_vec(m).expect("json").len() <= ADDON_ERRORS_MAX_BYTES));
     }
 }

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use super::scrub::{has_unscrubbed_path, scrub_names, scrub_paths};
-use super::text::{multi_line, one_line};
+use super::text::{mask_addresses, multi_line, one_line};
 use super::{
     ADDON_ERROR_ADDON_MAX, ADDON_ERROR_COUNT_MAX, ADDON_ERROR_MESSAGE_MAX, ADDON_ERROR_STACK_MAX,
     AddonErrorRecord, BUGGRABBER_DB,
@@ -23,11 +23,20 @@ pub struct ScrubContext {
     pub realms: Vec<String>,
     /// The BattleTag (`Name#1234`), when known.
     pub battle_tag: Option<String>,
+    /// The `WTF/Account/<folder>` name (an old login name, or
+    /// `<digits>#<n>`): never sent (contract §4.2), replaced by `<account>`.
+    pub account: Option<String>,
 }
 
 impl ScrubContext {
     fn names(&self) -> Vec<(String, &'static str)> {
         let mut out: Vec<(String, &'static str)> = Vec::new();
+        if let Some(account) = &self.account {
+            out.push((account.clone(), "<account>"));
+            if let Some((number, _)) = account.split_once('#') {
+                out.push((number.to_owned(), "<account>"));
+            }
+        }
         for c in &self.characters {
             out.push((c.clone(), "<char>"));
         }
@@ -113,7 +122,7 @@ fn merge(into: &mut BTreeMap<String, AddonErrorRecord>, r: AddonErrorRecord) {
 }
 
 fn clean(raw: &str, names: &[(String, &'static str)], max: usize) -> Option<String> {
-    let scrubbed = scrub_paths(&scrub_names(&scrub_paths(raw), names));
+    let scrubbed = mask_addresses(&scrub_paths(&scrub_names(&scrub_paths(raw), names)));
     let out = multi_line(&scrubbed, max)?;
     (!has_unscrubbed_path(&out)).then_some(out)
 }

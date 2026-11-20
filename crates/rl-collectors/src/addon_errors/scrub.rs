@@ -1,13 +1,14 @@
-//! Contract §4 scrubbing: user home folders → `<home>\`, WoW install roots →
-//! `<wow>\`, the account's own character / realm names → `<char>` /
-//! `<realm>`. [`has_unscrubbed_path`] mirrors the schema's refusal
+//! Contract §4 scrubbing: user home folders (Windows / macOS `Users`, Linux
+//! and Wine `home`) → `<home>\`, WoW install roots → `<wow>\`, the folders of
+//! any other drive or network-share path → `<path>\`, the account folder and
+//! its own character / realm names → `<account>` / `<char>` / `<realm>`. [`has_unscrubbed_path`] mirrors the schema's refusal
 //! (`WOW_ADDON_ERRORS_UNSCRUBBED_PATH_RE`).
 
 use crate::wow_sv::is_flavor_folder;
 
 const HOME: &str = "<home>\\";
 const WOW: &str = "<wow>\\";
-const DRIVE: &str = "<drive>";
+const PATH: &str = "<path>\\";
 /// Longest absolute path looked back over for a path start (Windows MAX_PATH).
 const MAX_PATH_LOOKBACK: usize = 260;
 
@@ -24,12 +25,69 @@ fn drive_at(s: &[u8], p: usize) -> bool {
         && (p == 0 || !s[p - 1].is_ascii_alphanumeric())
 }
 
+/// `[\\/]<word>[\\/]` (any case) starting at `p`.
+fn seg_at(s: &[u8], p: usize, word: &[u8]) -> bool {
+    let n = word.len();
+    p + n + 1 < s.len()
+        && is_sep(s[p])
+        && s[p + 1..p + 1 + n].eq_ignore_ascii_case(word)
+        && is_sep(s[p + 1 + n])
+}
+
 /// `[\\/]users[\\/]` (any case) starting at `p`.
 fn users_at(s: &[u8], p: usize) -> bool {
-    p + 6 < s.len()
-        && is_sep(s[p])
-        && s[p + 1..p + 6].eq_ignore_ascii_case(b"users")
-        && is_sep(s[p + 6])
+    seg_at(s, p, b"users")
+}
+
+/// `p` begins a path: start of text, after whitespace, a quote, a bracket,
+/// `=`, `<` or Lua's `@` chunk prefix.
+fn opener_at(b: &[u8], p: usize) -> bool {
+    p == 0
+        || matches!(
+            b[p - 1],
+            b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'(' | b'[' | b'=' | b'<' | b'@'
+        )
+}
+
+/// A Linux / Wine home: `/home/` at a path start or `X:\home\` (any case).
+fn home_at(b: &[u8], p: usize) -> bool {
+    seg_at(b, p, b"home") && (opener_at(b, p) || (p >= 2 && drive_at(b, p - 2)))
+}
+
+/// The folder-word length of a home folder at `p` (`users` / `home`).
+fn home_word(b: &[u8], p: usize) -> Option<usize> {
+    if users_at(b, p) {
+        Some(5)
+    } else if home_at(b, p) {
+        Some(4)
+    } else {
+        None
+    }
+}
+
+/// A network share `\\server\…` at a path start.
+fn unc_at(b: &[u8], p: usize) -> bool {
+    p + 2 < b.len() && b[p] == b'\\' && b[p + 1] == b'\\' && !is_sep(b[p + 2]) && opener_at(b, p)
+}
+
+/// End of the folder part of an absolute path whose first separator is at
+/// `from`: past the separator before an `Interface` / `AddOns` folder, else
+/// past the last separator before a line end, a quote, `:` or `>`.
+fn folder_end(b: &[u8], from: usize) -> usize {
+    let limit = b.len().min(from + MAX_PATH_LOOKBACK);
+    let mut end = from;
+    for j in from..limit {
+        if matches!(b[j], b'\n' | b'\r' | b'"' | b'\'' | b':' | b'>') {
+            break;
+        }
+        if is_sep(b[j]) {
+            if seg_at(b, j, b"interface") || seg_at(b, j, b"addons") {
+                return j + 1;
+            }
+            end = j + 1;
+        }
+    }
+    end
 }
 
 /// The schema's `not.pattern`: true when the text would be refused.
@@ -84,14 +142,15 @@ fn wow_root_ahead(b: &[u8], p: usize) -> Option<usize> {
     None
 }
 
-/// `[drive:]<sep>Users<sep><name>[<sep>]` at the `<sep>` `i`: (start, end).
-fn home_span(b: &[u8], i: usize) -> (usize, usize) {
+/// `[drive:]<sep>Users|home<sep><name>[<sep>]` at the `<sep>` `i`, `word`
+/// being the length of `Users` / `home`: (start, end).
+fn home_span(b: &[u8], i: usize, word: usize) -> (usize, usize) {
     let start = if i >= 2 && drive_at(b, i - 2) {
         i - 2
     } else {
         i
     };
-    let name = i + 7;
+    let name = i + word + 2;
     let stop = |c: u8| is_sep(c) || matches!(c, b'\n' | b'\r' | b'"' | b'\'' | b':');
     let len = b[name..]
         .iter()
@@ -125,34 +184,44 @@ fn scrub_once(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let (mut done, mut i) = (0, 0);
     while i < b.len() {
-        if let Some(end) = wow_root_end(b, i) {
-            let start = path_start(b, done, i);
-            out.push_str(&s[done..start]);
-            out.push_str(WOW);
-            (done, i) = (end, end);
-        } else if users_at(b, i) {
-            let (start, home_end) = home_span(b, i);
+        let hit = if let Some(end) = wow_root_end(b, i) {
+            Some((path_start(b, done, i), WOW, end))
+        } else if let Some(word) = home_word(b, i) {
+            let (start, home_end) = home_span(b, i, word);
             let (repl, end) = wow_root_ahead(b, i).map_or((HOME, home_end), |e| (WOW, e));
-            out.push_str(&s[done..start]);
-            out.push_str(repl);
-            (done, i) = (end, end);
+            Some((start, repl, end))
         } else if drive_at(b, i) {
-            out.push_str(&s[done..i]);
-            let (repl, end) = if let Some(end) = wow_root_ahead(b, i) {
-                (WOW, end)
-            } else if users_at(b, i + 2) {
-                (HOME, home_span(b, i + 2).1)
-            } else {
-                (DRIVE, i + 2)
-            };
-            out.push_str(repl);
-            (done, i) = (end, end);
+            Some(drive_path(b, i))
+        } else if unc_at(b, i) {
+            let (repl, end) =
+                wow_root_ahead(b, i).map_or((PATH, folder_end(b, i + 2)), |e| (WOW, e));
+            Some((i, repl, end))
         } else {
-            i += 1;
+            None
+        };
+        match hit {
+            Some((start, repl, end)) => {
+                out.push_str(&s[done..start]);
+                out.push_str(repl);
+                (done, i) = (end, end);
+            }
+            None => i += 1,
         }
     }
     out.push_str(&s[done..]);
     out
+}
+
+/// `X:\…` at `i`: a WoW root, a home folder, else every folder up to the
+/// file name (or up to `Interface` / `AddOns`) → `<path>\`.
+fn drive_path(b: &[u8], i: usize) -> (usize, &'static str, usize) {
+    if let Some(end) = wow_root_ahead(b, i) {
+        return (i, WOW, end);
+    }
+    if let Some(word) = home_word(b, i + 2) {
+        return (i, HOME, home_span(b, i + 2, word).1);
+    }
+    (i, PATH, folder_end(b, i + 2))
 }
 
 fn is_word_char(c: Option<char>) -> bool {
