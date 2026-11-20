@@ -17,7 +17,7 @@ export function collectorCopy(row: CollectorRow): CollectorCopy {
       heading: "World of Warcraft: addon errors",
       toggle: "Share addon errors (BugGrabber / BugSack) with Raid Ledger",
       offNote:
-        "Off until you turn it on. While off, your BugGrabber file is not read. When on, Raid Ledger receives each error's text and stack trace, with folder paths and your own account, character and realm names removed, plus when and how often it happened, the BugGrabber version, your WoW flavour and a one-way code for your account. Other players' names that appear in an error are not removed.",
+        "Off until you turn it on. While off, your BugGrabber file is not read. When on, Raid Ledger receives each error's text and stack trace, with folder paths and your own account, character and realm names removed, plus when and how often it happened, the BugGrabber version, your WoW flavour and a random-keyed code that only this computer can link to your account (never the account name itself). Other players' names that appear in an error are not removed.",
       folderLabel: "World of Warcraft folder",
       folderPlaceholder: "Choose the World of Warcraft folder",
       resultsHeading: "Recent addon error uploads",
