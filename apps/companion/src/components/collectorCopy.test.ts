@@ -23,6 +23,12 @@ describe("collectorCopy — WoW addon errors (ROK-2099 S5)", () => {
     expect(copy.offNote).toMatch(/^Off until you turn it on\./);
     expect(copy.offNote).toContain("not read");
     expect(copy.offNote).toContain("folder paths");
+    expect(copy.offNote).toContain("text and stack trace");
+    expect(copy.offNote).toContain("your own account, character and realm names removed");
+    expect(copy.offNote).toContain("BugGrabber version");
+    expect(copy.offNote).toContain("one-way code for your account");
+    expect(copy.offNote).toContain("Other players' names that appear in an error are not removed.");
+    expect(copy.offNote).not.toContain("only the error text");
     expect(copy.folderLabel).toBe("World of Warcraft folder");
   });
 
