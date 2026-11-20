@@ -45,30 +45,60 @@ fn fresh(fill: impl FnOnce(&mut [u8]) -> bool) -> Option<[u8; 32]> {
 }
 
 /// [`load_or_create`] with the RNG injected (`fill` → `false` = failed). A
-/// missing, short or corrupt file is replaced; if the write fails the key is
-/// still returned (it then changes on the next start, which only regroups).
+/// missing or unparseable file is replaced. Any other read error (e.g. the
+/// file is briefly locked) returns `None` WITHOUT touching the file, so a good
+/// key is never overwritten; the caller sends nothing and retries next cycle.
+/// If writing a new key fails the key is still returned (it then changes on
+/// the next start, which only regroups). Log lines never carry the key or path.
 pub fn load_or_create_with(dir: &Path, fill: impl FnOnce(&mut [u8]) -> bool) -> Option<[u8; 32]> {
     let path = dir.join(KEY_FILE);
-    if let Some(key) = read_key(&path) {
-        return Some(key);
+    match read_key(&path) {
+        Ok(Stored::Key(key)) => return Some(key),
+        Ok(Stored::Missing | Stored::Unparseable) => {}
+        Err(kind) => {
+            let msg =
+                format!("account key file unreadable ({kind:?}); addon errors not sent this cycle");
+            crate::dev_bridge::logbuf::log("warn", "addon_errors", &msg);
+            return None;
+        }
     }
     let key = fresh(fill)?;
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
     let _ = std::fs::create_dir_all(dir);
-    let _ = crate::dev_bridge::write_guard::write_private(&path, hex.as_bytes());
+    if let Err(e) = crate::dev_bridge::write_guard::write_private(&path, hex.as_bytes()) {
+        let kind = e.kind();
+        let msg = format!("account key file write failed ({kind:?}); key kept in memory only");
+        crate::dev_bridge::logbuf::log("warn", "addon_errors", &msg);
+    }
     Some(key)
 }
 
-/// A stored key: exactly 64 hex chars (at most 128 bytes are read).
-fn read_key(path: &Path) -> Option<[u8; 32]> {
-    use std::io::Read;
+/// What the key file holds.
+enum Stored {
+    Key([u8; 32]),
+    Missing,
+    Unparseable,
+}
+
+/// A stored key: exactly 64 hex chars (at most 128 bytes are read). `Err`
+/// only for read errors other than "not found" and "not UTF-8".
+fn read_key(path: &Path) -> Result<Stored, std::io::ErrorKind> {
+    use std::io::{ErrorKind, Read};
     let mut text = String::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(128)
-        .read_to_string(&mut text)
-        .ok()?;
-    let t = text.trim();
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Stored::Missing),
+        Err(e) => return Err(e.kind()),
+    };
+    match file.take(128).read_to_string(&mut text) {
+        Ok(_) => {}
+        Err(e) if e.kind() == ErrorKind::InvalidData => return Ok(Stored::Unparseable),
+        Err(e) => return Err(e.kind()),
+    }
+    Ok(parse_hex_key(text.trim()).map_or(Stored::Unparseable, Stored::Key))
+}
+
+fn parse_hex_key(t: &str) -> Option<[u8; 32]> {
     if t.len() != 64 || !t.is_ascii() {
         return None;
     }

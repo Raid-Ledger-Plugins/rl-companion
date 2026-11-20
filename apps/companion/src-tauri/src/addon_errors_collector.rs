@@ -40,7 +40,7 @@ pub struct AddonErrorsCollector {
     /// Where the `accountKey` install secret lives (default: the app data dir
     /// set at startup, see [`crate::addon_errors_key`]).
     key_dir: Option<PathBuf>,
-    key: OnceLock<Option<[u8; 32]>>,
+    key: OnceLock<[u8; 32]>,
 }
 
 impl AddonErrorsCollector {
@@ -70,12 +70,15 @@ impl AddonErrorsCollector {
         self
     }
 
-    /// The per-install HMAC key, loaded (or created) once per collector.
+    /// The per-install HMAC key, loaded (or created) once per collector. A
+    /// failure is not cached: nothing is sent this cycle and the next retries.
     fn install_key(&self) -> Option<[u8; 32]> {
-        *self.key.get_or_init(|| {
-            let dir = self.key_dir.clone().or_else(addon_errors_key::default_dir);
-            addon_errors_key::load_or_create(dir.as_deref())
-        })
+        if let Some(key) = self.key.get() {
+            return Some(*key);
+        }
+        let dir = self.key_dir.clone().or_else(addon_errors_key::default_dir);
+        let key = addon_errors_key::load_or_create(dir.as_deref())?;
+        Some(*self.key.get_or_init(|| key))
     }
 
     /// Pin the UTC offset (tests).

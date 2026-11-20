@@ -102,3 +102,44 @@ fn a_missing_or_corrupt_key_file_is_regenerated_without_panicking() {
         "no RNG => no key, nothing sent"
     );
 }
+
+#[test]
+fn a_missing_key_file_is_created() {
+    let dir = super::temp_dir("aek-missing");
+    assert!(!dir.join(KEY_FILE).exists());
+    let key = load_or_create_with(&dir, |k| {
+        k.fill(0x22);
+        true
+    });
+    assert_eq!(key, Some([0x22; 32]));
+    assert_eq!(stored_key(&dir), [0x22; 32]);
+}
+
+#[test]
+fn garbage_key_content_is_replaced() {
+    let dir = super::temp_dir("aek-garbage");
+    std::fs::write(dir.join(KEY_FILE), [0xff, 0xfe, 0x00, b'x']).expect("write garbage");
+    let key = load_or_create_with(&dir, |k| {
+        k.fill(0x33);
+        true
+    });
+    assert_eq!(key, Some([0x33; 32]));
+    assert_eq!(stored_key(&dir), [0x33; 32]);
+}
+
+#[test]
+fn an_unreadable_key_file_is_never_overwritten_and_nothing_is_sent() {
+    // A directory at the key path: opening/reading it fails with an error that
+    // is neither "not found" nor bad content (stands in for a locked file).
+    let dir = super::temp_dir("aek-unreadable");
+    let path = dir.join(KEY_FILE);
+    std::fs::create_dir_all(&path).expect("dir at key path");
+    std::fs::write(path.join("marker"), "keep").expect("marker");
+    let key = load_or_create_with(&dir, |_| panic!("must not generate a new key"));
+    assert_eq!(key, None, "no key => nothing uploaded this cycle");
+    assert!(path.is_dir(), "the existing entry is left alone");
+    assert_eq!(
+        std::fs::read_to_string(path.join("marker")).expect("marker kept"),
+        "keep"
+    );
+}
