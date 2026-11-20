@@ -3,10 +3,10 @@
 //! `ExampleUser`, invented messages), compiled in with `include_bytes!`.
 
 use crate::{
-    ADDON_ERRORS_MAX_BYTES, AddonErrorRecord, AddonErrorsMessage, AddonErrorsState, CharacterHint, PayloadHeader,
-    ScrubContext, TRUNCATED_MARKER, TimeContext, account_characters, account_sv_candidates,
-    build_messages, has_unscrubbed_path, scan_buggrabber, scrub_names, scrub_paths, sha256_hex,
-    toc_version,
+    ADDON_ERRORS_MAX_BYTES, AddonErrorRecord, AddonErrorsMessage, AddonErrorsState, CharacterHint,
+    PayloadHeader, ScrubContext, TRUNCATED_MARKER, TimeContext, account_characters,
+    account_sv_candidates, build_messages, has_unscrubbed_path, scan_buggrabber, scrub_names,
+    scrub_paths, sha256_hex, toc_version,
 };
 
 pub(crate) const BUGGRABBER: &[u8] =

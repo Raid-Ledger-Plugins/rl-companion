@@ -256,7 +256,10 @@ fn a_scan_prunes_settled_errors_buggrabber_no_longer_holds() {
     assert!(sent.retain(&scope, keep));
     assert!(!sent.scope(&scope).contains_key("purged-key"));
     assert_eq!(sent.scope(&scope).len(), 3);
-    assert!(c.scan(ORIGIN, &sent).retain.is_empty(), "nothing left to prune");
+    assert!(
+        c.scan(ORIGIN, &sent).retain.is_empty(),
+        "nothing left to prune"
+    );
 }
 
 #[test]
@@ -269,9 +272,15 @@ fn a_refused_batch_is_settled_and_logged_by_count_only() {
         code: "invalid_payload".into(),
         issue: None,
     });
-    assert!(fx.record, "settled: never re-sent, never blocks later uploads");
+    assert!(
+        fx.record,
+        "settled: never re-sent, never blocks later uploads"
+    );
     let note = refused_note(&p, &fx).expect("note");
-    assert_eq!(note, "2 addon error(s) refused by the server and not re-sent");
+    assert_eq!(
+        note,
+        "2 addon error(s) refused by the server and not re-sent"
+    );
     assert!(!note.contains("boom"));
     assert!(refused_note(&p, &effect(&UploadOutcome::Accepted)).is_none());
 }
